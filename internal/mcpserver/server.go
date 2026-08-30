@@ -33,7 +33,7 @@ func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
 		Title:       "English Learning",
 		Description: "Source-backed dictionary, learner explanation cache, and saved vocabulary tools.",
 		Version:     Version,
-	}, nil)
+	}, &mcp.ServerOptions{Logger: logger})
 
 	if err := registerDictionaryLookup(server, services.Dictionary, logger); err != nil {
 		return nil, err
