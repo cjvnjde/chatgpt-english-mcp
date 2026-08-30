@@ -1,0 +1,6 @@
+.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+data/
+english-learning-mcp

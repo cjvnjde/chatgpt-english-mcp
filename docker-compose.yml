@@ -1,0 +1,23 @@
+services:
+  english-learning-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TUNNEL_CLIENT_VERSION: ${TUNNEL_CLIENT_VERSION:-v0.0.13}
+    restart: unless-stopped
+    environment:
+      CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:?set CONTROL_PLANE_API_KEY}
+      CONTROL_PLANE_TUNNEL_ID: ${CONTROL_PLANE_TUNNEL_ID:?set CONTROL_PLANE_TUNNEL_ID}
+      MCP_COMMAND: /usr/local/bin/english-learning-mcp
+      SQLITE_PATH: /app/data/english-mcp.sqlite
+      MCP_OWNER_KEY: ${MCP_OWNER_KEY:-default}
+      DICTIONARY_CACHE_TTL_DAYS: ${DICTIONARY_CACHE_TTL_DAYS:-30}
+      CAMBRIDGE_TIMEOUT_SECONDS: ${CAMBRIDGE_TIMEOUT_SECONDS:-20}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    volumes:
+      - english-learning-data:/app/data
+
+volumes:
+  english-learning-data:
