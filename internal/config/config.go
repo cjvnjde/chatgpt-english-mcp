@@ -18,7 +18,6 @@ const (
 type Config struct {
 	SQLitePath       string
 	OwnerKey         string
-	DictionaryTTL    time.Duration
 	CambridgeBaseURL *url.URL
 	CambridgeTimeout time.Duration
 	LogLevel         slog.Level
@@ -26,10 +25,6 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	cacheDays, err := positiveIntEnvironment("DICTIONARY_CACHE_TTL_DAYS", 30)
-	if err != nil {
-		return Config{}, err
-	}
 	timeoutSeconds, err := positiveIntEnvironment("CAMBRIDGE_TIMEOUT_SECONDS", 20)
 	if err != nil {
 		return Config{}, err
@@ -64,7 +59,6 @@ func Load() (Config, error) {
 	return Config{
 		SQLitePath:       sqlitePath,
 		OwnerKey:         ownerKey,
-		DictionaryTTL:    time.Duration(cacheDays) * 24 * time.Hour,
 		CambridgeBaseURL: baseURL,
 		CambridgeTimeout: time.Duration(timeoutSeconds) * time.Second,
 		LogLevel:         logLevel,

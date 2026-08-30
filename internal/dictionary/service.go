@@ -25,19 +25,17 @@ type SnapshotStore interface {
 type Service struct {
 	store    SnapshotStore
 	provider Provider
-	ttl      time.Duration
 	now      func() time.Time
 	logger   *slog.Logger
 }
 
-func NewService(store SnapshotStore, provider Provider, ttl time.Duration, logger *slog.Logger) *Service {
+func NewService(store SnapshotStore, provider Provider, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Service{
 		store:    store,
 		provider: provider,
-		ttl:      ttl,
 		now:      time.Now,
 		logger:   logger,
 	}
@@ -73,7 +71,7 @@ func (service *Service) Lookup(ctx context.Context, term string, refresh bool) (
 	}
 
 	now := service.now().UTC()
-	if cached != nil && !refresh && now.Before(cached.ExpiresAt) {
+	if cached != nil && !refresh && len(cached.Data.Entries) > 0 {
 		return lookupResult(cached, displayTerm, domain.CacheHit), nil
 	}
 
@@ -104,7 +102,7 @@ func (service *Service) Lookup(ctx context.Context, term string, refresh bool) (
 		DatasetVersion: service.provider.DatasetVersion(),
 		Data:           data,
 		FetchedAt:      now,
-		ExpiresAt:      now.Add(service.ttl),
+		ExpiresAt:      now,
 	})
 	if err != nil {
 		return domain.DictionaryLookupResult{}, apperr.Wrap(
@@ -129,7 +127,6 @@ func lookupResult(snapshot *storage.DictionarySnapshot, requestedTerm string, st
 		Cache: domain.DictionaryCache{
 			State:     state,
 			FetchedAt: storage.TimeString(snapshot.FetchedAt),
-			ExpiresAt: storage.TimeString(snapshot.ExpiresAt),
 		},
 		Source: domain.SourceRef{
 			Provider:       snapshot.Provider,

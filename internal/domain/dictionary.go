@@ -82,7 +82,6 @@ type DictionaryCollocation struct {
 type DictionaryCache struct {
 	State     CacheState `json:"state"`
 	FetchedAt string     `json:"fetchedAt"`
-	ExpiresAt string     `json:"expiresAt"`
 }
 
 type DictionaryLookupResult struct {

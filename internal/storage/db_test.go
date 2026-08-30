@@ -17,6 +17,18 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 
 	assertPragma(t, store, "foreign_keys", 1)
 	assertPragma(t, store, "busy_timeout", 5000)
+	assertColumn(t, store, "vocabulary_items", "lookup_id")
+	assertColumn(t, store, "vocabulary_items", "custom_description")
+	var explanationTables int
+	if err := store.sql.QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'explanations'",
+	).Scan(&explanationTables); err != nil {
+		t.Fatalf("check explanations table: %v", err)
+	}
+	if explanationTables != 0 {
+		t.Fatal("obsolete explanations table still exists")
+	}
 	var journalMode string
 	if err := store.sql.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
 		t.Fatalf("read journal_mode: %v", err)
@@ -25,8 +37,8 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 		t.Fatalf("journal_mode = %q, want wal", journalMode)
 	}
 
-	source := SourceVersion{Provider: "cambridge", ParserVersion: 12}
-	created, saved, err := store.SaveVocabulary(ctx, "owner", "Bank", "bank", time.Now(), source)
+	description := "An external description."
+	created, saved, err := store.SaveVocabulary(ctx, "owner", "Bank", "bank", "", &description, time.Now())
 	if err != nil {
 		t.Fatalf("SaveVocabulary() error = %v", err)
 	}
@@ -42,11 +54,11 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 		t.Fatalf("reopen error = %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	loaded, err := reopened.VocabularyByID(ctx, "owner", saved.ItemID, source)
+	loaded, err := reopened.VocabularyByID(ctx, "owner", saved.ItemID)
 	if err != nil {
 		t.Fatalf("VocabularyByID() after reopen error = %v", err)
 	}
-	if loaded.Term != "Bank" || loaded.NormalizedTerm != "bank" {
+	if loaded.Term != "Bank" || loaded.NormalizedTerm != "bank" || loaded.CustomDescription != description || loaded.Lookup != nil {
 		t.Fatalf("persisted vocabulary = %#v", loaded)
 	}
 }
@@ -60,4 +72,32 @@ func assertPragma(t *testing.T, store *DB, name string, want int) {
 	if got != want {
 		t.Fatalf("PRAGMA %s = %d, want %d", name, got, want)
 	}
+}
+
+func assertColumn(t *testing.T, store *DB, table, column string) {
+	t.Helper()
+	rows, err := store.sql.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		t.Fatalf("read columns for %s: %v", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var sequence int
+		var name string
+		var dataType string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err := rows.Scan(&sequence, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan columns for %s: %v", table, err)
+		}
+		if name == column {
+			return
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate columns for %s: %v", table, err)
+	}
+	t.Fatalf("column %s.%s does not exist", table, column)
 }

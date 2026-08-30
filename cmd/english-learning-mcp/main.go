@@ -11,7 +11,6 @@ import (
 
 	"english-learning-mcp/internal/config"
 	"english-learning-mcp/internal/dictionary"
-	"english-learning-mcp/internal/explanation"
 	"english-learning-mcp/internal/mcpserver"
 	"english-learning-mcp/internal/storage"
 	"english-learning-mcp/internal/vocabulary"
@@ -56,9 +55,8 @@ func run() (runErr error) {
 		DatasetVersion: provider.DatasetVersion(),
 	}
 	server, err := mcpserver.New(mcpserver.Services{
-		Dictionary:  dictionary.NewService(store, provider, configuration.DictionaryTTL, logger),
-		Vocabulary:  vocabulary.NewService(store, configuration.OwnerKey, currentSource),
-		Explanation: explanation.NewService(store, configuration.OwnerKey, currentSource),
+		Dictionary: dictionary.NewService(store, provider, logger),
+		Vocabulary: vocabulary.NewService(store, configuration.OwnerKey, currentSource),
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("create MCP server: %w", err)

@@ -7,23 +7,24 @@ import (
 	"log/slog"
 	"sort"
 	"testing"
-	"time"
 
 	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/dictionary"
 	"english-learning-mcp/internal/domain"
-	"english-learning-mcp/internal/explanation"
 	"english-learning-mcp/internal/storage"
 	"english-learning-mcp/internal/vocabulary"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type fixtureProvider struct{}
+type fixtureProvider struct {
+	calls int
+}
 
-func (fixtureProvider) Name() string           { return "cambridge" }
-func (fixtureProvider) ParserVersion() int     { return 12 }
-func (fixtureProvider) DatasetVersion() string { return "" }
-func (fixtureProvider) Lookup(context.Context, string) (domain.DictionarySnapshotData, error) {
+func (*fixtureProvider) Name() string           { return "cambridge" }
+func (*fixtureProvider) ParserVersion() int     { return 12 }
+func (*fixtureProvider) DatasetVersion() string { return "" }
+func (provider *fixtureProvider) Lookup(context.Context, string) (domain.DictionarySnapshotData, error) {
+	provider.calls++
 	return domain.DictionarySnapshotData{
 		SourceURL: "https://dictionary.example/bank",
 		Status:    200,
@@ -44,7 +45,7 @@ func (fixtureProvider) Lookup(context.Context, string) (domain.DictionarySnapsho
 	}, nil
 }
 
-func TestMCPToolsExposeCompleteLearningWorkflow(t *testing.T) {
+func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.Open(ctx, ":memory:")
 	if err != nil {
@@ -53,15 +54,14 @@ func TestMCPToolsExposeCompleteLearningWorkflow(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	provider := fixtureProvider{}
+	provider := &fixtureProvider{}
 	source := storage.SourceVersion{
 		Provider:      provider.Name(),
 		ParserVersion: provider.ParserVersion(),
 	}
 	server, err := New(Services{
-		Dictionary:  dictionary.NewService(store, provider, 24*time.Hour, logger),
-		Vocabulary:  vocabulary.NewService(store, "owner-one", source),
-		Explanation: explanation.NewService(store, "owner-one", source),
+		Dictionary: dictionary.NewService(store, provider, logger),
+		Vocabulary: vocabulary.NewService(store, "owner-one", source),
 	}, logger)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -91,9 +91,6 @@ func TestMCPToolsExposeCompleteLearningWorkflow(t *testing.T) {
 	sort.Strings(names)
 	wantNames := []string{
 		"dictionary_lookup",
-		"explanation_get",
-		"explanation_write",
-		"explanations_list",
 		"vocabulary_delete",
 		"vocabulary_get",
 		"vocabulary_list",
@@ -121,63 +118,55 @@ func TestMCPToolsExposeCompleteLearningWorkflow(t *testing.T) {
 		t.Fatalf("invalid call code = %s", applicationError.Code)
 	}
 
+	description := "A description imported from another source."
+	saved := callTool[vocabulary.SaveResult](t, ctx, clientSession, "vocabulary_save", VocabularySaveInput{
+		Term:              "bank",
+		CustomDescription: &description,
+	})
+	if saved.Item.Lookup != nil || saved.Item.CustomDescription != description {
+		t.Fatalf("bare saved item = %#v", saved.Item)
+	}
+
 	lookup := callTool[domain.DictionaryLookupResult](t, ctx, clientSession, "dictionary_lookup", DictionaryLookupInput{Term: "bank"})
-	if lookup.LookupID == "" || lookup.Cache.State != domain.CacheMiss {
-		t.Fatalf("dictionary lookup = %#v", lookup)
+	if lookup.LookupID == "" || lookup.Cache.State != domain.CacheMiss || provider.calls != 1 {
+		t.Fatalf("dictionary lookup = %#v, calls = %d", lookup, provider.calls)
 	}
 
-	miss := callTool[ExplanationGetOutput](t, ctx, clientSession, "explanation_get", explanationGetByKeyInput{
-		Term:      "bank",
-		Generator: explanation.GeneratorKey{Name: "chatgpt", Version: "english-explanation-v1"},
+	item := callTool[VocabularyGetOutput](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
+	if item.Item.Lookup == nil || item.Item.Lookup.LookupID != lookup.LookupID {
+		t.Fatalf("linked vocabulary get = %#v", item)
+	}
+	if len(item.Item.Lookup.Entries) != 1 || item.Item.CustomDescription != description {
+		t.Fatalf("complete vocabulary get = %#v", item)
+	}
+
+	cached := callTool[domain.DictionaryLookupResult](t, ctx, clientSession, "dictionary_lookup", DictionaryLookupInput{Term: "bank"})
+	if cached.Cache.State != domain.CacheHit || cached.LookupID != lookup.LookupID || provider.calls != 1 {
+		t.Fatalf("cached lookup = %#v, calls = %d", cached, provider.calls)
+	}
+
+	refreshed := callTool[domain.DictionaryLookupResult](t, ctx, clientSession, "dictionary_lookup", DictionaryLookupInput{
+		Term:    "bank",
+		Refresh: true,
 	})
-	if miss.Found || miss.Reason != "not_cached" || miss.NormalizedContext == nil || *miss.NormalizedContext != "" {
-		t.Fatalf("explanation miss = %#v", miss)
+	if refreshed.Cache.State != domain.CacheRefreshed || refreshed.LookupID == lookup.LookupID || provider.calls != 2 {
+		t.Fatalf("refreshed lookup = %#v, calls = %d", refreshed, provider.calls)
+	}
+	updated := callTool[VocabularyGetOutput](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
+	if updated.Item.Lookup == nil || updated.Item.Lookup.LookupID != refreshed.LookupID {
+		t.Fatalf("refreshed vocabulary item = %#v", updated.Item)
 	}
 
-	written := callTool[ExplanationWriteOutput](t, ctx, clientSession, "explanation_write", explanationUpsertInput{
-		Op: ExplanationUpsert,
-		Value: explanation.UpsertValue{
-			Term:     "bank",
-			LookupID: lookup.LookupID,
-			SelectedMeaning: &explanation.SelectedMeaningInput{
-				EntryIndex:      0,
-				DefinitionIndex: 0,
-			},
-			Learner:   explanation.LearnerInput{Description: "The land at the edge of a river."},
-			CEFR:      &domain.CEFR{Level: domain.CEFRLevelB1, Source: "dictionary"},
-			Generator: domain.Generator{Name: "chatgpt", Version: "english-explanation-v1"},
-		},
-	})
-	if written.Created == nil || !*written.Created || written.Explanation == nil {
-		t.Fatalf("explanation write = %#v", written)
+	vocabularyItems := callTool[VocabularyListOutput](t, ctx, clientSession, "vocabulary_list", VocabularyListInput{})
+	if len(vocabularyItems.Items) != 1 || vocabularyItems.Items[0].Lookup == nil {
+		t.Fatalf("vocabulary list = %#v", vocabularyItems)
 	}
 
-	beforeSave := callTool[VocabularyListOutput](t, ctx, clientSession, "vocabulary_list", VocabularyListInput{})
-	if len(beforeSave.Items) != 0 {
-		t.Fatalf("explanation implicitly saved vocabulary: %#v", beforeSave.Items)
+	callTool[VocabularyDeleteOutput](t, ctx, clientSession, "vocabulary_delete", VocabularyDeleteInput{ItemID: item.Item.ItemID})
+	stillCached := callTool[domain.DictionaryLookupResult](t, ctx, clientSession, "dictionary_lookup", DictionaryLookupInput{Term: "bank"})
+	if stillCached.LookupID != refreshed.LookupID || stillCached.Cache.State != domain.CacheHit {
+		t.Fatalf("lookup after vocabulary delete = %#v", stillCached)
 	}
-	callTool[vocabulary.SaveResult](t, ctx, clientSession, "vocabulary_save", VocabularySaveInput{Term: "bank"})
-	vocabularyItem := callTool[VocabularyGetOutput](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
-	if vocabularyItem.Item.ExplanationCount != 1 || len(vocabularyItem.Explanations) != 1 {
-		t.Fatalf("vocabulary get = %#v", vocabularyItem)
-	}
-
-	callTool[VocabularyDeleteOutput](t, ctx, clientSession, "vocabulary_delete", VocabularyDeleteInput{ItemID: vocabularyItem.Item.ItemID})
-	stillCached := callTool[ExplanationGetOutput](t, ctx, clientSession, "explanation_get", explanationGetByIDInput{
-		ExplanationID: written.Explanation.ExplanationID,
-	})
-	if !stillCached.Found {
-		t.Fatalf("vocabulary delete removed explanation: %#v", stillCached)
-	}
-	listedExplanations := callTool[ExplanationsListOutput](t, ctx, clientSession, "explanations_list", ExplanationsListInput{})
-	if len(listedExplanations.Explanations) != 1 {
-		t.Fatalf("explanations list = %#v", listedExplanations)
-	}
-
-	callTool[ExplanationWriteOutput](t, ctx, clientSession, "explanation_write", explanationDeleteInput{
-		Op:            ExplanationDelete,
-		ExplanationID: written.Explanation.ExplanationID,
-	})
 }
 
 func callTool[Output any](

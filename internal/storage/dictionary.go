@@ -103,6 +103,32 @@ func (db *DB) InsertDictionarySnapshot(ctx context.Context, input DictionarySnap
 	); err != nil {
 		return nil, fmt.Errorf("insert dictionary snapshot: %w", err)
 	}
+	if len(input.Data.Entries) > 0 {
+		if _, err := transaction.ExecContext(ctx, `
+			UPDATE vocabulary_items
+			SET lookup_id = ?
+			WHERE normalized_term = ?
+			  AND (
+				lookup_id IS NULL
+				OR lookup_id IN (
+					SELECT id
+					FROM dictionary_snapshots
+					WHERE provider = ? AND normalized_term = ? AND dataset_version = ?
+					  AND parser_version = ? AND id <> ?
+				)
+			  )
+		`,
+			id,
+			input.NormalizedTerm,
+			input.Provider,
+			input.NormalizedTerm,
+			input.DatasetVersion,
+			input.ParserVersion,
+			id,
+		); err != nil {
+			return nil, fmt.Errorf("refresh saved vocabulary lookups: %w", err)
+		}
+	}
 	if err := transaction.Commit(); err != nil {
 		return nil, fmt.Errorf("commit dictionary snapshot: %w", err)
 	}
@@ -150,8 +176,19 @@ func scanDictionarySnapshot(row rowScanner) (*DictionarySnapshot, error) {
 		}
 		return nil, fmt.Errorf("read dictionary snapshot: %w", err)
 	}
+	snapshot.Data.Status = status
+	snapshot.Data.SourceURL = sourceURL
+	if err := decodeDictionaryData(&snapshot, dataJSON, fetchedAt, expiresAt, active); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func decodeDictionaryData(snapshot *DictionarySnapshot, dataJSON, fetchedAt, expiresAt string, active int) error {
+	status := snapshot.Data.Status
+	sourceURL := snapshot.Data.SourceURL
 	if err := json.Unmarshal([]byte(dataJSON), &snapshot.Data); err != nil {
-		return nil, fmt.Errorf("%w: dictionary snapshot %s", ErrCorruptData, snapshot.ID)
+		return fmt.Errorf("%w: dictionary snapshot %s", ErrCorruptData, snapshot.ID)
 	}
 	snapshot.Data.Status = status
 	snapshot.Data.SourceURL = sourceURL
@@ -160,14 +197,38 @@ func scanDictionarySnapshot(row rowScanner) (*DictionarySnapshot, error) {
 	var err error
 	snapshot.FetchedAt, err = time.Parse(time.RFC3339Nano, fetchedAt)
 	if err != nil {
-		return nil, fmt.Errorf("%w: dictionary snapshot %s fetched_at", ErrCorruptData, snapshot.ID)
+		return fmt.Errorf("%w: dictionary snapshot %s fetched_at", ErrCorruptData, snapshot.ID)
 	}
 	snapshot.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt)
 	if err != nil {
-		return nil, fmt.Errorf("%w: dictionary snapshot %s expires_at", ErrCorruptData, snapshot.ID)
+		return fmt.Errorf("%w: dictionary snapshot %s expires_at", ErrCorruptData, snapshot.ID)
 	}
 	snapshot.Active = active == 1
-	return &snapshot, nil
+	return nil
+}
+
+func lookupFromSnapshot(snapshot *DictionarySnapshot, requestedTerm string) domain.DictionaryLookupResult {
+	return domain.DictionaryLookupResult{
+		LookupID:       snapshot.ID,
+		RequestedTerm:  requestedTerm,
+		NormalizedTerm: snapshot.NormalizedTerm,
+		Cache: domain.DictionaryCache{
+			State:     domain.CacheHit,
+			FetchedAt: TimeString(snapshot.FetchedAt),
+		},
+		Source: domain.SourceRef{
+			Provider:       snapshot.Provider,
+			SourceURL:      snapshot.Data.SourceURL,
+			DatasetVersion: snapshot.DatasetVersion,
+			ParserVersion:  snapshot.ParserVersion,
+		},
+		Status:       snapshot.Data.Status,
+		Entries:      snapshot.Data.Entries,
+		Suggestions:  snapshot.Data.Suggestions,
+		Images:       snapshot.Data.Images,
+		Idioms:       snapshot.Data.Idioms,
+		Collocations: snapshot.Data.Collocations,
+	}
 }
 
 func normalizeDictionaryData(data *domain.DictionarySnapshotData) {

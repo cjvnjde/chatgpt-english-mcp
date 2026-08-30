@@ -66,7 +66,7 @@ func TestServiceUsesImmutableSnapshotsAndStaleFallback(t *testing.T) {
 
 	provider := &fakeProvider{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	service := NewService(store, provider, time.Hour, logger)
+	service := NewService(store, provider, logger)
 	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 
@@ -94,13 +94,21 @@ func TestServiceUsesImmutableSnapshotsAndStaleFallback(t *testing.T) {
 		t.Fatalf("refreshed lookup = %#v, provider calls = %d", refreshed, provider.calls)
 	}
 
-	now = now.Add(2 * time.Hour)
+	now = now.Add(365 * 24 * time.Hour)
 	provider.fail = true
-	fallback, err := service.Lookup(context.Background(), "bank", false)
+	permanentHit, err := service.Lookup(context.Background(), "bank", false)
 	if err != nil {
-		t.Fatalf("fallback Lookup() error = %v", err)
+		t.Fatalf("permanent Lookup() error = %v", err)
+	}
+	if permanentHit.Cache.State != domain.CacheHit || permanentHit.LookupID != refreshed.LookupID || provider.calls != 2 {
+		t.Fatalf("permanent lookup = %#v, provider calls = %d", permanentHit, provider.calls)
+	}
+
+	fallback, err := service.Lookup(context.Background(), "bank", true)
+	if err != nil {
+		t.Fatalf("refresh fallback Lookup() error = %v", err)
 	}
 	if fallback.Cache.State != domain.CacheStaleFallback || fallback.LookupID != refreshed.LookupID || provider.calls != 3 {
-		t.Fatalf("fallback lookup = %#v, provider calls = %d", fallback, provider.calls)
+		t.Fatalf("refresh fallback = %#v, provider calls = %d", fallback, provider.calls)
 	}
 }

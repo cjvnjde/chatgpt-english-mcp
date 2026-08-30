@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"english-learning-mcp/internal/domain"
@@ -19,15 +17,12 @@ type SourceVersion struct {
 }
 
 type VocabularyListQuery struct {
-	OwnerKey       string
-	Query          string
-	CEFR           []domain.CEFRLevel
-	HasExplanation *bool
-	Sort           string
-	Limit          int
-	CursorPrimary  string
-	CursorID       string
-	CurrentSource  SourceVersion
+	OwnerKey      string
+	Query         string
+	Sort          string
+	Limit         int
+	CursorPrimary string
+	CursorID      string
 }
 
 func (db *DB) SaveVocabulary(
@@ -35,102 +30,103 @@ func (db *DB) SaveVocabulary(
 	ownerKey string,
 	term string,
 	normalizedTerm string,
+	lookupID string,
+	customDescription *string,
 	now time.Time,
-	currentSource SourceVersion,
 ) (created bool, item domain.VocabularyItem, err error) {
-	id, err := NewID()
+	transaction, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
-		return false, domain.VocabularyItem{}, err
+		return false, domain.VocabularyItem{}, fmt.Errorf("begin vocabulary transaction: %w", err)
 	}
-	timestamp := TimeString(now)
-	result, err := db.sql.ExecContext(ctx, `
-		INSERT INTO vocabulary_items(id, owner_key, term, normalized_term, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(owner_key, normalized_term) DO NOTHING
-	`, id, ownerKey, term, normalizedTerm, timestamp, timestamp)
+	defer transaction.Rollback()
+
+	var itemID string
+	var savedLookupID string
+	var savedDescription string
+	err = transaction.QueryRowContext(ctx, `
+		SELECT id, COALESCE(lookup_id, ''), custom_description
+		FROM vocabulary_items
+		WHERE owner_key = ? AND normalized_term = ?
+	`, ownerKey, normalizedTerm).Scan(&itemID, &savedLookupID, &savedDescription)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		itemID, err = NewID()
+		if err != nil {
+			return false, domain.VocabularyItem{}, err
+		}
+		timestamp := TimeString(now)
+		description := ""
+		if customDescription != nil {
+			description = *customDescription
+		}
+		_, err = transaction.ExecContext(ctx, `
+			INSERT INTO vocabulary_items(
+				id, owner_key, term, normalized_term, created_at, updated_at,
+				lookup_id, custom_description
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			itemID,
+			ownerKey,
+			term,
+			normalizedTerm,
+			timestamp,
+			timestamp,
+			sql.NullString{String: lookupID, Valid: lookupID != ""},
+			description,
+		)
+		created = true
+	case err != nil:
+		return false, domain.VocabularyItem{}, fmt.Errorf("find vocabulary item: %w", err)
+	default:
+		updatedLookupID := savedLookupID
+		if lookupID != "" {
+			updatedLookupID = lookupID
+		}
+		updatedDescription := savedDescription
+		if customDescription != nil {
+			updatedDescription = *customDescription
+		}
+		if updatedLookupID != savedLookupID || updatedDescription != savedDescription {
+			_, err = transaction.ExecContext(ctx, `
+				UPDATE vocabulary_items
+				SET lookup_id = ?, custom_description = ?, updated_at = ?
+				WHERE id = ? AND owner_key = ?
+			`,
+				sql.NullString{String: updatedLookupID, Valid: updatedLookupID != ""},
+				updatedDescription,
+				TimeString(now),
+				itemID,
+				ownerKey,
+			)
+		}
+	}
 	if err != nil {
 		return false, domain.VocabularyItem{}, fmt.Errorf("save vocabulary item: %w", err)
 	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, domain.VocabularyItem{}, fmt.Errorf("read vocabulary save result: %w", err)
+	if err := transaction.Commit(); err != nil {
+		return false, domain.VocabularyItem{}, fmt.Errorf("commit vocabulary item: %w", err)
 	}
 
-	item, err = db.VocabularyByTerm(ctx, ownerKey, normalizedTerm, currentSource)
-	if err != nil {
-		return false, domain.VocabularyItem{}, err
-	}
-	return rowsAffected == 1, item, nil
+	item, err = db.VocabularyByID(ctx, ownerKey, itemID)
+	return created, item, err
 }
 
-func (db *DB) VocabularyByID(
-	ctx context.Context,
-	ownerKey string,
-	itemID string,
-	currentSource SourceVersion,
-) (domain.VocabularyItem, error) {
-	query, arguments := vocabularySelect(currentSource)
-	query += " WHERE v.owner_key = ? AND v.id = ?"
-	arguments = append(arguments, ownerKey, itemID)
-	return scanVocabularyItem(db.sql.QueryRowContext(ctx, query, arguments...))
+func (db *DB) VocabularyByID(ctx context.Context, ownerKey, itemID string) (domain.VocabularyItem, error) {
+	query := vocabularySelect + " WHERE v.owner_key = ? AND v.id = ?"
+	return scanVocabularyItem(db.sql.QueryRowContext(ctx, query, ownerKey, itemID))
 }
 
-func (db *DB) VocabularyByTerm(
-	ctx context.Context,
-	ownerKey string,
-	normalizedTerm string,
-	currentSource SourceVersion,
-) (domain.VocabularyItem, error) {
-	query, arguments := vocabularySelect(currentSource)
-	query += " WHERE v.owner_key = ? AND v.normalized_term = ?"
-	arguments = append(arguments, ownerKey, normalizedTerm)
-	return scanVocabularyItem(db.sql.QueryRowContext(ctx, query, arguments...))
+func (db *DB) VocabularyByTerm(ctx context.Context, ownerKey, normalizedTerm string) (domain.VocabularyItem, error) {
+	query := vocabularySelect + " WHERE v.owner_key = ? AND v.normalized_term = ?"
+	return scanVocabularyItem(db.sql.QueryRowContext(ctx, query, ownerKey, normalizedTerm))
 }
 
 func (db *DB) ListVocabulary(ctx context.Context, input VocabularyListQuery) ([]domain.VocabularyItem, error) {
-	query, arguments := vocabularySelect(input.CurrentSource)
-	query += " WHERE v.owner_key = ?"
-	arguments = append(arguments, input.OwnerKey)
-
+	query := vocabularySelect + " WHERE v.owner_key = ?"
+	arguments := []any{input.OwnerKey}
 	if input.Query != "" {
 		query += " AND instr(v.normalized_term, ?) > 0"
 		arguments = append(arguments, input.Query)
-	}
-	if len(input.CEFR) > 0 {
-		placeholders := strings.TrimRight(strings.Repeat("?,", len(input.CEFR)), ",")
-		query += ` AND EXISTS (
-			SELECT 1
-			FROM explanations filter_explanation
-			JOIN dictionary_snapshots filter_snapshot ON filter_snapshot.id = filter_explanation.lookup_id
-			WHERE filter_explanation.owner_key = v.owner_key
-			  AND filter_explanation.normalized_term = v.normalized_term
-			  AND filter_snapshot.active = 1
-			  AND filter_snapshot.provider = ?
-			  AND filter_snapshot.parser_version = ?
-			  AND filter_snapshot.dataset_version = ?
-			  AND filter_explanation.cefr_level IN (` + placeholders + ")\n\t\t)"
-		arguments = append(arguments, input.CurrentSource.Provider, input.CurrentSource.ParserVersion, input.CurrentSource.DatasetVersion)
-		for _, level := range input.CEFR {
-			arguments = append(arguments, string(level))
-		}
-	}
-	if input.HasExplanation != nil {
-		existsOperator := "EXISTS"
-		if !*input.HasExplanation {
-			existsOperator = "NOT EXISTS"
-		}
-		query += " AND " + existsOperator + ` (
-			SELECT 1
-			FROM explanations presence_explanation
-			JOIN dictionary_snapshots presence_snapshot ON presence_snapshot.id = presence_explanation.lookup_id
-			WHERE presence_explanation.owner_key = v.owner_key
-			  AND presence_explanation.normalized_term = v.normalized_term
-			  AND presence_snapshot.active = 1
-			  AND presence_snapshot.provider = ?
-			  AND presence_snapshot.parser_version = ?
-			  AND presence_snapshot.dataset_version = ?
-		)`
-		arguments = append(arguments, input.CurrentSource.Provider, input.CurrentSource.ParserVersion, input.CurrentSource.DatasetVersion)
 	}
 
 	switch input.Sort {
@@ -193,105 +189,88 @@ func (db *DB) DeleteVocabulary(ctx context.Context, ownerKey, itemID string) err
 	return nil
 }
 
-func (db *DB) TouchVocabulary(ctx context.Context, ownerKey, normalizedTerm string, now time.Time) error {
-	_, err := db.sql.ExecContext(ctx, `
-		UPDATE vocabulary_items SET updated_at = ?
-		WHERE owner_key = ? AND normalized_term = ?
-	`, TimeString(now), ownerKey, normalizedTerm)
-	if err != nil {
-		return fmt.Errorf("touch vocabulary item: %w", err)
-	}
-	return nil
-}
-
-func vocabularySelect(current SourceVersion) (string, []any) {
-	query := `
-		SELECT
-			v.id,
-			v.term,
-			v.normalized_term,
-			(
-				SELECT COUNT(*)
-				FROM explanations count_explanation
-				JOIN dictionary_snapshots count_snapshot ON count_snapshot.id = count_explanation.lookup_id
-				WHERE count_explanation.owner_key = v.owner_key
-				  AND count_explanation.normalized_term = v.normalized_term
-				  AND count_snapshot.active = 1
-				  AND count_snapshot.provider = ?
-				  AND count_snapshot.parser_version = ?
-				  AND count_snapshot.dataset_version = ?
-			),
-			COALESCE((
-				SELECT group_concat(DISTINCT cefr_explanation.cefr_level)
-				FROM explanations cefr_explanation
-				JOIN dictionary_snapshots cefr_snapshot ON cefr_snapshot.id = cefr_explanation.lookup_id
-				WHERE cefr_explanation.owner_key = v.owner_key
-				  AND cefr_explanation.normalized_term = v.normalized_term
-				  AND cefr_explanation.cefr_level IS NOT NULL
-				  AND cefr_snapshot.active = 1
-				  AND cefr_snapshot.provider = ?
-				  AND cefr_snapshot.parser_version = ?
-				  AND cefr_snapshot.dataset_version = ?
-			), ''),
-			v.created_at,
-			v.updated_at
-		FROM vocabulary_items v`
-	arguments := []any{
-		current.Provider,
-		current.ParserVersion,
-		current.DatasetVersion,
-		current.Provider,
-		current.ParserVersion,
-		current.DatasetVersion,
-	}
-	return query, arguments
-}
+const vocabularySelect = `
+	SELECT
+		v.id, v.term, v.normalized_term, v.custom_description,
+		v.created_at, v.updated_at,
+		snapshot.id, snapshot.provider, snapshot.normalized_term,
+		snapshot.parser_version, snapshot.dataset_version, snapshot.data_json,
+		snapshot.status, snapshot.source_url, snapshot.fetched_at,
+		snapshot.expires_at, snapshot.active
+	FROM vocabulary_items v
+	LEFT JOIN dictionary_snapshots snapshot ON snapshot.id = v.lookup_id`
 
 func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 	var item domain.VocabularyItem
-	var levels string
+	var snapshotID sql.NullString
+	var provider sql.NullString
+	var snapshotTerm sql.NullString
+	var parserVersion sql.NullInt64
+	var datasetVersion sql.NullString
+	var dataJSON sql.NullString
+	var status sql.NullInt64
+	var sourceURL sql.NullString
+	var createdAt string
+	var updatedAt string
+	var fetchedAt sql.NullString
+	var expiresAt sql.NullString
+	var active sql.NullInt64
 	if err := scanner.Scan(
 		&item.ItemID,
 		&item.Term,
 		&item.NormalizedTerm,
-		&item.ExplanationCount,
-		&levels,
-		&item.CreatedAt,
-		&item.UpdatedAt,
+		&item.CustomDescription,
+		&createdAt,
+		&updatedAt,
+		&snapshotID,
+		&provider,
+		&snapshotTerm,
+		&parserVersion,
+		&datasetVersion,
+		&dataJSON,
+		&status,
+		&sourceURL,
+		&fetchedAt,
+		&expiresAt,
+		&active,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.VocabularyItem{}, ErrNotFound
 		}
 		return domain.VocabularyItem{}, fmt.Errorf("read vocabulary item: %w", err)
 	}
-	if _, err := time.Parse(time.RFC3339Nano, item.CreatedAt); err != nil {
+	if snapshotID.Valid {
+		snapshot := DictionarySnapshot{
+			ID:             snapshotID.String,
+			Provider:       provider.String,
+			NormalizedTerm: snapshotTerm.String,
+			ParserVersion:  int(parserVersion.Int64),
+			DatasetVersion: datasetVersion.String,
+			Data: domain.DictionarySnapshotData{
+				Status:    int(status.Int64),
+				SourceURL: sourceURL.String,
+			},
+		}
+		if err := decodeDictionaryData(
+			&snapshot,
+			dataJSON.String,
+			fetchedAt.String,
+			expiresAt.String,
+			int(active.Int64),
+		); err != nil {
+			return domain.VocabularyItem{}, err
+		}
+		lookup := lookupFromSnapshot(&snapshot, item.Term)
+		item.Lookup = &lookup
+	}
+	if _, err := time.Parse(time.RFC3339Nano, createdAt); err != nil {
 		return domain.VocabularyItem{}, fmt.Errorf("%w: vocabulary item %s created_at", ErrCorruptData, item.ItemID)
 	}
-	if _, err := time.Parse(time.RFC3339Nano, item.UpdatedAt); err != nil {
+	if _, err := time.Parse(time.RFC3339Nano, updatedAt); err != nil {
 		return domain.VocabularyItem{}, fmt.Errorf("%w: vocabulary item %s updated_at", ErrCorruptData, item.ItemID)
 	}
 
-	item.CEFRLevels = make([]domain.CEFRLevel, 0)
-	if levels != "" {
-		for _, value := range strings.Split(levels, ",") {
-			level := domain.CEFRLevel(value)
-			if !level.Valid() {
-				return domain.VocabularyItem{}, fmt.Errorf("%w: vocabulary item %s CEFR level", ErrCorruptData, item.ItemID)
-			}
-			item.CEFRLevels = append(item.CEFRLevels, level)
-		}
-		sort.Slice(item.CEFRLevels, func(left, right int) bool {
-			return cefrRank(item.CEFRLevels[left]) < cefrRank(item.CEFRLevels[right])
-		})
-	}
+	item.CreatedAt = createdAt
+	item.UpdatedAt = updatedAt
 	return item, nil
-}
-
-func cefrRank(level domain.CEFRLevel) int {
-	for index, candidate := range domain.CEFRLevels {
-		if level == candidate {
-			return index
-		}
-	}
-	return len(domain.CEFRLevels)
 }

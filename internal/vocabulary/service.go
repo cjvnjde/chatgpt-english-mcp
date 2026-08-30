@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/domain"
@@ -12,16 +13,24 @@ import (
 )
 
 type Store interface {
+	ActiveDictionarySnapshot(
+		ctx context.Context,
+		provider string,
+		normalizedTerm string,
+		datasetVersion string,
+		parserVersion int,
+	) (*storage.DictionarySnapshot, error)
 	SaveVocabulary(
 		ctx context.Context,
 		ownerKey string,
 		term string,
 		normalizedTerm string,
+		lookupID string,
+		customDescription *string,
 		now time.Time,
-		currentSource storage.SourceVersion,
 	) (created bool, item domain.VocabularyItem, err error)
-	VocabularyByID(ctx context.Context, ownerKey, itemID string, currentSource storage.SourceVersion) (domain.VocabularyItem, error)
-	VocabularyByTerm(ctx context.Context, ownerKey, normalizedTerm string, currentSource storage.SourceVersion) (domain.VocabularyItem, error)
+	VocabularyByID(ctx context.Context, ownerKey, itemID string) (domain.VocabularyItem, error)
+	VocabularyByTerm(ctx context.Context, ownerKey, normalizedTerm string) (domain.VocabularyItem, error)
 	ListVocabulary(ctx context.Context, input storage.VocabularyListQuery) ([]domain.VocabularyItem, error)
 	DeleteVocabulary(ctx context.Context, ownerKey, itemID string) error
 }
@@ -39,12 +48,10 @@ type SaveResult struct {
 }
 
 type ListOptions struct {
-	Query          string
-	CEFR           []domain.CEFRLevel
-	HasExplanation *bool
-	Sort           string
-	Limit          int
-	Cursor         string
+	Query  string
+	Sort   string
+	Limit  int
+	Cursor string
 }
 
 type ListResult struct {
@@ -53,9 +60,7 @@ type ListResult struct {
 }
 
 type listFilter struct {
-	Query          string             `json:"query"`
-	CEFR           []domain.CEFRLevel `json:"cefr"`
-	HasExplanation *bool              `json:"hasExplanation,omitempty"`
+	Query string `json:"query"`
 }
 
 func NewService(store Store, ownerKey string, currentSource storage.SourceVersion) *Service {
@@ -67,18 +72,42 @@ func NewService(store Store, ownerKey string, currentSource storage.SourceVersio
 	}
 }
 
-func (service *Service) Save(ctx context.Context, term string) (SaveResult, error) {
+func (service *Service) Save(ctx context.Context, term string, customDescription *string) (SaveResult, error) {
 	displayTerm, normalizedTerm, err := validateTerm(term)
 	if err != nil {
 		return SaveResult{}, err
+	}
+	if customDescription != nil {
+		description := strings.TrimSpace(*customDescription)
+		if utf8.RuneCountInString(description) > 5000 {
+			return SaveResult{}, apperr.New(
+				apperr.InvalidArgument,
+				"customDescription must contain at most 5000 Unicode characters",
+			)
+		}
+		customDescription = &description
+	}
+	snapshot, err := service.store.ActiveDictionarySnapshot(
+		ctx,
+		service.currentSource.Provider,
+		normalizedTerm,
+		service.currentSource.DatasetVersion,
+		service.currentSource.ParserVersion,
+	)
+	lookupID := ""
+	if err == nil && len(snapshot.Data.Entries) > 0 {
+		lookupID = snapshot.ID
+	} else if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return SaveResult{}, apperr.Wrap(apperr.InternalError, "failed to read the dictionary lookup", err)
 	}
 	created, item, err := service.store.SaveVocabulary(
 		ctx,
 		service.ownerKey,
 		displayTerm,
 		normalizedTerm,
+		lookupID,
+		customDescription,
 		service.now().UTC(),
-		service.currentSource,
 	)
 	if err != nil {
 		return SaveResult{}, apperr.Wrap(apperr.InternalError, "failed to save the vocabulary item", err)
@@ -100,13 +129,13 @@ func (service *Service) Get(ctx context.Context, itemID, term string) (domain.Vo
 	var item domain.VocabularyItem
 	var err error
 	if hasID {
-		item, err = service.store.VocabularyByID(ctx, service.ownerKey, itemID, service.currentSource)
+		item, err = service.store.VocabularyByID(ctx, service.ownerKey, itemID)
 	} else {
 		_, normalizedTerm, validationErr := validateTerm(term)
 		if validationErr != nil {
 			return domain.VocabularyItem{}, validationErr
 		}
-		item, err = service.store.VocabularyByTerm(ctx, service.ownerKey, normalizedTerm, service.currentSource)
+		item, err = service.store.VocabularyByTerm(ctx, service.ownerKey, normalizedTerm)
 	}
 	if errors.Is(err, storage.ErrNotFound) {
 		return domain.VocabularyItem{}, apperr.New(apperr.NotFound, "the vocabulary item was not found")
@@ -133,14 +162,8 @@ func (service *Service) List(ctx context.Context, options ListOptions) (ListResu
 		return ListResult{}, apperr.New(apperr.InvalidArgument, "limit must be between 1 and 100")
 	}
 
-	levels, err := normalizeCEFR(options.CEFR)
-	if err != nil {
-		return ListResult{}, err
-	}
 	filter := listFilter{
-		Query:          domain.NormalizeTerm(options.Query),
-		CEFR:           levels,
-		HasExplanation: options.HasExplanation,
+		Query: domain.NormalizeTerm(options.Query),
 	}
 	filterDigest, digestErr := storage.FilterDigest(filter)
 	if digestErr != nil {
@@ -152,15 +175,12 @@ func (service *Service) List(ctx context.Context, options ListOptions) (ListResu
 	}
 
 	items, err := service.store.ListVocabulary(ctx, storage.VocabularyListQuery{
-		OwnerKey:       service.ownerKey,
-		Query:          filter.Query,
-		CEFR:           levels,
-		HasExplanation: options.HasExplanation,
-		Sort:           sortOrder,
-		Limit:          limit + 1,
-		CursorPrimary:  cursorPrimary,
-		CursorID:       cursorID,
-		CurrentSource:  service.currentSource,
+		OwnerKey:      service.ownerKey,
+		Query:         filter.Query,
+		Sort:          sortOrder,
+		Limit:         limit + 1,
+		CursorPrimary: cursorPrimary,
+		CursorID:      cursorID,
 	})
 	if err != nil {
 		return ListResult{}, apperr.Wrap(apperr.InternalError, "failed to list vocabulary items", err)
@@ -206,21 +226,4 @@ func validateTerm(term string) (displayTerm, normalizedTerm string, err error) {
 		)
 	}
 	return displayTerm, domain.NormalizeTerm(displayTerm), nil
-}
-
-func normalizeCEFR(values []domain.CEFRLevel) ([]domain.CEFRLevel, error) {
-	requested := make(map[domain.CEFRLevel]struct{}, len(values))
-	for _, level := range values {
-		if !level.Valid() {
-			return nil, apperr.New(apperr.InvalidArgument, "cefr contains an unsupported level")
-		}
-		requested[level] = struct{}{}
-	}
-	levels := make([]domain.CEFRLevel, 0, len(requested))
-	for _, level := range domain.CEFRLevels {
-		if _, ok := requested[level]; ok {
-			levels = append(levels, level)
-		}
-	}
-	return levels, nil
 }
