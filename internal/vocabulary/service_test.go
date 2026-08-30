@@ -11,86 +11,132 @@ import (
 	"english-learning-mcp/internal/storage"
 )
 
-func TestSaveIsIdempotentAndListUsesBoundCursor(t *testing.T) {
-	store, err := storage.Open(context.Background(), ":memory:")
-	if err != nil {
-		t.Fatalf("storage.Open() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
+func TestSaveDoesNotOverwriteAndUpdateIsPartial(t *testing.T) {
+	service := newTestService(t, "owner-one")
+	ctx := context.Background()
+	description := "Money kept by a financial institution."
 
-	service := NewService(store, "owner-one", storage.SourceVersion{
-		Provider:      "cambridge",
-		ParserVersion: 12,
+	first, err := service.Save(ctx, "  Bank  ", InitialValues{
+		Status:            domain.LearningStatusLearning,
+		Tags:              []string{"Finance", "common", "finance"},
+		CustomDescription: &description,
+		DescriptionSource: &domain.DescriptionSource{
+			Title: "External dictionary",
+			URL:   "https://example.test/bank",
+		},
+		Notes:    []string{"Usually countable."},
+		Examples: []string{"I went to the bank."},
 	})
-	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
-	service.now = func() time.Time { return now }
-
-	first, err := service.Save(context.Background(), "  Bank  ", nil)
 	if err != nil {
 		t.Fatalf("Save(bank) error = %v", err)
 	}
-	if !first.Created || first.Item.Term != "Bank" || first.Item.NormalizedTerm != "bank" || first.Item.Lookup != nil {
+	if !first.Created || first.Item.Status != domain.LearningStatusLearning {
 		t.Fatalf("first save = %#v", first)
 	}
+	if !equalValues(first.Item.Tags, []string{"common", "finance"}) || first.Item.DescriptionSource == nil {
+		t.Fatalf("normalized first save = %#v", first.Item)
+	}
 
-	now = now.Add(time.Minute)
-	duplicate, err := service.Save(context.Background(), "bank", nil)
+	replacement := "This must not overwrite the item."
+	duplicate, err := service.Save(ctx, "bank", InitialValues{
+		Status:            domain.LearningStatusArchived,
+		Tags:              []string{"replacement"},
+		CustomDescription: &replacement,
+	})
 	if err != nil {
 		t.Fatalf("duplicate Save(bank) error = %v", err)
 	}
-	if duplicate.Created || duplicate.Item.ItemID != first.Item.ItemID || duplicate.Item.Term != "Bank" {
+	if duplicate.Created || duplicate.Item.ItemID != first.Item.ItemID {
 		t.Fatalf("duplicate save = %#v", duplicate)
 	}
+	if duplicate.Item.Status != domain.LearningStatusLearning || duplicate.Item.CustomDescription != description {
+		t.Fatalf("duplicate save overwrote metadata = %#v", duplicate.Item)
+	}
 
-	now = now.Add(time.Minute)
-	description := "Money kept by a financial institution."
-	updated, err := service.Save(context.Background(), "bank", &description)
+	status := domain.LearningStatusLearned
+	tags := []string{"Core", "Finance"}
+	notes := []string{"Review the financial and river meanings separately."}
+	updated, err := service.Update(ctx, "", "bank", UpdateChanges{
+		Status: &status,
+		Tags:   &tags,
+		Notes:  &notes,
+	})
 	if err != nil {
-		t.Fatalf("Save(bank description) error = %v", err)
+		t.Fatalf("Update(bank) error = %v", err)
 	}
-	if updated.Created || updated.Item.CustomDescription != description {
-		t.Fatalf("description update = %#v", updated)
+	if updated.Status != domain.LearningStatusLearned || !equalValues(updated.Tags, []string{"core", "finance"}) {
+		t.Fatalf("updated metadata = %#v", updated)
+	}
+	if updated.CustomDescription != description || updated.DescriptionSource == nil || len(updated.Examples) != 1 {
+		t.Fatalf("partial update did not preserve omitted fields = %#v", updated)
 	}
 
-	now = now.Add(time.Minute)
-	preserved, err := service.Save(context.Background(), "bank", nil)
+	empty := ""
+	cleared, err := service.Update(ctx, first.Item.ItemID, "", UpdateChanges{CustomDescription: &empty})
 	if err != nil {
-		t.Fatalf("Save(bank without description) error = %v", err)
+		t.Fatalf("clear description error = %v", err)
 	}
-	if preserved.Item.CustomDescription != description {
-		t.Fatalf("omitted description was not preserved: %#v", preserved.Item)
-	}
-
-	now = now.Add(time.Minute)
-	emptyDescription := ""
-	cleared, err := service.Save(context.Background(), "bank", &emptyDescription)
-	if err != nil {
-		t.Fatalf("Save(bank clear description) error = %v", err)
-	}
-	if cleared.Item.CustomDescription != "" {
-		t.Fatalf("cleared description = %q", cleared.Item.CustomDescription)
+	if cleared.CustomDescription != "" || cleared.DescriptionSource != nil {
+		t.Fatalf("cleared description = %#v", cleared)
 	}
 
-	for _, term := range []string{"apple", "zebra"} {
-		now = now.Add(time.Minute)
-		if _, err := service.Save(context.Background(), term, nil); err != nil {
-			t.Fatalf("Save(%s) error = %v", term, err)
+	_, err = service.Update(ctx, first.Item.ItemID, "", UpdateChanges{})
+	assertApplicationError(t, err, apperr.InvalidArgument)
+}
+
+func TestListFiltersLearningMetadataAndUsesBoundCursor(t *testing.T) {
+	service := newTestService(t, "owner-one")
+	ctx := context.Background()
+	description := "A financial institution."
+	tests := []struct {
+		term    string
+		initial InitialValues
+	}{
+		{term: "apple", initial: InitialValues{Tags: []string{"food"}}},
+		{term: "bank", initial: InitialValues{
+			Status:            domain.LearningStatusLearning,
+			Tags:              []string{"common", "finance"},
+			CustomDescription: &description,
+		}},
+		{term: "zebra", initial: InitialValues{
+			Status: domain.LearningStatusLearned,
+			Tags:   []string{"animals", "common"},
+		}},
+	}
+	for _, test := range tests {
+		if _, err := service.Save(ctx, test.term, test.initial); err != nil {
+			t.Fatalf("Save(%s) error = %v", test.term, err)
 		}
 	}
 
-	firstPage, err := service.List(context.Background(), ListOptions{Sort: "alphabetical", Limit: 2})
+	common, err := service.List(ctx, ListOptions{Tags: []string{"COMMON"}, Sort: "alphabetical"})
+	if err != nil {
+		t.Fatalf("List(common) error = %v", err)
+	}
+	if len(common.Items) != 2 || common.Items[0].Term != "bank" || common.Items[1].Term != "zebra" {
+		t.Fatalf("common items = %#v", common.Items)
+	}
+
+	hasDescription := true
+	learning, err := service.List(ctx, ListOptions{
+		Statuses:             []domain.LearningStatus{domain.LearningStatusLearning, domain.LearningStatusLearned},
+		HasCustomDescription: &hasDescription,
+	})
+	if err != nil {
+		t.Fatalf("List(learning with description) error = %v", err)
+	}
+	if len(learning.Items) != 1 || learning.Items[0].Term != "bank" {
+		t.Fatalf("learning items = %#v", learning.Items)
+	}
+
+	firstPage, err := service.List(ctx, ListOptions{Sort: "alphabetical", Limit: 2})
 	if err != nil {
 		t.Fatalf("first List() error = %v", err)
 	}
-	if len(firstPage.Items) != 2 || firstPage.Items[0].Term != "apple" || firstPage.Items[1].Term != "Bank" || firstPage.NextCursor == "" {
+	if len(firstPage.Items) != 2 || firstPage.NextCursor == "" {
 		t.Fatalf("first page = %#v", firstPage)
 	}
-
-	secondPage, err := service.List(context.Background(), ListOptions{
+	secondPage, err := service.List(ctx, ListOptions{
 		Sort:   "alphabetical",
 		Limit:  2,
 		Cursor: firstPage.NextCursor,
@@ -98,20 +144,34 @@ func TestSaveIsIdempotentAndListUsesBoundCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second List() error = %v", err)
 	}
-	if len(secondPage.Items) != 1 || secondPage.Items[0].Term != "zebra" || secondPage.NextCursor != "" {
+	if len(secondPage.Items) != 1 || secondPage.Items[0].Term != "zebra" {
 		t.Fatalf("second page = %#v", secondPage)
 	}
 
-	_, err = service.List(context.Background(), ListOptions{
-		Query:  "bank",
+	_, err = service.List(ctx, ListOptions{
+		Tags:   []string{"common"},
 		Sort:   "alphabetical",
 		Limit:  2,
 		Cursor: firstPage.NextCursor,
 	})
-	var applicationError *apperr.Error
-	if !errors.As(err, &applicationError) || applicationError.Code != apperr.InvalidArgument {
-		t.Fatalf("List() cursor/filter error = %v, want INVALID_ARGUMENT", err)
-	}
+	assertApplicationError(t, err, apperr.InvalidArgument)
+}
+
+func TestDescriptionSourceRequiresDescriptionAndHTTPURL(t *testing.T) {
+	service := newTestService(t, "owner-one")
+	ctx := context.Background()
+
+	_, err := service.Save(ctx, "bank", InitialValues{
+		DescriptionSource: &domain.DescriptionSource{Title: "External dictionary"},
+	})
+	assertApplicationError(t, err, apperr.InvalidArgument)
+
+	description := "External definition."
+	_, err = service.Save(ctx, "bank", InitialValues{
+		CustomDescription: &description,
+		DescriptionSource: &domain.DescriptionSource{URL: "ftp://example.test/bank"},
+	})
+	assertApplicationError(t, err, apperr.InvalidArgument)
 }
 
 func TestVocabularyIsOwnerScoped(t *testing.T) {
@@ -125,15 +185,12 @@ func TestVocabularyIsOwnerScoped(t *testing.T) {
 	ownerOne := NewService(store, "owner-one", source)
 	ownerTwo := NewService(store, "owner-two", source)
 
-	saved, err := ownerOne.Save(context.Background(), "private phrase", nil)
+	saved, err := ownerOne.Save(context.Background(), "private phrase", InitialValues{})
 	if err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	_, err = ownerTwo.Get(context.Background(), saved.Item.ItemID, "")
-	var applicationError *apperr.Error
-	if !errors.As(err, &applicationError) || applicationError.Code != apperr.NotFound {
-		t.Fatalf("other owner Get() error = %v, want NOT_FOUND", err)
-	}
+	assertApplicationError(t, err, apperr.NotFound)
 }
 
 func TestSavedVocabularyLinksCachedLookupAndFollowsRefresh(t *testing.T) {
@@ -149,7 +206,7 @@ func TestSavedVocabularyLinksCachedLookupAndFollowsRefresh(t *testing.T) {
 	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	firstLookup := insertLookup(t, ctx, store, now, "first definition")
 
-	saved, err := service.Save(ctx, "bank", nil)
+	saved, err := service.Save(ctx, "bank", InitialValues{})
 	if err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -168,6 +225,16 @@ func TestSavedVocabularyLinksCachedLookupAndFollowsRefresh(t *testing.T) {
 	if got := loaded.Lookup.Entries[0].Definitions[0].Definition; got != "refreshed definition" {
 		t.Fatalf("refreshed definition = %q", got)
 	}
+}
+
+func newTestService(t *testing.T, ownerKey string) *Service {
+	t.Helper()
+	store, err := storage.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("storage.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return NewService(store, ownerKey, storage.SourceVersion{Provider: "cambridge", ParserVersion: 12})
 }
 
 func insertLookup(
@@ -198,4 +265,24 @@ func insertLookup(
 		t.Fatalf("InsertDictionarySnapshot() error = %v", err)
 	}
 	return snapshot
+}
+
+func assertApplicationError(t *testing.T, err error, code apperr.Code) {
+	t.Helper()
+	var applicationError *apperr.Error
+	if !errors.As(err, &applicationError) || applicationError.Code != code {
+		t.Fatalf("error = %v, want %s", err, code)
+	}
+}
+
+func equalValues(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

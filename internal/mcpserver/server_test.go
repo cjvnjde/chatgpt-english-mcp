@@ -95,6 +95,7 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		"vocabulary_get",
 		"vocabulary_list",
 		"vocabulary_save",
+		"vocabulary_update",
 	}
 	if !equalStrings(names, wantNames) {
 		t.Fatalf("tool names = %#v, want %#v", names, wantNames)
@@ -121,9 +122,17 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	description := "A description imported from another source."
 	saved := callTool[vocabulary.SaveResult](t, ctx, clientSession, "vocabulary_save", VocabularySaveInput{
 		Term:              "bank",
+		Status:            domain.LearningStatusLearning,
+		Tags:              []string{"Finance", "common"},
 		CustomDescription: &description,
+		DescriptionSource: &domain.DescriptionSource{
+			Title: "External dictionary",
+			URL:   "https://example.test/bank",
+		},
+		Notes:    []string{"Personal note."},
+		Examples: []string{"I visited the bank."},
 	})
-	if saved.Item.Lookup != nil || saved.Item.CustomDescription != description {
+	if saved.Item.Lookup != nil || saved.Item.CustomDescription != description || saved.Item.Status != domain.LearningStatusLearning {
 		t.Fatalf("bare saved item = %#v", saved.Item)
 	}
 
@@ -140,6 +149,24 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		t.Fatalf("complete vocabulary get = %#v", item)
 	}
 
+	status := domain.LearningStatusLearned
+	tags := []string{"Core", "Finance"}
+	notes := []string{"Updated personal note."}
+	updatedMetadata := callTool[VocabularyUpdateOutput](t, ctx, clientSession, "vocabulary_update", vocabularyUpdateByTermInput{
+		Term: "bank",
+		Changes: VocabularyUpdateChanges{
+			Status: &status,
+			Tags:   &tags,
+			Notes:  &notes,
+		},
+	})
+	if updatedMetadata.Item.Status != domain.LearningStatusLearned || len(updatedMetadata.Item.Tags) != 2 {
+		t.Fatalf("vocabulary update = %#v", updatedMetadata)
+	}
+	if updatedMetadata.Item.CustomDescription != description || len(updatedMetadata.Item.Examples) != 1 {
+		t.Fatalf("vocabulary update lost omitted fields = %#v", updatedMetadata)
+	}
+
 	cached := callTool[domain.DictionaryLookupResult](t, ctx, clientSession, "dictionary_lookup", DictionaryLookupInput{Term: "bank"})
 	if cached.Cache.State != domain.CacheHit || cached.LookupID != lookup.LookupID || provider.calls != 1 {
 		t.Fatalf("cached lookup = %#v, calls = %d", cached, provider.calls)
@@ -152,12 +179,17 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	if refreshed.Cache.State != domain.CacheRefreshed || refreshed.LookupID == lookup.LookupID || provider.calls != 2 {
 		t.Fatalf("refreshed lookup = %#v, calls = %d", refreshed, provider.calls)
 	}
-	updated := callTool[VocabularyGetOutput](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
-	if updated.Item.Lookup == nil || updated.Item.Lookup.LookupID != refreshed.LookupID {
-		t.Fatalf("refreshed vocabulary item = %#v", updated.Item)
+	updatedLookup := callTool[VocabularyGetOutput](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
+	if updatedLookup.Item.Lookup == nil || updatedLookup.Item.Lookup.LookupID != refreshed.LookupID {
+		t.Fatalf("refreshed vocabulary item = %#v", updatedLookup.Item)
 	}
 
-	vocabularyItems := callTool[VocabularyListOutput](t, ctx, clientSession, "vocabulary_list", VocabularyListInput{})
+	hasLookup := true
+	vocabularyItems := callTool[VocabularyListOutput](t, ctx, clientSession, "vocabulary_list", VocabularyListInput{
+		Statuses:  []domain.LearningStatus{domain.LearningStatusLearned},
+		Tags:      []string{"finance"},
+		HasLookup: &hasLookup,
+	})
 	if len(vocabularyItems.Items) != 1 || vocabularyItems.Items[0].Lookup == nil {
 		t.Fatalf("vocabulary list = %#v", vocabularyItems)
 	}

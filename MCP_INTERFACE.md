@@ -8,8 +8,8 @@ The server has two responsibilities:
 2. Maintain an owner-scoped learning list of words and phrases.
 
 The server does not generate or store AI explanations. A learning-list item may exist with no
-dictionary lookup and no custom description. It may also contain a custom description from an
-external source, a linked Cambridge lookup, or both.
+dictionary lookup or learner metadata. It can independently contain a custom description with
+source attribution, personal notes and examples, tags, a learning status, and a linked lookup.
 
 In this document, **term** means a word, phrase, idiom, phrasal verb, or expression.
 
@@ -18,7 +18,8 @@ In this document, **term** means a word, phrase, idiom, phrasal verb, or express
 | Tool | Purpose |
 |---|---|
 | `dictionary_lookup` | Return a permanent cached lookup, or explicitly refresh it. |
-| `vocabulary_save` | Add or update one learning-list item. |
+| `vocabulary_save` | Create or ensure one learning-list item without overwriting it. |
+| `vocabulary_update` | Partially update an existing learning-list item. |
 | `vocabulary_get` | Get one saved item with all available data. |
 | `vocabulary_list` | Browse and search saved items. |
 | `vocabulary_delete` | Remove one saved item. |
@@ -30,6 +31,7 @@ List limits default to 50 and must be between 1 and 100.
 
 ```ts
 type CacheState = "hit" | "miss" | "refreshed" | "stale_fallback";
+type LearningStatus = "new" | "learning" | "learned" | "archived";
 
 type DictionaryLookup = {
   lookupId: string;
@@ -57,7 +59,15 @@ type VocabularyItem = {
   itemId: string;
   term: string;
   normalizedTerm: string;
+  status: LearningStatus;
+  tags: string[];
   customDescription?: string;
+  descriptionSource?: {
+    title?: string;
+    url?: string;
+  };
+  notes: string[];
+  examples: string[];
   lookup?: DictionaryLookup;
   createdAt: string;
   updatedAt: string;
@@ -95,7 +105,15 @@ Input:
 ```ts
 {
   term: string;
+  status?: LearningStatus; // default "new"
+  tags?: string[];
   customDescription?: string; // at most 5,000 Unicode characters
+  descriptionSource?: {
+    title?: string; // at most 200 Unicode characters
+    url?: string;   // absolute HTTP or HTTPS URL
+  };
+  notes?: string[];
+  examples?: string[];
 }
 ```
 
@@ -103,15 +121,45 @@ The operation is idempotent by normalized term:
 
 - a new term is valid even when it has never been looked up;
 - if a successful cached lookup exists, it is linked automatically;
-- omitting `customDescription` preserves the existing value;
-- supplying it adds or replaces the value;
-- supplying an empty string clears the value;
-- saving again after a lookup refresh updates the lookup link if needed.
+- optional metadata initializes a new item;
+- if the item already exists, none of its learner metadata is changed;
+- a later successful dictionary lookup updates the lookup link automatically.
 
 Output:
 
 ```ts
 { created: boolean; item: VocabularyItem }
+```
+
+Tags are trimmed, normalized to lowercase, deduplicated, and sorted. A description source requires
+a non-empty custom description. Notes and examples preserve their supplied order.
+
+## `vocabulary_update`
+
+Input identifies exactly one existing item by `itemId` or `term`:
+
+```ts
+{
+  itemId: string; // alternatively: term
+  changes: {
+    status?: LearningStatus;
+    tags?: string[];
+    customDescription?: string;
+    descriptionSource?: { title?: string; url?: string };
+    notes?: string[];
+    examples?: string[];
+  };
+}
+```
+
+`changes` must contain at least one field. Omitted fields are preserved. Supplied arrays replace
+the existing arrays, so `[]` clears them. An empty `customDescription` clears both the description
+and its source. An empty `descriptionSource` object clears only the source.
+
+Output:
+
+```ts
+{ item: VocabularyItem }
 ```
 
 ## `vocabulary_get`
@@ -138,8 +186,12 @@ Input:
 ```ts
 {
   query?: string;
+  statuses?: LearningStatus[];                // match any supplied status
+  tags?: string[];                            // require all supplied tags
+  hasLookup?: boolean;
+  hasCustomDescription?: boolean;
   sort?: "recent" | "oldest" | "alphabetical"; // default recent
-  limit?: number;                                // default 50, maximum 100
+  limit?: number;                              // default 50, maximum 100
   cursor?: string;
 }
 ```
@@ -151,7 +203,8 @@ Output:
 ```
 
 Every result embeds its optional complete lookup. `query` is a case-insensitive normalized-term
-substring filter. Cursors are opaque and bound to the current filters and sort order.
+substring filter. Multiple statuses match any value; multiple tags must all be present. Cursors
+are opaque and bound to the current filters and sort order.
 
 ## `vocabulary_delete`
 
@@ -181,4 +234,5 @@ Deleting a learning-list item does not delete its permanent dictionary snapshots
 
 Migration 2 adds the optional lookup link and custom description to vocabulary items. Existing
 items are linked to a current successful lookup when one exists. The obsolete explanations table
-and its stored data are removed.
+and its stored data are removed. Migration 3 adds learning status, tags, description attribution,
+notes, and personal examples. Existing items start with status `new` and empty metadata arrays.

@@ -3,8 +3,10 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"english-learning-mcp/internal/domain"
@@ -16,99 +18,182 @@ type SourceVersion struct {
 	DatasetVersion string
 }
 
+type VocabularyCreate struct {
+	OwnerKey          string
+	Term              string
+	NormalizedTerm    string
+	LookupID          string
+	Status            domain.LearningStatus
+	Tags              []string
+	CustomDescription string
+	DescriptionSource *domain.DescriptionSource
+	Notes             []string
+	Examples          []string
+	Now               time.Time
+}
+
+type VocabularyUpdate struct {
+	OwnerKey             string
+	ItemID               string
+	Status               *domain.LearningStatus
+	Tags                 *[]string
+	CustomDescription    *string
+	SetDescriptionSource bool
+	DescriptionSource    *domain.DescriptionSource
+	Notes                *[]string
+	Examples             *[]string
+	Now                  time.Time
+}
+
 type VocabularyListQuery struct {
-	OwnerKey      string
-	Query         string
-	Sort          string
-	Limit         int
-	CursorPrimary string
-	CursorID      string
+	OwnerKey             string
+	Query                string
+	Statuses             []domain.LearningStatus
+	Tags                 []string
+	HasLookup            *bool
+	HasCustomDescription *bool
+	Sort                 string
+	Limit                int
+	CursorPrimary        string
+	CursorID             string
 }
 
 func (db *DB) SaveVocabulary(
 	ctx context.Context,
-	ownerKey string,
-	term string,
-	normalizedTerm string,
-	lookupID string,
-	customDescription *string,
-	now time.Time,
+	input VocabularyCreate,
 ) (created bool, item domain.VocabularyItem, err error) {
-	transaction, err := db.sql.BeginTx(ctx, nil)
+	itemID, err := NewID()
 	if err != nil {
-		return false, domain.VocabularyItem{}, fmt.Errorf("begin vocabulary transaction: %w", err)
+		return false, domain.VocabularyItem{}, err
 	}
-	defer transaction.Rollback()
+	tagsJSON, err := encodeStringList(input.Tags, "vocabulary tags")
+	if err != nil {
+		return false, domain.VocabularyItem{}, err
+	}
+	notesJSON, err := encodeStringList(input.Notes, "vocabulary notes")
+	if err != nil {
+		return false, domain.VocabularyItem{}, err
+	}
+	examplesJSON, err := encodeStringList(input.Examples, "vocabulary examples")
+	if err != nil {
+		return false, domain.VocabularyItem{}, err
+	}
+	descriptionSourceJSON, err := encodeOptionalJSON(input.DescriptionSource, "description source")
+	if err != nil {
+		return false, domain.VocabularyItem{}, err
+	}
 
-	var itemID string
-	var savedLookupID string
-	var savedDescription string
-	err = transaction.QueryRowContext(ctx, `
-		SELECT id, COALESCE(lookup_id, ''), custom_description
-		FROM vocabulary_items
-		WHERE owner_key = ? AND normalized_term = ?
-	`, ownerKey, normalizedTerm).Scan(&itemID, &savedLookupID, &savedDescription)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		itemID, err = NewID()
-		if err != nil {
-			return false, domain.VocabularyItem{}, err
-		}
-		timestamp := TimeString(now)
-		description := ""
-		if customDescription != nil {
-			description = *customDescription
-		}
-		_, err = transaction.ExecContext(ctx, `
-			INSERT INTO vocabulary_items(
-				id, owner_key, term, normalized_term, created_at, updated_at,
-				lookup_id, custom_description
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`,
-			itemID,
-			ownerKey,
-			term,
-			normalizedTerm,
-			timestamp,
-			timestamp,
-			sql.NullString{String: lookupID, Valid: lookupID != ""},
-			description,
-		)
-		created = true
-	case err != nil:
-		return false, domain.VocabularyItem{}, fmt.Errorf("find vocabulary item: %w", err)
-	default:
-		updatedLookupID := savedLookupID
-		if lookupID != "" {
-			updatedLookupID = lookupID
-		}
-		updatedDescription := savedDescription
-		if customDescription != nil {
-			updatedDescription = *customDescription
-		}
-		if updatedLookupID != savedLookupID || updatedDescription != savedDescription {
-			_, err = transaction.ExecContext(ctx, `
-				UPDATE vocabulary_items
-				SET lookup_id = ?, custom_description = ?, updated_at = ?
-				WHERE id = ? AND owner_key = ?
-			`,
-				sql.NullString{String: updatedLookupID, Valid: updatedLookupID != ""},
-				updatedDescription,
-				TimeString(now),
-				itemID,
-				ownerKey,
-			)
-		}
-	}
+	timestamp := TimeString(input.Now)
+	result, err := db.sql.ExecContext(ctx, `
+		INSERT INTO vocabulary_items(
+			id, owner_key, term, normalized_term, created_at, updated_at,
+			lookup_id, custom_description, learning_status,
+			description_source_json, notes_json, examples_json, tags_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(owner_key, normalized_term) DO NOTHING
+	`,
+		itemID,
+		input.OwnerKey,
+		input.Term,
+		input.NormalizedTerm,
+		timestamp,
+		timestamp,
+		sql.NullString{String: input.LookupID, Valid: input.LookupID != ""},
+		input.CustomDescription,
+		input.Status,
+		descriptionSourceJSON,
+		notesJSON,
+		examplesJSON,
+		tagsJSON,
+	)
 	if err != nil {
 		return false, domain.VocabularyItem{}, fmt.Errorf("save vocabulary item: %w", err)
 	}
-	if err := transaction.Commit(); err != nil {
-		return false, domain.VocabularyItem{}, fmt.Errorf("commit vocabulary item: %w", err)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, domain.VocabularyItem{}, fmt.Errorf("read vocabulary save result: %w", err)
+	}
+	created = rowsAffected == 1
+	if !created && input.LookupID != "" {
+		if _, err := db.sql.ExecContext(ctx, `
+			UPDATE vocabulary_items
+			SET lookup_id = ?
+			WHERE owner_key = ? AND normalized_term = ? AND lookup_id IS NULL
+		`, input.LookupID, input.OwnerKey, input.NormalizedTerm); err != nil {
+			return false, domain.VocabularyItem{}, fmt.Errorf("link existing vocabulary lookup: %w", err)
+		}
 	}
 
-	item, err = db.VocabularyByID(ctx, ownerKey, itemID)
+	item, err = db.VocabularyByTerm(ctx, input.OwnerKey, input.NormalizedTerm)
 	return created, item, err
+}
+
+func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (domain.VocabularyItem, error) {
+	assignments := make([]string, 0, 7)
+	arguments := make([]any, 0, 10)
+	if input.Status != nil {
+		assignments = append(assignments, "learning_status = ?")
+		arguments = append(arguments, *input.Status)
+	}
+	if input.Tags != nil {
+		encoded, err := encodeStringList(*input.Tags, "vocabulary tags")
+		if err != nil {
+			return domain.VocabularyItem{}, err
+		}
+		assignments = append(assignments, "tags_json = ?")
+		arguments = append(arguments, encoded)
+	}
+	if input.CustomDescription != nil {
+		assignments = append(assignments, "custom_description = ?")
+		arguments = append(arguments, *input.CustomDescription)
+	}
+	if input.SetDescriptionSource {
+		encoded, err := encodeOptionalJSON(input.DescriptionSource, "description source")
+		if err != nil {
+			return domain.VocabularyItem{}, err
+		}
+		assignments = append(assignments, "description_source_json = ?")
+		arguments = append(arguments, encoded)
+	}
+	if input.Notes != nil {
+		encoded, err := encodeStringList(*input.Notes, "vocabulary notes")
+		if err != nil {
+			return domain.VocabularyItem{}, err
+		}
+		assignments = append(assignments, "notes_json = ?")
+		arguments = append(arguments, encoded)
+	}
+	if input.Examples != nil {
+		encoded, err := encodeStringList(*input.Examples, "vocabulary examples")
+		if err != nil {
+			return domain.VocabularyItem{}, err
+		}
+		assignments = append(assignments, "examples_json = ?")
+		arguments = append(arguments, encoded)
+	}
+	if len(assignments) == 0 {
+		return domain.VocabularyItem{}, fmt.Errorf("vocabulary update has no changes")
+	}
+
+	assignments = append(assignments, "updated_at = ?")
+	arguments = append(arguments, TimeString(input.Now), input.OwnerKey, input.ItemID)
+	result, err := db.sql.ExecContext(ctx, `
+		UPDATE vocabulary_items
+		SET `+strings.Join(assignments, ", ")+`
+		WHERE owner_key = ? AND id = ?
+	`, arguments...)
+	if err != nil {
+		return domain.VocabularyItem{}, fmt.Errorf("update vocabulary item: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return domain.VocabularyItem{}, fmt.Errorf("read vocabulary update result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.VocabularyItem{}, ErrNotFound
+	}
+
+	return db.VocabularyByID(ctx, input.OwnerKey, input.ItemID)
 }
 
 func (db *DB) VocabularyByID(ctx context.Context, ownerKey, itemID string) (domain.VocabularyItem, error) {
@@ -127,6 +212,32 @@ func (db *DB) ListVocabulary(ctx context.Context, input VocabularyListQuery) ([]
 	if input.Query != "" {
 		query += " AND instr(v.normalized_term, ?) > 0"
 		arguments = append(arguments, input.Query)
+	}
+	if len(input.Statuses) > 0 {
+		query += " AND v.learning_status IN (" + placeholders(len(input.Statuses)) + ")"
+		for _, status := range input.Statuses {
+			arguments = append(arguments, status)
+		}
+	}
+	for _, tag := range input.Tags {
+		query += ` AND EXISTS (
+			SELECT 1 FROM json_each(v.tags_json) saved_tag WHERE saved_tag.value = ?
+		)`
+		arguments = append(arguments, tag)
+	}
+	if input.HasLookup != nil {
+		if *input.HasLookup {
+			query += " AND v.lookup_id IS NOT NULL"
+		} else {
+			query += " AND v.lookup_id IS NULL"
+		}
+	}
+	if input.HasCustomDescription != nil {
+		if *input.HasCustomDescription {
+			query += " AND v.custom_description <> ''"
+		} else {
+			query += " AND v.custom_description = ''"
+		}
 	}
 
 	switch input.Sort {
@@ -191,8 +302,9 @@ func (db *DB) DeleteVocabulary(ctx context.Context, ownerKey, itemID string) err
 
 const vocabularySelect = `
 	SELECT
-		v.id, v.term, v.normalized_term, v.custom_description,
-		v.created_at, v.updated_at,
+		v.id, v.term, v.normalized_term, v.learning_status, v.tags_json,
+		v.custom_description, v.description_source_json, v.notes_json,
+		v.examples_json, v.created_at, v.updated_at,
 		snapshot.id, snapshot.provider, snapshot.normalized_term,
 		snapshot.parser_version, snapshot.dataset_version, snapshot.data_json,
 		snapshot.status, snapshot.source_url, snapshot.fetched_at,
@@ -202,6 +314,10 @@ const vocabularySelect = `
 
 func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 	var item domain.VocabularyItem
+	var tagsJSON string
+	var descriptionSourceJSON sql.NullString
+	var notesJSON string
+	var examplesJSON string
 	var snapshotID sql.NullString
 	var provider sql.NullString
 	var snapshotTerm sql.NullString
@@ -219,7 +335,12 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		&item.ItemID,
 		&item.Term,
 		&item.NormalizedTerm,
+		&item.Status,
+		&tagsJSON,
 		&item.CustomDescription,
+		&descriptionSourceJSON,
+		&notesJSON,
+		&examplesJSON,
 		&createdAt,
 		&updatedAt,
 		&snapshotID,
@@ -238,6 +359,29 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 			return domain.VocabularyItem{}, ErrNotFound
 		}
 		return domain.VocabularyItem{}, fmt.Errorf("read vocabulary item: %w", err)
+	}
+	if !item.Status.Valid() {
+		return domain.VocabularyItem{}, fmt.Errorf("%w: vocabulary item %s learning_status", ErrCorruptData, item.ItemID)
+	}
+	if err := decodeJSON(tagsJSON, &item.Tags, item.ItemID, "tags"); err != nil {
+		return domain.VocabularyItem{}, err
+	}
+	if err := decodeJSON(notesJSON, &item.Notes, item.ItemID, "notes"); err != nil {
+		return domain.VocabularyItem{}, err
+	}
+	if err := decodeJSON(examplesJSON, &item.Examples, item.ItemID, "examples"); err != nil {
+		return domain.VocabularyItem{}, err
+	}
+	if descriptionSourceJSON.Valid {
+		item.DescriptionSource = &domain.DescriptionSource{}
+		if err := decodeJSON(
+			descriptionSourceJSON.String,
+			item.DescriptionSource,
+			item.ItemID,
+			"description source",
+		); err != nil {
+			return domain.VocabularyItem{}, err
+		}
 	}
 	if snapshotID.Valid {
 		snapshot := DictionarySnapshot{
@@ -273,4 +417,41 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 	item.CreatedAt = createdAt
 	item.UpdatedAt = updatedAt
 	return item, nil
+}
+
+func encodeJSON(value any, label string) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("encode %s: %w", label, err)
+	}
+	return string(encoded), nil
+}
+
+func encodeOptionalJSON(value *domain.DescriptionSource, label string) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	encoded, err := encodeJSON(value, label)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+func encodeStringList(values []string, label string) (string, error) {
+	if values == nil {
+		values = []string{}
+	}
+	return encodeJSON(values, label)
+}
+
+func decodeJSON(encoded string, target any, itemID, label string) error {
+	if err := json.Unmarshal([]byte(encoded), target); err != nil {
+		return fmt.Errorf("%w: vocabulary item %s %s", ErrCorruptData, itemID, label)
+	}
+	return nil
+}
+
+func placeholders(count int) string {
+	return strings.TrimRight(strings.Repeat("?,", count), ",")
 }

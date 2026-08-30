@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"english-learning-mcp/internal/domain"
 )
 
 func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
@@ -19,6 +21,11 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 	assertPragma(t, store, "busy_timeout", 5000)
 	assertColumn(t, store, "vocabulary_items", "lookup_id")
 	assertColumn(t, store, "vocabulary_items", "custom_description")
+	assertColumn(t, store, "vocabulary_items", "learning_status")
+	assertColumn(t, store, "vocabulary_items", "tags_json")
+	assertColumn(t, store, "vocabulary_items", "description_source_json")
+	assertColumn(t, store, "vocabulary_items", "notes_json")
+	assertColumn(t, store, "vocabulary_items", "examples_json")
 	var explanationTables int
 	if err := store.sql.QueryRowContext(
 		ctx,
@@ -38,7 +45,18 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 	}
 
 	description := "An external description."
-	created, saved, err := store.SaveVocabulary(ctx, "owner", "Bank", "bank", "", &description, time.Now())
+	created, saved, err := store.SaveVocabulary(ctx, VocabularyCreate{
+		OwnerKey:          "owner",
+		Term:              "Bank",
+		NormalizedTerm:    "bank",
+		Status:            domain.LearningStatusLearning,
+		Tags:              []string{"finance"},
+		CustomDescription: description,
+		DescriptionSource: &domain.DescriptionSource{Title: "External source", URL: "https://example.test"},
+		Notes:             []string{"Personal note."},
+		Examples:          []string{"I visited the bank."},
+		Now:               time.Now(),
+	})
 	if err != nil {
 		t.Fatalf("SaveVocabulary() error = %v", err)
 	}
@@ -58,7 +76,13 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VocabularyByID() after reopen error = %v", err)
 	}
-	if loaded.Term != "Bank" || loaded.NormalizedTerm != "bank" || loaded.CustomDescription != description || loaded.Lookup != nil {
+	if loaded.Term != "Bank" || loaded.NormalizedTerm != "bank" || loaded.Status != domain.LearningStatusLearning {
+		t.Fatalf("persisted vocabulary identity = %#v", loaded)
+	}
+	if loaded.CustomDescription != description || loaded.DescriptionSource == nil || loaded.DescriptionSource.Title != "External source" {
+		t.Fatalf("persisted description = %#v", loaded)
+	}
+	if len(loaded.Tags) != 1 || len(loaded.Notes) != 1 || len(loaded.Examples) != 1 || loaded.Lookup != nil {
 		t.Fatalf("persisted vocabulary = %#v", loaded)
 	}
 }

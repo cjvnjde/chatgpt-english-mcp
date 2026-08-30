@@ -11,7 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "2.0.0"
+const Version = "2.1.0"
 
 type Services struct {
 	Dictionary *dictionary.Service
@@ -36,6 +36,9 @@ func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
 		return nil, err
 	}
 	if err := registerVocabularySave(server, services.Vocabulary, logger); err != nil {
+		return nil, err
+	}
+	if err := registerVocabularyUpdate(server, services.Vocabulary, logger); err != nil {
 		return nil, err
 	}
 	if err := registerVocabularyGet(server, services.Vocabulary, logger); err != nil {
@@ -91,14 +94,60 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_save",
 		Title:       "Save vocabulary",
-		Description: "Save or update a learning-list term, optionally with a custom description. A cached dictionary entry is linked automatically when available.",
+		Description: "Create or ensure a learning-list term with optional initial metadata. Existing learner metadata is never overwritten; use vocabulary_update for changes.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			IdempotentHint:  true,
 			OpenWorldHint:   &closedWorld,
 		},
 	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularySaveInput) (vocabulary.SaveResult, error) {
-		return service.Save(ctx, input.Term, input.CustomDescription)
+		return service.Save(ctx, input.Term, vocabulary.InitialValues{
+			Status:            input.Status,
+			Tags:              input.Tags,
+			CustomDescription: input.CustomDescription,
+			DescriptionSource: input.DescriptionSource,
+			Notes:             input.Notes,
+			Examples:          input.Examples,
+		})
+	})
+}
+
+func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, logger *slog.Logger) error {
+	byIDSchema, err := inferredSchema[vocabularyUpdateByIDInput]()
+	if err != nil {
+		return err
+	}
+	byTermSchema, err := inferredSchema[vocabularyUpdateByTermInput]()
+	if err != nil {
+		return err
+	}
+	configureInputSchema(byIDSchema)
+	configureInputSchema(byTermSchema)
+	inputSchema := unionSchema(byIDSchema, byTermSchema)
+	outputSchema, err := inferredSchema[VocabularyUpdateOutput]()
+	if err != nil {
+		return err
+	}
+	closedWorld := false
+	destructive := true
+	return registerTool(server, &mcp.Tool{
+		Name:        "vocabulary_update",
+		Title:       "Update saved vocabulary",
+		Description: "Partially update an existing item's status, tags, description source, notes, or personal examples. Omitted fields are preserved.",
+		Annotations: &mcp.ToolAnnotations{
+			DestructiveHint: &destructive,
+			OpenWorldHint:   &closedWorld,
+		},
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularyUpdateInput) (VocabularyUpdateOutput, error) {
+		item, err := service.Update(ctx, input.ItemID, input.Term, vocabulary.UpdateChanges{
+			Status:            input.Changes.Status,
+			Tags:              input.Changes.Tags,
+			CustomDescription: input.Changes.CustomDescription,
+			DescriptionSource: input.Changes.DescriptionSource,
+			Notes:             input.Changes.Notes,
+			Examples:          input.Changes.Examples,
+		})
+		return VocabularyUpdateOutput{Item: item}, err
 	})
 }
 
@@ -149,10 +198,14 @@ func registerVocabularyList(server *mcp.Server, service *vocabulary.Service, log
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld},
 	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularyListInput) (VocabularyListOutput, error) {
 		result, err := service.List(ctx, vocabulary.ListOptions{
-			Query:  input.Query,
-			Sort:   string(input.Sort),
-			Limit:  input.Limit,
-			Cursor: input.Cursor,
+			Query:                input.Query,
+			Statuses:             input.Statuses,
+			Tags:                 input.Tags,
+			HasLookup:            input.HasLookup,
+			HasCustomDescription: input.HasCustomDescription,
+			Sort:                 string(input.Sort),
+			Limit:                input.Limit,
+			Cursor:               input.Cursor,
 		})
 		return VocabularyListOutput{Items: result.Items, NextCursor: result.NextCursor}, err
 	})

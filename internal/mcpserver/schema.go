@@ -11,8 +11,9 @@ import (
 
 var schemaOptions = &jsonschema.ForOptions{
 	TypeSchemas: map[reflect.Type]*jsonschema.Schema{
-		reflect.TypeFor[domain.CacheState](): enumSchema("hit", "miss", "refreshed", "stale_fallback"),
-		reflect.TypeFor[SortOrder]():         enumSchema("recent", "oldest", "alphabetical"),
+		reflect.TypeFor[domain.CacheState]():     enumSchema("hit", "miss", "refreshed", "stale_fallback"),
+		reflect.TypeFor[domain.LearningStatus](): enumSchema("new", "learning", "learned", "archived"),
+		reflect.TypeFor[SortOrder]():             enumSchema("recent", "oldest", "alphabetical"),
 	},
 }
 
@@ -86,6 +87,23 @@ func configureInputSchema(schema *jsonschema.Schema) {
 		if description, ok := current.Properties["customDescription"]; ok {
 			maximum := 5000
 			description.MaxLength = &maximum
+		}
+		if title, ok := current.Properties["title"]; ok {
+			maximum := 200
+			title.MaxLength = &maximum
+		}
+		if sourceURL, ok := current.Properties["url"]; ok {
+			maximum := 2000
+			sourceURL.MaxLength = &maximum
+		}
+		for _, property := range []string{"tags", "notes", "examples"} {
+			if values, ok := current.Properties[property]; ok {
+				maximumItems := 100
+				if property == "tags" {
+					maximumItems = 50
+				}
+				values.MaxItems = &maximumItems
+			}
 		}
 	})
 }
