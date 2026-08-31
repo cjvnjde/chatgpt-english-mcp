@@ -24,9 +24,9 @@ func (transport bearerRoundTripper) RoundTrip(request *http.Request) (*http.Resp
 	return http.DefaultTransport.RoundTrip(authorizedRequest)
 }
 
-func TestHTTPHandlerRequiresBearerToken(t *testing.T) {
+func TestAuthenticatedHTTPHandlerRequiresBearerToken(t *testing.T) {
 	token := strings.Repeat("secret", 6)
-	handler := NewHTTPHandler(
+	handler := NewAuthenticatedHTTPHandler(
 		mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil),
 		token,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -69,10 +69,28 @@ func TestHTTPHandlerRequiresBearerToken(t *testing.T) {
 	}
 }
 
+func TestHTTPHandlerAllowsTunnelRequestWithoutAuthentication(t *testing.T) {
+	handler := NewHTTPHandler(
+		mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil),
+		nil,
+	)
+	requestBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}`)
+	request := httptest.NewRequest(http.MethodPost, EndpointPath, bytes.NewReader(requestBody))
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	assertInitializeResponse(t, response.Body.Bytes())
+}
+
 func TestHTTPHandlerOnlyExposesMCPPath(t *testing.T) {
 	handler := NewHTTPHandler(
 		mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil),
-		strings.Repeat("secret", 6),
 		nil,
 	)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -85,9 +103,9 @@ func TestHTTPHandlerOnlyExposesMCPPath(t *testing.T) {
 	}
 }
 
-func TestHTTPHandlerSupportsAuthenticatedStreamableClient(t *testing.T) {
+func TestAuthenticatedHTTPHandlerSupportsStreamableClient(t *testing.T) {
 	token := strings.Repeat("secret", 6)
-	handler := NewHTTPHandler(
+	handler := NewAuthenticatedHTTPHandler(
 		mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil),
 		token,
 		nil,

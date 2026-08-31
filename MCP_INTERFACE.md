@@ -227,7 +227,8 @@ Deleting a learning-list item does not delete its permanent dictionary snapshots
 - `INVALID_ARGUMENT` — malformed input, invalid cursor, or incompatible fields.
 - `NOT_FOUND` — a requested saved item does not exist.
 - `UPSTREAM_ERROR` — Cambridge failed and no usable cached snapshot exists.
-- `UNAUTHORIZED` — the connection cannot access the owner-scoped record.
+- `UNAUTHORIZED` — direct external HTTP access did not supply the configured bearer token. The
+  private tunnel listener does not require this token.
 - `INTERNAL_ERROR` — unexpected persistence or serialization failure.
 
 ## Persistence migration

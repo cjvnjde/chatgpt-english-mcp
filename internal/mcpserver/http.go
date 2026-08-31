@@ -11,7 +11,21 @@ import (
 
 const EndpointPath = "/mcp"
 
-func NewHTTPHandler(server *mcp.Server, bearerToken string, logger *slog.Logger) http.Handler {
+func NewHTTPHandler(server *mcp.Server, logger *slog.Logger) http.Handler {
+	return newHTTPHandler(server, logger, func(handler http.Handler) http.Handler { return handler })
+}
+
+func NewAuthenticatedHTTPHandler(server *mcp.Server, bearerToken string, logger *slog.Logger) http.Handler {
+	return newHTTPHandler(server, logger, func(handler http.Handler) http.Handler {
+		return requireBearerToken(bearerToken, handler)
+	})
+}
+
+func newHTTPHandler(
+	server *mcp.Server,
+	logger *slog.Logger,
+	middleware func(http.Handler) http.Handler,
+) http.Handler {
 	streamableHandler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{
@@ -22,7 +36,7 @@ func NewHTTPHandler(server *mcp.Server, bearerToken string, logger *slog.Logger)
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle(EndpointPath, requireBearerToken(bearerToken, streamableHandler))
+	mux.Handle(EndpointPath, middleware(streamableHandler))
 	return mux
 }
 

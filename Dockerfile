@@ -30,5 +30,5 @@ COPY --from=mcp-builder /out/english-learning-mcp /usr/local/bin/english-learnin
 
 ENV HOME=/home/app
 USER 10001:10001
-EXPOSE 8080
+EXPOSE 8080 8081
 ENTRYPOINT ["/usr/local/bin/english-learning-mcp"]

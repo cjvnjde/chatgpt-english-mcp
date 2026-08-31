@@ -20,6 +20,12 @@ import (
 
 const shutdownTimeout = 10 * time.Second
 
+type httpEndpoint struct {
+	name    string
+	address string
+	handler http.Handler
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "english-learning-mcp: %v\n", err)
@@ -65,17 +71,53 @@ func run() (runErr error) {
 		return fmt.Errorf("create MCP server: %w", err)
 	}
 
-	handler := mcpserver.NewHTTPHandler(server, configuration.MCPBearerToken, logger)
-	if err := runHTTPServer(ctx, configuration.MCPListenAddress, handler, logger); err != nil {
-		return fmt.Errorf("run MCP HTTP server: %w", err)
+	endpoints := []httpEndpoint{
+		{
+			name:    "tunnel",
+			address: configuration.MCPTunnelListenAddress,
+			handler: mcpserver.NewHTTPHandler(server, logger),
+		},
+		{
+			name:    "external",
+			address: configuration.MCPExternalListenAddress,
+			handler: mcpserver.NewAuthenticatedHTTPHandler(server, configuration.MCPBearerToken, logger),
+		},
+	}
+	if err := runHTTPServers(ctx, endpoints, logger); err != nil {
+		return fmt.Errorf("run MCP HTTP servers: %w", err)
 	}
 	return nil
 }
 
-func runHTTPServer(ctx context.Context, address string, handler http.Handler, logger *slog.Logger) error {
+func runHTTPServers(ctx context.Context, endpoints []httpEndpoint, logger *slog.Logger) error {
+	serverContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan error, len(endpoints))
+	for _, endpoint := range endpoints {
+		go func() {
+			err := runHTTPServer(serverContext, endpoint, logger)
+			if err != nil {
+				err = fmt.Errorf("%s listener: %w", endpoint.name, err)
+			}
+			results <- err
+		}()
+	}
+
+	var runErr error
+	for range endpoints {
+		if err := <-results; err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+		cancel()
+	}
+	return runErr
+}
+
+func runHTTPServer(ctx context.Context, endpoint httpEndpoint, logger *slog.Logger) error {
 	httpServer := &http.Server{
-		Addr:              address,
-		Handler:           handler,
+		Addr:              endpoint.address,
+		Handler:           endpoint.handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    16 << 10,
@@ -90,7 +132,12 @@ func runHTTPServer(ctx context.Context, address string, handler http.Handler, lo
 		}
 	}()
 
-	logger.Info("MCP HTTP server listening", "address", address, "path", mcpserver.EndpointPath)
+	logger.Info(
+		"MCP HTTP server listening",
+		"access", endpoint.name,
+		"address", endpoint.address,
+		"path", mcpserver.EndpointPath,
+	)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

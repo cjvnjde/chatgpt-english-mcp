@@ -13,19 +13,21 @@ import (
 const (
 	defaultSQLitePath       = "/app/data/english-mcp.sqlite"
 	defaultCambridgeURL     = "https://dictionary.cambridge.org"
-	defaultMCPListenAddress = "0.0.0.0:8080"
+	defaultTunnelAddress    = "0.0.0.0:8080"
+	defaultExternalAddress  = "0.0.0.0:8081"
 	minimumBearerTokenBytes = 32
 )
 
 type Config struct {
-	SQLitePath       string
-	OwnerKey         string
-	MCPListenAddress string
-	MCPBearerToken   string
-	CambridgeBaseURL *url.URL
-	CambridgeTimeout time.Duration
-	LogLevel         slog.Level
-	LogFormat        string
+	SQLitePath               string
+	OwnerKey                 string
+	MCPTunnelListenAddress   string
+	MCPExternalListenAddress string
+	MCPBearerToken           string
+	CambridgeBaseURL         *url.URL
+	CambridgeTimeout         time.Duration
+	LogLevel                 slog.Level
+	LogFormat                string
 }
 
 func Load() (Config, error) {
@@ -59,9 +61,16 @@ func Load() (Config, error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return Config{}, fmt.Errorf("MCP_OWNER_KEY must not be empty")
 	}
-	mcpListenAddress := environment("MCP_LISTEN_ADDRESS", defaultMCPListenAddress)
-	if mcpListenAddress == "" {
-		return Config{}, fmt.Errorf("MCP_LISTEN_ADDRESS must not be empty")
+	tunnelAddress := environment("MCP_TUNNEL_LISTEN_ADDRESS", defaultTunnelAddress)
+	if tunnelAddress == "" {
+		return Config{}, fmt.Errorf("MCP_TUNNEL_LISTEN_ADDRESS must not be empty")
+	}
+	externalAddress := environment("MCP_EXTERNAL_LISTEN_ADDRESS", defaultExternalAddress)
+	if externalAddress == "" {
+		return Config{}, fmt.Errorf("MCP_EXTERNAL_LISTEN_ADDRESS must not be empty")
+	}
+	if tunnelAddress == externalAddress {
+		return Config{}, fmt.Errorf("MCP tunnel and external listen addresses must be different")
 	}
 	mcpBearerToken := environment("MCP_BEARER_TOKEN", "")
 	if len(mcpBearerToken) < minimumBearerTokenBytes {
@@ -69,14 +78,15 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		SQLitePath:       sqlitePath,
-		OwnerKey:         ownerKey,
-		MCPListenAddress: mcpListenAddress,
-		MCPBearerToken:   mcpBearerToken,
-		CambridgeBaseURL: baseURL,
-		CambridgeTimeout: time.Duration(timeoutSeconds) * time.Second,
-		LogLevel:         logLevel,
-		LogFormat:        logFormat,
+		SQLitePath:               sqlitePath,
+		OwnerKey:                 ownerKey,
+		MCPTunnelListenAddress:   tunnelAddress,
+		MCPExternalListenAddress: externalAddress,
+		MCPBearerToken:           mcpBearerToken,
+		CambridgeBaseURL:         baseURL,
+		CambridgeTimeout:         time.Duration(timeoutSeconds) * time.Second,
+		LogLevel:                 logLevel,
+		LogFormat:                logFormat,
 	}, nil
 }
 
