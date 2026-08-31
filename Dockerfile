@@ -21,15 +21,14 @@ RUN mkdir -p /out \
        ./cmd/english-learning-mcp
 
 FROM debian:stable-slim
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 app \
-    && mkdir -p /app/data \
-    && chown -R app:app /app
+RUN mkdir -p /app/data /home/app \
+    && chown -R 10001:10001 /app /home/app
 
+COPY --from=mcp-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=tunnel-builder /out/tunnel-client /usr/local/bin/tunnel-client
 COPY --from=mcp-builder /out/english-learning-mcp /usr/local/bin/english-learning-mcp
 
-USER app
-ENTRYPOINT ["/usr/local/bin/tunnel-client", "run"]
+ENV HOME=/home/app
+USER 10001:10001
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/english-learning-mcp"]

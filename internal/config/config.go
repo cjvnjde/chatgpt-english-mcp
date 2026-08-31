@@ -11,13 +11,17 @@ import (
 )
 
 const (
-	defaultSQLitePath   = "/app/data/english-mcp.sqlite"
-	defaultCambridgeURL = "https://dictionary.cambridge.org"
+	defaultSQLitePath       = "/app/data/english-mcp.sqlite"
+	defaultCambridgeURL     = "https://dictionary.cambridge.org"
+	defaultMCPListenAddress = "0.0.0.0:8080"
+	minimumBearerTokenBytes = 32
 )
 
 type Config struct {
 	SQLitePath       string
 	OwnerKey         string
+	MCPListenAddress string
+	MCPBearerToken   string
 	CambridgeBaseURL *url.URL
 	CambridgeTimeout time.Duration
 	LogLevel         slog.Level
@@ -55,10 +59,20 @@ func Load() (Config, error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return Config{}, fmt.Errorf("MCP_OWNER_KEY must not be empty")
 	}
+	mcpListenAddress := environment("MCP_LISTEN_ADDRESS", defaultMCPListenAddress)
+	if mcpListenAddress == "" {
+		return Config{}, fmt.Errorf("MCP_LISTEN_ADDRESS must not be empty")
+	}
+	mcpBearerToken := environment("MCP_BEARER_TOKEN", "")
+	if len(mcpBearerToken) < minimumBearerTokenBytes {
+		return Config{}, fmt.Errorf("MCP_BEARER_TOKEN must be at least %d bytes", minimumBearerTokenBytes)
+	}
 
 	return Config{
 		SQLitePath:       sqlitePath,
 		OwnerKey:         ownerKey,
+		MCPListenAddress: mcpListenAddress,
+		MCPBearerToken:   mcpBearerToken,
 		CambridgeBaseURL: baseURL,
 		CambridgeTimeout: time.Duration(timeoutSeconds) * time.Second,
 		LogLevel:         logLevel,

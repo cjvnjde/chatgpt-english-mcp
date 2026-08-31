@@ -11,7 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "2.1.0"
+const Version = "2.2.0"
 
 type Services struct {
 	Dictionary *dictionary.Service
