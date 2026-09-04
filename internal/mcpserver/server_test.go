@@ -11,6 +11,7 @@ import (
 	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/dictionary"
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/learning"
 	"english-learning-mcp/internal/storage"
 	"english-learning-mcp/internal/vocabulary"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -62,6 +63,7 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	server, err := New(Services{
 		Dictionary: dictionary.NewService(store, provider, logger),
 		Vocabulary: vocabulary.NewService(store, "owner-one", source),
+		Learning:   learning.NewService(store, "owner-one"),
 	}, logger)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -91,6 +93,8 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	sort.Strings(names)
 	wantNames := []string{
 		"dictionary_lookup",
+		"learning_next",
+		"learning_review",
 		"vocabulary_delete",
 		"vocabulary_get",
 		"vocabulary_list",
@@ -134,6 +138,35 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	})
 	if saved.Item.Lookup != nil || saved.Item.CustomDescription != description || saved.Item.Status != domain.LearningStatusLearning {
 		t.Fatalf("bare saved item = %#v", saved.Item)
+	}
+
+	next := callTool[learning.NextResult](t, ctx, clientSession, "learning_next", LearningNextInput{})
+	if next.Term != "bank" || next.Reason != "new" || next.ReviewToken == "" {
+		t.Fatalf("learning next = %#v", next)
+	}
+	if next.Definition != description || next.LatestComment != nil || next.Comments != nil {
+		t.Fatalf("compact learning content = %#v", next)
+	}
+
+	review := callTool[learning.RecordResult](t, ctx, clientSession, "learning_review", LearningReviewInput{
+		ReviewToken: next.ReviewToken,
+		Rating:      domain.ReviewRatingGood,
+		Comment:     "Needed a moment to separate the meanings.",
+	})
+	if !review.Recorded || review.Duplicate || review.NextReviewAt == "" {
+		t.Fatalf("learning review = %#v", review)
+	}
+	duplicateReview := callTool[learning.RecordResult](t, ctx, clientSession, "learning_review", LearningReviewInput{
+		ReviewToken: next.ReviewToken,
+		Rating:      domain.ReviewRatingGood,
+		Comment:     "Needed a moment to separate the meanings.",
+	})
+	if !duplicateReview.Duplicate || duplicateReview.NextReviewAt != review.NextReviewAt {
+		t.Fatalf("duplicate learning review = %#v, first = %#v", duplicateReview, review)
+	}
+	withComment := callTool[learning.NextResult](t, ctx, clientSession, "learning_next", LearningNextInput{})
+	if withComment.LatestComment == nil || withComment.LatestComment.Text != "Needed a moment to separate the meanings." {
+		t.Fatalf("learning next comment = %#v", withComment)
 	}
 
 	lookup := callTool[domain.DictionaryLookupResult](t, ctx, clientSession, "dictionary_lookup", DictionaryLookupInput{Term: "bank"})

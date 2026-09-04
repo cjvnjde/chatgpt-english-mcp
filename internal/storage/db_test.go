@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -84,6 +86,201 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 	}
 	if len(loaded.Tags) != 1 || len(loaded.Notes) != 1 || len(loaded.Examples) != 1 || loaded.Lookup != nil {
 		t.Fatalf("persisted vocabulary = %#v", loaded)
+	}
+}
+
+func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations() error = %v", err)
+	}
+	if _, err := legacy.ExecContext(ctx, `
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			checksum TEXT NOT NULL,
+			applied_at TEXT NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy migration table: %v", err)
+	}
+	for _, migration := range migrations[:3] {
+		if _, err := legacy.ExecContext(ctx, migration.contents); err != nil {
+			t.Fatalf("apply legacy migration %d: %v", migration.version, err)
+		}
+		if _, err := legacy.ExecContext(
+			ctx,
+			"INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+			migration.version,
+			migration.name,
+			migration.checksum,
+			"2026-09-01T00:00:00Z",
+		); err != nil {
+			t.Fatalf("record legacy migration %d: %v", migration.version, err)
+		}
+	}
+	for _, item := range []struct {
+		id     string
+		term   string
+		status domain.LearningStatus
+	}{
+		{id: "active-id", term: "active", status: domain.LearningStatusLearning},
+		{id: "archived-id", term: "archived", status: domain.LearningStatusArchived},
+	} {
+		if _, err := legacy.ExecContext(ctx, `
+			INSERT INTO vocabulary_items(
+				id, owner_key, term, normalized_term, created_at, updated_at,
+				custom_description, learning_status, notes_json, examples_json, tags_json
+			) VALUES (?, 'owner', ?, ?, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '', ?, '[]', '[]', '[]')
+		`, item.id, item.term, item.term, item.status); err != nil {
+			t.Fatalf("insert legacy vocabulary %q: %v", item.term, err)
+		}
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(legacy) error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	assertColumn(t, store, "learning_cards", "stability")
+	assertColumn(t, store, "learning_cards", "difficulty")
+	assertColumn(t, store, "learning_cards", "retrievability")
+	assertColumn(t, store, "learning_cards", "repetitions")
+	assertColumn(t, store, "learning_cards", "lapses")
+	assertColumn(t, store, "learning_cards", "review_token")
+	assertColumn(t, store, "review_attempts", "comment")
+
+	var cardCount int
+	if err := store.sql.QueryRowContext(ctx, "SELECT COUNT(*) FROM learning_cards").Scan(&cardCount); err != nil {
+		t.Fatalf("count migrated learning cards: %v", err)
+	}
+	if cardCount != 1 {
+		t.Fatalf("migrated learning card count = %d, want 1", cardCount)
+	}
+	var itemID string
+	var mode domain.ExerciseMode
+	var dueAt string
+	var reviewToken string
+	if err := store.sql.QueryRowContext(
+		ctx,
+		"SELECT vocabulary_item_id, exercise_mode, due_at, review_token FROM learning_cards",
+	).Scan(&itemID, &mode, &dueAt, &reviewToken); err != nil {
+		t.Fatalf("read migrated learning card: %v", err)
+	}
+	if itemID != "active-id" || mode != domain.ExerciseModeProduction || dueAt != "2026-09-01T00:00:00Z" || reviewToken == "" {
+		t.Fatalf("migrated learning card = item %q mode %q due %q token %q", itemID, mode, dueAt, reviewToken)
+	}
+
+	reviewedAt := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+	attempt, duplicate, err := store.RecordReview(ctx, RecordReviewInput{
+		OwnerKey:    "owner",
+		ReviewToken: reviewToken,
+		Rating:      domain.ReviewRatingGood,
+		Comment:     "Needed a context clue.",
+		Now:         reviewedAt,
+	}, func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
+		card.DueAt = now.Add(24 * time.Hour)
+		card.Stability = 1
+		card.Difficulty = 5
+		card.Retrievability = 1
+		card.ScheduledDays = 1
+		card.Repetitions = 1
+		card.FSRSState = 2
+		card.LastReviewAt = now
+		card.LastRating = rating
+		return card, 0, nil
+	})
+	if err != nil || duplicate {
+		t.Fatalf("RecordReview() = attempt %#v duplicate %t error %v", attempt, duplicate, err)
+	}
+	if attempt.Comment != "Needed a context clue." || attempt.After.ReviewToken == "" || attempt.After.ReviewToken == reviewToken {
+		t.Fatalf("recorded review token or comment = %#v", attempt)
+	}
+	if _, err := store.sql.ExecContext(ctx, "UPDATE review_attempts SET rating = 'easy' WHERE id = ?", attempt.ReviewID); err == nil {
+		t.Fatal("immutable review UPDATE succeeded")
+	}
+	if _, err := store.sql.ExecContext(ctx, "DELETE FROM review_attempts WHERE id = ?", attempt.ReviewID); err == nil {
+		t.Fatal("immutable review DELETE succeeded")
+	}
+}
+
+func TestNextLearningItemPrioritizesTroubleDueNewThenClosestFuture(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+
+	terms := []string{"troublesome", "failed", "overdue", "due", "new", "early"}
+	itemIDs := make(map[string]string, len(terms))
+	for index, term := range terms {
+		created, item, err := store.SaveVocabulary(ctx, VocabularyCreate{
+			OwnerKey:       "owner",
+			Term:           term,
+			NormalizedTerm: term,
+			Status:         domain.LearningStatusNew,
+			Tags:           []string{},
+			Notes:          []string{},
+			Examples:       []string{},
+			Now:            now.Add(time.Duration(index) * time.Minute),
+		})
+		if err != nil || !created {
+			t.Fatalf("SaveVocabulary(%q) = item %#v created %t error %v", term, item, created, err)
+		}
+		itemIDs[term] = item.ItemID
+	}
+	states := []struct {
+		term                string
+		dueAt               time.Time
+		state               int
+		consecutiveFailures int
+		lapses              int
+	}{
+		{term: "troublesome", dueAt: now.Add(-72 * time.Hour), state: 2, consecutiveFailures: 2, lapses: 3},
+		{term: "failed", dueAt: now.Add(-48 * time.Hour), state: 1, consecutiveFailures: 1},
+		{term: "overdue", dueAt: now.Add(-24 * time.Hour), state: 2},
+		{term: "due", dueAt: now, state: 2},
+		{term: "early", dueAt: now.Add(24 * time.Hour), state: 2},
+	}
+	for _, state := range states {
+		if _, err := store.sql.ExecContext(ctx, `
+			UPDATE learning_cards
+			SET due_at = ?, fsrs_state = ?, consecutive_failures = ?, lapses = ?
+			WHERE vocabulary_item_id = ?
+		`, TimeString(state.dueAt), state.state, state.consecutiveFailures, state.lapses, itemIDs[state.term]); err != nil {
+			t.Fatalf("prepare %q learning state: %v", state.term, err)
+		}
+	}
+
+	for _, wantTerm := range terms {
+		selected, err := store.NextLearningItem(ctx, "owner", now)
+		if err != nil {
+			t.Fatalf("NextLearningItem(%q) error = %v", wantTerm, err)
+		}
+		if selected.Vocabulary.Term != wantTerm || selected.Card.ReviewToken == "" {
+			t.Fatalf("NextLearningItem() = %#v, want %q", selected, wantTerm)
+		}
+		if _, err := store.sql.ExecContext(
+			ctx,
+			"UPDATE vocabulary_items SET learning_status = 'archived' WHERE id = ?",
+			selected.Vocabulary.ItemID,
+		); err != nil {
+			t.Fatalf("archive selected %q: %v", wantTerm, err)
+		}
+	}
+	if _, err := store.NextLearningItem(ctx, "owner", now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("NextLearningItem(empty) error = %v, want ErrNotFound", err)
 	}
 }
 

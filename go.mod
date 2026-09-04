@@ -6,6 +6,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/open-spaced-repetition/go-fsrs/v4 v4.0.0
 	modernc.org/sqlite v1.57.0
 )
 

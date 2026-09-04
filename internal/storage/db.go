@@ -12,9 +12,11 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("record not found")
-	ErrInvalidCursor = errors.New("invalid cursor")
-	ErrCorruptData   = errors.New("corrupt stored data")
+	ErrNotFound            = errors.New("record not found")
+	ErrInvalidCursor       = errors.New("invalid cursor")
+	ErrCorruptData         = errors.New("corrupt stored data")
+	ErrArchived            = errors.New("vocabulary item is archived")
+	ErrIdempotencyConflict = errors.New("review token conflicts with an existing attempt")
 )
 
 type DB struct {

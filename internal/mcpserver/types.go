@@ -95,3 +95,13 @@ type VocabularyDeleteOutput struct {
 	Deleted bool   `json:"deleted"`
 	ItemID  string `json:"itemId"`
 }
+
+type LearningNextInput struct {
+	IncludeComments bool `json:"includeComments,omitempty" jsonschema:"include all saved review comments; latest comment is always returned"`
+}
+
+type LearningReviewInput struct {
+	ReviewToken string              `json:"reviewToken" jsonschema:"opaque token returned by learning_next"`
+	Rating      domain.ReviewRating `json:"rating" jsonschema:"again means failed; hard, good, and easy indicate increasing recall quality"`
+	Comment     string              `json:"comment,omitempty" jsonschema:"optional note about what was difficult or confused"`
+}

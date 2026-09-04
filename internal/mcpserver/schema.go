@@ -13,6 +13,7 @@ var schemaOptions = &jsonschema.ForOptions{
 	TypeSchemas: map[reflect.Type]*jsonschema.Schema{
 		reflect.TypeFor[domain.CacheState]():     enumSchema("hit", "miss", "refreshed", "stale_fallback"),
 		reflect.TypeFor[domain.LearningStatus](): enumSchema("new", "learning", "learned", "archived"),
+		reflect.TypeFor[domain.ReviewRating]():   enumSchema("again", "hard", "good", "easy"),
 		reflect.TypeFor[SortOrder]():             enumSchema("recent", "oldest", "alphabetical"),
 	},
 }
@@ -72,11 +73,19 @@ func configureInputSchema(schema *jsonschema.Schema) {
 			term.MinLength = &minimum
 			term.MaxLength = &maximum
 		}
-		for _, property := range []string{"itemId", "lookupId"} {
+		for _, property := range []string{"itemId", "lookupId", "reviewToken"} {
 			if identifier, ok := current.Properties[property]; ok {
 				minimum := 1
 				identifier.MinLength = &minimum
 			}
+		}
+		if reviewToken, ok := current.Properties["reviewToken"]; ok {
+			maximum := 200
+			reviewToken.MaxLength = &maximum
+		}
+		if comment, ok := current.Properties["comment"]; ok {
+			maximum := 1000
+			comment.MaxLength = &maximum
 		}
 		if confidence, ok := current.Properties["confidence"]; ok {
 			minimum := 0.0

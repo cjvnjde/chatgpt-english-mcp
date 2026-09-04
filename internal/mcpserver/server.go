@@ -7,15 +7,17 @@ import (
 
 	"english-learning-mcp/internal/dictionary"
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/learning"
 	"english-learning-mcp/internal/vocabulary"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "2.2.0"
+const Version = "2.3.0"
 
 type Services struct {
 	Dictionary *dictionary.Service
 	Vocabulary *vocabulary.Service
+	Learning   *learning.Service
 }
 
 func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
@@ -48,6 +50,12 @@ func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
 		return nil, err
 	}
 	if err := registerVocabularyDelete(server, services.Vocabulary, logger); err != nil {
+		return nil, err
+	}
+	if err := registerLearningNext(server, services.Learning, logger); err != nil {
+		return nil, err
+	}
+	if err := registerLearningReview(server, services.Learning, logger); err != nil {
 		return nil, err
 	}
 	return server, nil
@@ -236,9 +244,60 @@ func registerVocabularyDelete(server *mcp.Server, service *vocabulary.Service, l
 	})
 }
 
+func registerLearningNext(server *mcp.Server, service *learning.Service, logger *slog.Logger) error {
+	inputSchema, err := inferredSchema[LearningNextInput]()
+	if err != nil {
+		return err
+	}
+	configureInputSchema(inputSchema)
+	outputSchema, err := inferredSchema[learning.NextResult]()
+	if err != nil {
+		return err
+	}
+	closedWorld := false
+	return registerTool(server, &mcp.Tool{
+		Name:        "learning_next",
+		Title:       "Get the next vocabulary item",
+		Description: "Return exactly one active vocabulary item for production recall. Selection is automatic: troublesome and due reviews first, then new vocabulary, then the closest future review.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld},
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, input LearningNextInput) (learning.NextResult, error) {
+		return service.Next(ctx, input.IncludeComments)
+	})
+}
+
+func registerLearningReview(server *mcp.Server, service *learning.Service, logger *slog.Logger) error {
+	inputSchema, err := inferredSchema[LearningReviewInput]()
+	if err != nil {
+		return err
+	}
+	configureInputSchema(inputSchema)
+	outputSchema, err := inferredSchema[learning.RecordResult]()
+	if err != nil {
+		return err
+	}
+	closedWorld := false
+	destructive := true
+	return registerTool(server, &mcp.Tool{
+		Name:        "learning_review",
+		Title:       "Record a vocabulary review",
+		Description: "Record one production-recall rating with an optional problem comment and use FSRS to schedule the next review. The server-issued reviewToken makes retries idempotent.",
+		Annotations: &mcp.ToolAnnotations{
+			DestructiveHint: &destructive,
+			IdempotentHint:  true,
+			OpenWorldHint:   &closedWorld,
+		},
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, input LearningReviewInput) (learning.RecordResult, error) {
+		return service.Record(ctx, learning.RecordOptions{
+			ReviewToken: input.ReviewToken,
+			Rating:      input.Rating,
+			Comment:     input.Comment,
+		})
+	})
+}
+
 func requireServices(services Services) error {
-	if services.Dictionary == nil || services.Vocabulary == nil {
-		return fmt.Errorf("dictionary and vocabulary services are required")
+	if services.Dictionary == nil || services.Vocabulary == nil || services.Learning == nil {
+		return fmt.Errorf("dictionary, vocabulary, and learning services are required")
 	}
 	return nil
 }
