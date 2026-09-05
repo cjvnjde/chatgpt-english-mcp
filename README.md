@@ -15,6 +15,7 @@ The MCP stores and schedules learning data; the connected AI tutor decides how t
 
 - [How it works and expected workflows](docs/how-it-works.md)
 - [MCP tool reference](docs/tools.md)
+- [Suggested tutor and daily-review prompts](docs/prompts.md)
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
 - [Development and architecture](docs/development.md)
