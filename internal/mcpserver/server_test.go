@@ -136,8 +136,8 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		Notes:    []string{"Personal note."},
 		Examples: []string{"I visited the bank."},
 	})
-	if saved.Item.Lookup != nil || saved.Item.CustomDescription != description || saved.Item.Status != domain.LearningStatusLearning {
-		t.Fatalf("bare saved item = %#v", saved.Item)
+	if saved.Lookup != nil || saved.CustomDescription != description || saved.Status != domain.LearningStatusLearning {
+		t.Fatalf("bare saved item = %#v", saved.VocabularyItem)
 	}
 
 	next := callTool[learning.NextResult](t, ctx, clientSession, "learning_next", LearningNextInput{})
@@ -174,18 +174,18 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		t.Fatalf("dictionary lookup = %#v, calls = %d", lookup, provider.calls)
 	}
 
-	item := callTool[VocabularyGetOutput](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
-	if item.Item.Lookup == nil || item.Item.Lookup.LookupID != lookup.LookupID {
+	item := callTool[domain.VocabularyItem](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
+	if item.Lookup == nil || item.Lookup.LookupID != lookup.LookupID {
 		t.Fatalf("linked vocabulary get = %#v", item)
 	}
-	if len(item.Item.Lookup.Entries) != 1 || item.Item.CustomDescription != description {
+	if len(item.Lookup.Entries) != 1 || item.CustomDescription != description {
 		t.Fatalf("complete vocabulary get = %#v", item)
 	}
 
 	status := domain.LearningStatusLearned
 	tags := []string{"Core", "Finance"}
 	notes := []string{"Updated personal note."}
-	updatedMetadata := callTool[VocabularyUpdateOutput](t, ctx, clientSession, "vocabulary_update", vocabularyUpdateByTermInput{
+	updatedMetadata := callTool[domain.VocabularyItem](t, ctx, clientSession, "vocabulary_update", vocabularyUpdateByTermInput{
 		Term: "bank",
 		Changes: VocabularyUpdateChanges{
 			Status: &status,
@@ -193,10 +193,10 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 			Notes:  &notes,
 		},
 	})
-	if updatedMetadata.Item.Status != domain.LearningStatusLearned || len(updatedMetadata.Item.Tags) != 2 {
+	if updatedMetadata.Status != domain.LearningStatusLearned || len(updatedMetadata.Tags) != 2 {
 		t.Fatalf("vocabulary update = %#v", updatedMetadata)
 	}
-	if updatedMetadata.Item.CustomDescription != description || len(updatedMetadata.Item.Examples) != 1 {
+	if updatedMetadata.CustomDescription != description || len(updatedMetadata.Examples) != 1 {
 		t.Fatalf("vocabulary update lost omitted fields = %#v", updatedMetadata)
 	}
 
@@ -212,9 +212,9 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	if refreshed.Cache.State != domain.CacheRefreshed || refreshed.LookupID == lookup.LookupID || provider.calls != 2 {
 		t.Fatalf("refreshed lookup = %#v, calls = %d", refreshed, provider.calls)
 	}
-	updatedLookup := callTool[VocabularyGetOutput](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
-	if updatedLookup.Item.Lookup == nil || updatedLookup.Item.Lookup.LookupID != refreshed.LookupID {
-		t.Fatalf("refreshed vocabulary item = %#v", updatedLookup.Item)
+	updatedLookup := callTool[domain.VocabularyItem](t, ctx, clientSession, "vocabulary_get", vocabularyGetByTermInput{Term: "bank"})
+	if updatedLookup.Lookup == nil || updatedLookup.Lookup.LookupID != refreshed.LookupID {
+		t.Fatalf("refreshed vocabulary item = %#v", updatedLookup)
 	}
 
 	hasLookup := true
@@ -227,7 +227,7 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		t.Fatalf("vocabulary list = %#v", vocabularyItems)
 	}
 
-	callTool[VocabularyDeleteOutput](t, ctx, clientSession, "vocabulary_delete", VocabularyDeleteInput{ItemID: item.Item.ItemID})
+	callTool[VocabularyDeleteOutput](t, ctx, clientSession, "vocabulary_delete", VocabularyDeleteInput{ItemID: item.ItemID})
 	stillCached := callTool[domain.DictionaryLookupResult](t, ctx, clientSession, "dictionary_lookup", DictionaryLookupInput{Term: "bank"})
 	if stillCached.LookupID != refreshed.LookupID || stillCached.Cache.State != domain.CacheHit {
 		t.Fatalf("lookup after vocabulary delete = %#v", stillCached)

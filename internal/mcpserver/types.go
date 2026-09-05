@@ -23,6 +23,8 @@ type VocabularySaveInput struct {
 	DescriptionSource *domain.DescriptionSource `json:"descriptionSource,omitempty" jsonschema:"source attribution for the custom description"`
 	Notes             []string                  `json:"notes,omitempty" jsonschema:"initial personal learning notes"`
 	Examples          []string                  `json:"examples,omitempty" jsonschema:"initial personal example sentences"`
+	Context           string                    `json:"context,omitempty" jsonschema:"short context that distinguishes this meaning from other meanings of the same term"`
+	Definition        string                    `json:"definition,omitempty" jsonschema:"exact dictionary definition selected from dictionary_lookup; identifies the separately learned sense"`
 }
 
 type VocabularyUpdateChanges struct {
@@ -50,6 +52,7 @@ type vocabularyUpdateByTermInput struct {
 	Changes VocabularyUpdateChanges `json:"changes"`
 }
 
+// Deprecated response shapes remain as Go aliases for source compatibility.
 type VocabularyUpdateOutput struct {
 	Item domain.VocabularyItem `json:"item"`
 }

@@ -71,13 +71,17 @@ Entries may contain headwords, parts of speech, UK/US pronunciation and audio, i
   descriptionSource?: { title?: string; url?: string };
   notes?: string[];
   examples?: string[];
+  context?: string;
+  definition?: string; // exact value selected from dictionary_lookup
 }
 
 // Output
-{ created: boolean; item: VocabularyItem }
+{ created: boolean; ...VocabularyItem }
 ```
 
-The operation is idempotent by normalized term. Initial metadata is applied only when creating the item; an existing item is never overwritten. A cached successful lookup is linked automatically.
+The operation is idempotent by normalized term and selected meaning. `definition` must exactly match a definition returned by `dictionary_lookup`. Saving another definition for the same spelling creates another vocabulary item and independent learning card while reusing the same cached lookup. `context` is a short learner-facing distinction such as `"boating"`.
+
+For terms with dictionary data, callers should always pass `definition`. Omitting it preserves the legacy one-item-per-term behavior unless different non-empty contexts are supplied. Initial metadata is applied only when creating the same meaning; an existing item is never overwritten.
 
 Tags are trimmed, lowercased, deduplicated, and sorted. `descriptionSource.url`, when present, must be an absolute HTTP(S) URL and requires a non-empty custom description.
 
@@ -99,8 +103,7 @@ Identify exactly one item by `itemId` or `term`:
   };
 }
 
-// Output
-{ item: VocabularyItem }
+// Output: VocabularyItem directly
 ```
 
 `changes` must contain at least one field. Omitted fields are preserved; supplied arrays replace the previous arrays, so `[]` clears them. An empty custom description clears its source too unless another valid source change is supplied. An empty source object clears only the attribution.
@@ -112,11 +115,10 @@ Identify exactly one item by `itemId` or `term`:
 { itemId: string }
 { term: string }
 
-// Output
-{ item: VocabularyItem }
+// Output: VocabularyItem directly
 ```
 
-The item includes its complete linked dictionary lookup when available.
+The item includes its selected `sense` and complete linked dictionary lookup. Once multiple meanings of a term are saved, a term-only request is ambiguous and returns an error; use an `itemId` from `vocabulary_list`.
 
 ## `vocabulary_list`
 

@@ -227,6 +227,50 @@ func TestSavedVocabularyLinksCachedLookupAndFollowsRefresh(t *testing.T) {
 	}
 }
 
+func TestSaveCreatesSeparateItemsForDictionarySenses(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("storage.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC)
+	_, err = store.InsertDictionarySnapshot(ctx, storage.DictionarySnapshotInsert{
+		Provider: "cambridge", NormalizedTerm: "row", ParserVersion: 12,
+		Data: domain.DictionarySnapshotData{Status: 200, Entries: []domain.DictionaryEntry{
+			{Headword: "row", PartOfSpeech: "noun", Definitions: []domain.DictionaryDefinition{{Definition: "a line of things", Examples: []string{"a row of houses"}}}},
+			{Headword: "row", PartOfSpeech: "verb", Definitions: []domain.DictionaryDefinition{{Definition: "to move a boat using oars", Examples: []string{"Row for your life!"}}}},
+		}}, FetchedAt: now, ExpiresAt: now.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("InsertDictionarySnapshot() error = %v", err)
+	}
+	service := NewService(store, "owner", storage.SourceVersion{Provider: "cambridge", ParserVersion: 12})
+	line, err := service.Save(ctx, "row", InitialValues{Definition: "a line of things", Context: "objects arranged next to each other"})
+	if err != nil {
+		t.Fatalf("Save(line) error = %v", err)
+	}
+	boat, err := service.Save(ctx, "row", InitialValues{Definition: "to move a boat using oars", Context: "boating"})
+	if err != nil {
+		t.Fatalf("Save(boat) error = %v", err)
+	}
+	if !line.Created || !boat.Created || line.ItemID == boat.ItemID {
+		t.Fatalf("saved senses = line %#v boat %#v", line, boat)
+	}
+	if line.Lookup.LookupID != boat.Lookup.LookupID {
+		t.Fatalf("lookup IDs differ: %q and %q", line.Lookup.LookupID, boat.Lookup.LookupID)
+	}
+	if boat.Sense == nil || boat.Sense.Definition.Definition != "to move a boat using oars" || boat.Sense.PartOfSpeech != "verb" {
+		t.Fatalf("boat sense = %#v", boat.Sense)
+	}
+	_, err = service.Get(ctx, "", "row")
+	assertApplicationError(t, err, apperr.InvalidArgument)
+	loadedBoat, err := service.Get(ctx, boat.ItemID, "")
+	if err != nil || loadedBoat.Sense.Definition.Definition != "to move a boat using oars" {
+		t.Fatalf("Get(boat) = %#v, %v", loadedBoat, err)
+	}
+}
+
 func newTestService(t *testing.T, ownerKey string) *Service {
 	t.Helper()
 	store, err := storage.Open(context.Background(), ":memory:")

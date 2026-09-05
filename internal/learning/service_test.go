@@ -187,6 +187,37 @@ func TestRecordValidatesCommentLength(t *testing.T) {
 	assertApplicationCode(t, err, apperr.InvalidArgument)
 }
 
+func TestTutoringContentUsesSelectedSense(t *testing.T) {
+	item := domain.VocabularyItem{
+		Examples: []string{},
+		Sense: &domain.VocabularySense{Definition: domain.DictionaryDefinition{
+			Definition: "to move a boat using oars",
+			Examples:   []string{"Row for your life!"},
+		}},
+		Lookup: &domain.DictionaryLookupResult{Entries: []domain.DictionaryEntry{{Definitions: []domain.DictionaryDefinition{{Definition: "a line of things"}}}}},
+	}
+	definition, example := tutoringContent(item)
+	if definition != "to move a boat using oars" || example != "Row for your life!" {
+		t.Fatalf("tutoringContent() = %q, %q", definition, example)
+	}
+}
+
+func TestTutoringContentInfersLegacySenseFromLearnerMetadata(t *testing.T) {
+	item := domain.VocabularyItem{
+		Tags:     []string{"boats", "verbs"},
+		Notes:    []string{"Move a boat through the water using oars."},
+		Examples: []string{"Row for your life!"},
+		Lookup: &domain.DictionaryLookupResult{Entries: []domain.DictionaryEntry{
+			{Definitions: []domain.DictionaryDefinition{{Definition: "a line of things arranged next to each other"}}},
+			{Definitions: []domain.DictionaryDefinition{{Definition: "to move a boat through water using oars"}}},
+		}},
+	}
+	definition, example := tutoringContent(item)
+	if definition != "to move a boat through water using oars" || example != "Row for your life!" {
+		t.Fatalf("tutoringContent() = %q, %q", definition, example)
+	}
+}
+
 func newTestService(t *testing.T) (*storage.DB, *Service) {
 	t.Helper()
 	store, err := storage.Open(context.Background(), ":memory:")

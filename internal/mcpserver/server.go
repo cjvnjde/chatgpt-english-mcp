@@ -12,7 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "2.3.0"
+const Version = "3.0.0"
 
 type Services struct {
 	Dictionary *dictionary.Service
@@ -102,7 +102,7 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_save",
 		Title:       "Save vocabulary",
-		Description: "Create or ensure a learning-list term with optional initial metadata. Existing learner metadata is never overwritten; use vocabulary_update for changes.",
+		Description: "Save one learnable meaning. Pass the exact definition from dictionary_lookup to learn homonyms and polysemous terms separately; all meanings share the cached lookup.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			IdempotentHint:  true,
@@ -116,6 +116,8 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 			DescriptionSource: input.DescriptionSource,
 			Notes:             input.Notes,
 			Examples:          input.Examples,
+			Context:           input.Context,
+			Definition:        input.Definition,
 		})
 	})
 }
@@ -132,7 +134,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 	configureInputSchema(byIDSchema)
 	configureInputSchema(byTermSchema)
 	inputSchema := unionSchema(byIDSchema, byTermSchema)
-	outputSchema, err := inferredSchema[VocabularyUpdateOutput]()
+	outputSchema, err := inferredSchema[domain.VocabularyItem]()
 	if err != nil {
 		return err
 	}
@@ -146,7 +148,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 			DestructiveHint: &destructive,
 			OpenWorldHint:   &closedWorld,
 		},
-	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularyUpdateInput) (VocabularyUpdateOutput, error) {
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularyUpdateInput) (domain.VocabularyItem, error) {
 		item, err := service.Update(ctx, input.ItemID, input.Term, vocabulary.UpdateChanges{
 			Status:            input.Changes.Status,
 			Tags:              input.Changes.Tags,
@@ -155,7 +157,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 			Notes:             input.Changes.Notes,
 			Examples:          input.Changes.Examples,
 		})
-		return VocabularyUpdateOutput{Item: item}, err
+		return item, err
 	})
 }
 
@@ -171,7 +173,7 @@ func registerVocabularyGet(server *mcp.Server, service *vocabulary.Service, logg
 	configureInputSchema(byIDSchema)
 	configureInputSchema(byTermSchema)
 	inputSchema := unionSchema(byIDSchema, byTermSchema)
-	outputSchema, err := inferredSchema[VocabularyGetOutput]()
+	outputSchema, err := inferredSchema[domain.VocabularyItem]()
 	if err != nil {
 		return err
 	}
@@ -179,11 +181,10 @@ func registerVocabularyGet(server *mcp.Server, service *vocabulary.Service, logg
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_get",
 		Title:       "Get saved vocabulary",
-		Description: "Retrieve one saved term together with its complete linked dictionary lookup.",
+		Description: "Retrieve one saved meaning with its complete linked dictionary lookup. Use itemId when a term has multiple saved meanings.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld},
-	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularyGetInput) (VocabularyGetOutput, error) {
-		item, err := service.Get(ctx, input.ItemID, input.Term)
-		return VocabularyGetOutput{Item: item}, err
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularyGetInput) (domain.VocabularyItem, error) {
+		return service.Get(ctx, input.ItemID, input.Term)
 	})
 }
 

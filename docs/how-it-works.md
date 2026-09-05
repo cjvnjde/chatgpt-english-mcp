@@ -30,15 +30,16 @@ Empty lookup results are saved, but an ordinary future lookup retries them. If a
 
 ### Vocabulary items
 
-A vocabulary item belongs to the namespace configured by `MCP_OWNER_KEY` and is unique by normalized term within that namespace. It can exist without dictionary data and can contain:
+A vocabulary item belongs to the namespace configured by `MCP_OWNER_KEY` and represents one learnable meaning. Multiple items may have the same normalized term. They share a cached dictionary lookup but have independent metadata, cards, and review histories. An item can exist without dictionary data and can contain:
 
 - `new`, `learning`, `learned`, or `archived` status;
 - normalized tags;
 - a custom description with optional source attribution;
 - ordered personal notes and examples;
-- a link to the current dictionary snapshot.
+- a selected dictionary definition and context;
+- a link to the current dictionary snapshot, which still contains all definitions.
 
-Saving is idempotent. Calling `vocabulary_save` for an existing term returns it unchanged; intentional edits go through `vocabulary_update`. Archived items stay stored but are excluded from practice.
+Saving is idempotent for the same normalized term and selected definition. A different selected definition creates a separate item. Intentional edits go through `vocabulary_update`. Archived items stay stored but are excluded from practice.
 
 Learning status is learner-managed metadata. FSRS reviews do not automatically change `new` to `learning` or `learned`; all three active statuses remain eligible for selection. Only `archived` removes an item from the review queue.
 
@@ -54,7 +55,7 @@ Review tokens prevent duplicate attempts. Retrying the same token with the same 
 
 1. Call `dictionary_lookup` with the term.
 2. Present the useful dictionary data to the learner.
-3. Call `vocabulary_save` when the learner wants the term retained, optionally adding an initial status, tags, description, notes, or examples.
+3. Choose the relevant definition from the lookup and call `vocabulary_save` with its exact `definition`, an optional short `context`, and any initial metadata.
 
 Lookup and saving are independent. A term may be saved first, and a later successful lookup will link itself automatically.
 
@@ -83,7 +84,7 @@ After feedback, call `learning_next` again only when the learner wants another i
 
 ### Manage vocabulary
 
-- Use `vocabulary_get` for one exact saved term.
+- Use `vocabulary_get` by `itemId` for one exact saved meaning. Term lookup works only while that spelling has one saved meaning.
 - Use `vocabulary_list` for search, status/tag filters, and cursor pagination.
 - Use `vocabulary_update` to replace selected metadata fields or archive/reactivate an item.
 - Use `vocabulary_delete` only when the item should be removed. Dictionary snapshots remain cached; learning cards are deleted with the item, while review attempts remain as immutable history.

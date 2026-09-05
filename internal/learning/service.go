@@ -199,6 +199,24 @@ func tutoringContent(item domain.VocabularyItem) (definition string, example str
 	if item.Lookup == nil {
 		return definition, example
 	}
+	if item.Sense != nil {
+		if definition == "" {
+			definition = item.Sense.Definition.Definition
+		}
+		if example == "" && len(item.Sense.Definition.Examples) > 0 {
+			example = item.Sense.Definition.Examples[0]
+		}
+		return definition, example
+	}
+	if definition == "" {
+		if matched := contextualDefinition(item); matched != nil {
+			definition = matched.Definition
+			if example == "" && len(matched.Examples) > 0 {
+				example = matched.Examples[0]
+			}
+			return definition, example
+		}
+	}
 	for _, entry := range item.Lookup.Entries {
 		for _, candidate := range entry.Definitions {
 			if definition == "" {
@@ -213,6 +231,48 @@ func tutoringContent(item domain.VocabularyItem) (definition string, example str
 		}
 	}
 	return definition, example
+}
+
+func contextualDefinition(item domain.VocabularyItem) *domain.DictionaryDefinition {
+	contextParts := make([]string, 0, len(item.Tags)+len(item.Notes)+len(item.Examples))
+	contextParts = append(contextParts, item.Tags...)
+	contextParts = append(contextParts, item.Notes...)
+	contextParts = append(contextParts, item.Examples...)
+	contextWords := wordSet(strings.Join(contextParts, " "))
+	if len(contextWords) == 0 || item.Lookup == nil {
+		return nil
+	}
+	bestScore := 0
+	var best *domain.DictionaryDefinition
+	for entryIndex := range item.Lookup.Entries {
+		entry := &item.Lookup.Entries[entryIndex]
+		for definitionIndex := range entry.Definitions {
+			definition := &entry.Definitions[definitionIndex]
+			score := 0
+			for word := range wordSet(definition.Definition + " " + definition.Guideword) {
+				if _, found := contextWords[word]; found {
+					score++
+				}
+			}
+			if score > bestScore {
+				bestScore, best = score, definition
+			}
+		}
+	}
+	return best
+}
+
+func wordSet(value string) map[string]struct{} {
+	words := strings.FieldsFunc(strings.ToLower(value), func(character rune) bool {
+		return character < 'a' || character > 'z'
+	})
+	result := make(map[string]struct{}, len(words))
+	for _, word := range words {
+		if len(word) > 2 {
+			result[word] = struct{}{}
+		}
+	}
+	return result
 }
 
 func reviewFeedback(comment storage.ReviewComment) ReviewFeedback {

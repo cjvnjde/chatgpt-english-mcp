@@ -23,6 +23,16 @@ type DescriptionSource struct {
 	URL   string `json:"url,omitempty"`
 }
 
+type VocabularySense struct {
+	Context         string                   `json:"context,omitempty"`
+	EntryIndex      int                      `json:"entryIndex"`
+	DefinitionIndex int                      `json:"definitionIndex"`
+	Headword        string                   `json:"headword"`
+	PartOfSpeech    string                   `json:"partOfSpeech,omitempty"`
+	Pronunciations  DictionaryPronunciations `json:"pronunciations,omitempty"`
+	Definition      DictionaryDefinition     `json:"definition"`
+}
+
 type VocabularyItem struct {
 	ItemID            string                  `json:"itemId"`
 	Term              string                  `json:"term"`
@@ -33,6 +43,7 @@ type VocabularyItem struct {
 	DescriptionSource *DescriptionSource      `json:"descriptionSource,omitempty"`
 	Notes             []string                `json:"notes"`
 	Examples          []string                `json:"examples"`
+	Sense             *VocabularySense        `json:"sense,omitempty"`
 	Lookup            *DictionaryLookupResult `json:"lookup,omitempty"`
 	CreatedAt         string                  `json:"createdAt"`
 	UpdatedAt         string                  `json:"updatedAt"`

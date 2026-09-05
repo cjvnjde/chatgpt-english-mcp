@@ -2,6 +2,8 @@ package vocabulary
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"sort"
@@ -26,6 +28,7 @@ type Store interface {
 	UpdateVocabulary(ctx context.Context, input storage.VocabularyUpdate) (domain.VocabularyItem, error)
 	VocabularyByID(ctx context.Context, ownerKey, itemID string) (domain.VocabularyItem, error)
 	VocabularyByTerm(ctx context.Context, ownerKey, normalizedTerm string) (domain.VocabularyItem, error)
+	VocabularyBySense(ctx context.Context, ownerKey, normalizedTerm, senseKey string) (domain.VocabularyItem, error)
 	ListVocabulary(ctx context.Context, input storage.VocabularyListQuery) ([]domain.VocabularyItem, error)
 	DeleteVocabulary(ctx context.Context, ownerKey, itemID string) error
 }
@@ -38,8 +41,9 @@ type Service struct {
 }
 
 type SaveResult struct {
-	Created bool                  `json:"created"`
-	Item    domain.VocabularyItem `json:"item"`
+	Created bool `json:"created"`
+	domain.VocabularyItem
+	Item domain.VocabularyItem `json:"-"`
 }
 
 type InitialValues struct {
@@ -49,6 +53,8 @@ type InitialValues struct {
 	DescriptionSource *domain.DescriptionSource
 	Notes             []string
 	Examples          []string
+	Context           string
+	Definition        string
 }
 
 type UpdateChanges struct {
@@ -110,28 +116,51 @@ func (service *Service) Save(ctx context.Context, term string, initial InitialVa
 		service.currentSource.ParserVersion,
 	)
 	lookupID := ""
+	var selectedEntryIndex *int
+	var selectedDefinitionIndex *int
+	var selectedDefinition *domain.DictionaryDefinition
 	if err == nil && len(snapshot.Data.Entries) > 0 {
 		lookupID = snapshot.ID
 	} else if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return SaveResult{}, apperr.Wrap(apperr.InternalError, "failed to read the dictionary lookup", err)
 	}
+	contextValue := strings.TrimSpace(initial.Context)
+	definitionValue := strings.TrimSpace(initial.Definition)
+	if definitionValue != "" {
+		if snapshot == nil || len(snapshot.Data.Entries) == 0 {
+			return SaveResult{}, apperr.New(apperr.InvalidArgument, "definition requires a successful cached dictionary lookup")
+		}
+		entryIndex, definitionIndex, definition, found := findDefinition(snapshot.Data.Entries, definitionValue)
+		if !found {
+			return SaveResult{}, apperr.New(apperr.InvalidArgument, "definition must exactly match a definition returned by dictionary_lookup")
+		}
+		selectedEntryIndex = &entryIndex
+		selectedDefinitionIndex = &definitionIndex
+		selectedDefinition = &definition
+	}
+	senseKey := vocabularySenseKey(definitionValue, contextValue, metadata.CustomDescription)
 	created, item, err := service.store.SaveVocabulary(ctx, storage.VocabularyCreate{
-		OwnerKey:          service.ownerKey,
-		Term:              displayTerm,
-		NormalizedTerm:    normalizedTerm,
-		LookupID:          lookupID,
-		Status:            metadata.Status,
-		Tags:              metadata.Tags,
-		CustomDescription: metadata.CustomDescription,
-		DescriptionSource: metadata.DescriptionSource,
-		Notes:             metadata.Notes,
-		Examples:          metadata.Examples,
-		Now:               service.now().UTC(),
+		OwnerKey:                service.ownerKey,
+		Term:                    displayTerm,
+		NormalizedTerm:          normalizedTerm,
+		LookupID:                lookupID,
+		Status:                  metadata.Status,
+		Tags:                    metadata.Tags,
+		CustomDescription:       metadata.CustomDescription,
+		DescriptionSource:       metadata.DescriptionSource,
+		Notes:                   metadata.Notes,
+		Examples:                metadata.Examples,
+		SenseKey:                senseKey,
+		Context:                 contextValue,
+		SelectedEntryIndex:      selectedEntryIndex,
+		SelectedDefinitionIndex: selectedDefinitionIndex,
+		SelectedDefinition:      selectedDefinition,
+		Now:                     service.now().UTC(),
 	})
 	if err != nil {
 		return SaveResult{}, apperr.Wrap(apperr.InternalError, "failed to save the vocabulary item", err)
 	}
-	return SaveResult{Created: created, Item: item}, nil
+	return SaveResult{Created: created, VocabularyItem: item, Item: item}, nil
 }
 
 func (service *Service) Update(
@@ -156,10 +185,36 @@ func (service *Service) Update(
 	if errors.Is(err, storage.ErrNotFound) {
 		return domain.VocabularyItem{}, apperr.New(apperr.NotFound, "the vocabulary item was not found")
 	}
+	if errors.Is(err, storage.ErrAmbiguous) {
+		return domain.VocabularyItem{}, apperr.New(apperr.InvalidArgument, "term matches multiple saved senses; use itemId")
+	}
 	if err != nil {
 		return domain.VocabularyItem{}, apperr.Wrap(apperr.InternalError, "failed to update the vocabulary item", err)
 	}
 	return item, nil
+}
+
+func findDefinition(entries []domain.DictionaryEntry, wanted string) (int, int, domain.DictionaryDefinition, bool) {
+	for entryIndex, entry := range entries {
+		for definitionIndex, definition := range entry.Definitions {
+			if strings.TrimSpace(definition.Definition) == wanted {
+				return entryIndex, definitionIndex, definition, true
+			}
+		}
+	}
+	return 0, 0, domain.DictionaryDefinition{}, false
+}
+
+func vocabularySenseKey(definition, contextValue, customDescription string) string {
+	identity := definition
+	if identity == "" {
+		identity = contextValue
+	}
+	if identity == "" {
+		return "legacy"
+	}
+	digest := sha256.Sum256([]byte(domain.NormalizeTerm(identity)))
+	return hex.EncodeToString(digest[:])
 }
 
 func (service *Service) Get(ctx context.Context, itemID, term string) (domain.VocabularyItem, error) {
@@ -186,6 +241,9 @@ func (service *Service) Get(ctx context.Context, itemID, term string) (domain.Vo
 	}
 	if errors.Is(err, storage.ErrNotFound) {
 		return domain.VocabularyItem{}, apperr.New(apperr.NotFound, "the vocabulary item was not found")
+	}
+	if errors.Is(err, storage.ErrAmbiguous) {
+		return domain.VocabularyItem{}, apperr.New(apperr.InvalidArgument, "term matches multiple saved senses; use itemId")
 	}
 	if err != nil {
 		return domain.VocabularyItem{}, apperr.Wrap(apperr.InternalError, "failed to read the vocabulary item", err)
