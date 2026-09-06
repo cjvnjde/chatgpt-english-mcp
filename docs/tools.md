@@ -151,7 +151,7 @@ The item includes its selected `sense` and complete linked dictionary lookup. On
 { deleted: true; itemId: string }
 ```
 
-This removes the vocabulary item and its learning card. It does not remove cached dictionary snapshots or immutable review attempts.
+This removes the vocabulary item and its learning card. It does not remove cached dictionary snapshots, immutable review attempts, or presentation events.
 
 ## `learning_next`
 
@@ -161,6 +161,8 @@ This removes the vocabulary item and its learning card. It does not remove cache
 
 // Output
 {
+  presentationId: number; // integer identifying the persisted presentation event
+  shownAt: string; // server issuance time, RFC3339Nano in UTC
   reviewToken: string;
   term: string;
   definition?: string;
@@ -181,6 +183,12 @@ This removes the vocabulary item and its learning card. It does not remove cache
 ```
 
 The tool returns exactly one non-archived item. `latestComment` is included when available. `comments` is included only when `includeComments` is true. Pass `reviewToken` unchanged to `learning_review` after the learner answers.
+
+Selection uses weighted variety among due and FSRS-new cards, with a cooldown for the owner's last three presentations within 30 minutes. If all eligible cards are recent, the least recently presented card may repeat. When both pools remain after cooldown, the new pool has a 20% chance; this is an approximate mix, not a quota. Due urgency and failures receive bounded extra weight, while recently presented cards have reduced weight that recovers over 24 hours. Future reviews are considered only when no due or new cards exist, using the nearest nonrecent future review or the least recently presented fallback. See [the complete selection policy](how-it-works.md#how-the-next-item-is-selected).
+
+This tool mutates storage but is non-destructive and non-idempotent. Each committed selection records a fresh immutable event; retries can return different words. `presentationId` identifies that issuance, while `shownAt` records when the server issued it, not proof that a learner saw or answered it. The event retains the card's due time and `reviewToken` at issuance; multiple presentations may share a pending token and link to one eventual review attempt. Neither metadata field is an input to `learning_review`, and presenting an item does not change its FSRS schedule.
+
+Presentation events and review attempts are retained after vocabulary deletion. History starts with actual recorded events, without fabricating pre-upgrade presentations or timestamps. It cannot by itself establish human visibility or recall duration.
 
 ## `learning_review`
 

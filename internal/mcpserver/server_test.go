@@ -147,6 +147,13 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	if next.Definition != description || next.LatestComment != nil || next.Comments != nil {
 		t.Fatalf("compact learning content = %#v", next)
 	}
+	repeated := callTool[learning.NextResult](t, ctx, clientSession, "learning_next", LearningNextInput{})
+	if next.PresentationID <= 0 || repeated.PresentationID == next.PresentationID {
+		t.Fatalf("repeated presentation reused its identity: first = %#v, repeated = %#v", next, repeated)
+	}
+	if repeated.Term != next.Term || repeated.ReviewToken != next.ReviewToken {
+		t.Fatalf("repeated presentation changed the pending review: first = %#v, repeated = %#v", next, repeated)
+	}
 
 	review := callTool[learning.RecordResult](t, ctx, clientSession, "learning_review", LearningReviewInput{
 		ReviewToken: next.ReviewToken,
@@ -157,7 +164,7 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		t.Fatalf("learning review = %#v", review)
 	}
 	duplicateReview := callTool[learning.RecordResult](t, ctx, clientSession, "learning_review", LearningReviewInput{
-		ReviewToken: next.ReviewToken,
+		ReviewToken: repeated.ReviewToken,
 		Rating:      domain.ReviewRatingGood,
 		Comment:     "Needed a moment to separate the meanings.",
 	})

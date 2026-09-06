@@ -6,8 +6,9 @@ It provides eight tools for:
 
 - Cambridge Dictionary lookups with permanent SQLite caching
 - vocabulary metadata, notes, examples, tags, and learning states
-- automatic selection of the next word to practise
+- weighted selection mixing new words and due reviews, with recent-word cooldowns
 - idempotent review recording and spaced-repetition scheduling
+- timestamped presentation history retained for future learning analytics
 
 The MCP stores and schedules learning data; the connected AI tutor decides how to explain, quiz, and respond to the learner.
 

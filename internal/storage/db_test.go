@@ -213,7 +213,7 @@ func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory
 	}
 }
 
-func TestNextLearningItemPrioritizesTroubleDueNewThenClosestFuture(t *testing.T) {
+func TestNextLearningItemKeepsEligibleCardsAheadOfFutureAndIsolatesOwners(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")
 	if err != nil {
@@ -222,61 +222,68 @@ func TestNextLearningItemPrioritizesTroubleDueNewThenClosestFuture(t *testing.T)
 	t.Cleanup(func() { _ = store.Close() })
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
 
-	terms := []string{"troublesome", "failed", "overdue", "due", "new", "early"}
-	itemIDs := make(map[string]string, len(terms))
-	for index, term := range terms {
+	fixtures := []struct {
+		term     string
+		owner    string
+		status   domain.LearningStatus
+		dueAt    time.Time
+		state    int
+		failures int
+	}{
+		{term: "troublesome", owner: "owner", status: domain.LearningStatusLearning, dueAt: now.Add(-72 * time.Hour), state: 2, failures: 2},
+		{term: "due", owner: "owner", status: domain.LearningStatusLearned, dueAt: now, state: 2},
+		{term: "new", owner: "owner", status: domain.LearningStatusNew, dueAt: now.Add(48 * time.Hour)},
+		{term: "near-future", owner: "owner", status: domain.LearningStatusLearned, dueAt: now.Add(time.Nanosecond), state: 2},
+		{term: "failed-future", owner: "owner", status: domain.LearningStatusLearning, dueAt: now.Add(24 * time.Hour), state: 1, failures: 10},
+		{term: "archived", owner: "owner", status: domain.LearningStatusArchived, dueAt: now},
+		{term: "foreign", owner: "another-owner", status: domain.LearningStatusNew, dueAt: now},
+	}
+	for _, fixture := range fixtures {
 		created, item, err := store.SaveVocabulary(ctx, VocabularyCreate{
-			OwnerKey:       "owner",
-			Term:           term,
-			NormalizedTerm: term,
-			Status:         domain.LearningStatusNew,
-			Tags:           []string{},
-			Notes:          []string{},
-			Examples:       []string{},
-			Now:            now.Add(time.Duration(index) * time.Minute),
+			OwnerKey: fixture.owner, Term: fixture.term, NormalizedTerm: fixture.term,
+			Status: fixture.status, Tags: []string{}, Notes: []string{}, Examples: []string{}, Now: now,
 		})
 		if err != nil || !created {
-			t.Fatalf("SaveVocabulary(%q) = item %#v created %t error %v", term, item, created, err)
+			t.Fatalf("SaveVocabulary(%q) = item %#v created %t error %v", fixture.term, item, created, err)
 		}
-		itemIDs[term] = item.ItemID
-	}
-	states := []struct {
-		term                string
-		dueAt               time.Time
-		state               int
-		consecutiveFailures int
-		lapses              int
-	}{
-		{term: "troublesome", dueAt: now.Add(-72 * time.Hour), state: 2, consecutiveFailures: 2, lapses: 3},
-		{term: "failed", dueAt: now.Add(-48 * time.Hour), state: 1, consecutiveFailures: 1},
-		{term: "overdue", dueAt: now.Add(-24 * time.Hour), state: 2},
-		{term: "due", dueAt: now, state: 2},
-		{term: "early", dueAt: now.Add(24 * time.Hour), state: 2},
-	}
-	for _, state := range states {
 		if _, err := store.sql.ExecContext(ctx, `
-			UPDATE learning_cards
-			SET due_at = ?, fsrs_state = ?, consecutive_failures = ?, lapses = ?
+			UPDATE learning_cards SET due_at = ?, fsrs_state = ?, consecutive_failures = ?
 			WHERE vocabulary_item_id = ?
-		`, TimeString(state.dueAt), state.state, state.consecutiveFailures, state.lapses, itemIDs[state.term]); err != nil {
-			t.Fatalf("prepare %q learning state: %v", state.term, err)
+		`, TimeString(fixture.dueAt), fixture.state, fixture.failures, item.ItemID); err != nil {
+			t.Fatalf("prepare %q learning state: %v", fixture.term, err)
 		}
 	}
 
-	for _, wantTerm := range terms {
+	eligible := map[string]bool{"troublesome": true, "due": true, "new": true}
+	for selection := range 5 {
 		selected, err := store.NextLearningItem(ctx, "owner", now)
 		if err != nil {
-			t.Fatalf("NextLearningItem(%q) error = %v", wantTerm, err)
+			t.Fatalf("NextLearningItem() error = %v", err)
 		}
-		if selected.Vocabulary.Term != wantTerm || selected.Card.ReviewToken == "" {
-			t.Fatalf("NextLearningItem() = %#v, want %q", selected, wantTerm)
+		term := selected.Vocabulary.Term
+		switch {
+		case selection < 3:
+			if !eligible[term] {
+				t.Fatalf("selected %q while due/new cards remain: %v", term, eligible)
+			}
+			delete(eligible, term)
+		case selection == 3:
+			if term != "near-future" {
+				t.Fatalf("future fallback = %q, want near-future before failed-future", term)
+			}
+		case selection == 4:
+			if term != "failed-future" {
+				t.Fatalf("remaining active card = %q, want failed-future", term)
+			}
 		}
-		if _, err := store.sql.ExecContext(
-			ctx,
+		if selected.Card.ReviewToken == "" {
+			t.Fatal("selected card has no review token")
+		}
+		if _, err := store.sql.ExecContext(ctx,
 			"UPDATE vocabulary_items SET learning_status = 'archived' WHERE id = ?",
 			selected.Vocabulary.ItemID,
 		); err != nil {
-			t.Fatalf("archive selected %q: %v", wantTerm, err)
+			t.Fatalf("archive selected %q: %v", term, err)
 		}
 	}
 	if _, err := store.NextLearningItem(ctx, "owner", now); !errors.Is(err, ErrNotFound) {

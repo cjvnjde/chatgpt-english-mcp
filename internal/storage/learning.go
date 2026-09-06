@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"english-learning-mcp/internal/domain"
@@ -34,8 +35,10 @@ type LearningCard struct {
 
 // LearningCandidate combines separately persisted content and scheduling state.
 type LearningCandidate struct {
-	Vocabulary domain.VocabularyItem
-	Card       LearningCard
+	Vocabulary     domain.VocabularyItem
+	Card           LearningCard
+	PresentationID int64
+	ShownAt        time.Time
 }
 
 // ReviewComment describes feedback saved with an immutable review attempt.
@@ -71,38 +74,63 @@ type RecordReviewInput struct {
 type ScheduleReview func(LearningCard, time.Time, domain.ReviewRating) (LearningCard, float64, error)
 
 func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, now time.Time) (LearningCandidate, error) {
-	row := db.sql.QueryRowContext(ctx, `
-		SELECT `+learningCardColumns+`
-		FROM learning_cards card
-		JOIN vocabulary_items vocabulary ON vocabulary.id = card.vocabulary_item_id
-		WHERE vocabulary.owner_key = ?
-		  AND vocabulary.learning_status <> 'archived'
-		  AND card.exercise_mode = ?
-		ORDER BY
-			CASE
-				WHEN card.fsrs_state <> 0 AND card.due_at <= ? AND (card.consecutive_failures > 0 OR card.lapses >= 3) THEN 0
-				WHEN card.fsrs_state <> 0 AND card.due_at <= ? THEN 1
-				WHEN card.fsrs_state = 0 THEN 2
-				ELSE 3
-			END,
-			card.consecutive_failures DESC,
-			card.lapses DESC,
-			CASE WHEN card.fsrs_state = 0 THEN vocabulary.created_at ELSE card.due_at END ASC,
-			card.id ASC
-		LIMIT 1
-	`, ownerKey, productionExerciseMode, TimeString(now), TimeString(now))
-	card, err := scanLearningCard(row)
-	if errors.Is(err, sql.ErrNoRows) {
+	transaction, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return LearningCandidate{}, fmt.Errorf("begin presentation transaction: %w", err)
+	}
+	defer transaction.Rollback()
+
+	shownAt := now.UTC()
+	cards, recentSinceID, err := loadSelectionCards(ctx, transaction, ownerKey)
+	if err != nil {
+		return LearningCandidate{}, err
+	}
+	selected, ok := selectLearningCard(cards, recentSinceID, shownAt, rand.Float64)
+	if !ok {
 		return LearningCandidate{}, ErrNotFound
 	}
+	card, err := scanLearningCard(transaction.QueryRowContext(ctx, `
+		SELECT `+learningCardColumns+`
+		FROM learning_cards card
+		WHERE card.id = ?
+	`, selected.cardID))
 	if err != nil {
-		return LearningCandidate{}, fmt.Errorf("select next learning card: %w", err)
+		return LearningCandidate{}, fmt.Errorf("load selected learning card: %w", err)
 	}
-	item, err := db.VocabularyByID(ctx, ownerKey, card.VocabularyItemID)
+	item, err := scanVocabularyItem(transaction.QueryRowContext(
+		ctx, vocabularySelect+" WHERE v.owner_key = ? AND v.id = ?", ownerKey, card.VocabularyItemID,
+	))
 	if err != nil {
 		return LearningCandidate{}, fmt.Errorf("load selected vocabulary item: %w", err)
 	}
-	return LearningCandidate{Vocabulary: item, Card: card}, nil
+
+	selectionKind := "early"
+	if card.FSRSState == 0 {
+		selectionKind = "new"
+	} else if !card.DueAt.After(shownAt) {
+		selectionKind = "due"
+	}
+	result, err := transaction.ExecContext(ctx, `
+		INSERT INTO learning_presentations (
+			owner_key, vocabulary_item_id, learning_card_id, exercise_mode,
+			review_token, shown_at, due_at, selection_kind
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, ownerKey, card.VocabularyItemID, card.CardID, card.ExerciseMode,
+		card.ReviewToken, TimeString(shownAt), TimeString(card.DueAt), selectionKind)
+	if err != nil {
+		return LearningCandidate{}, fmt.Errorf("record learning presentation: %w", err)
+	}
+	presentationID, err := result.LastInsertId()
+	if err != nil {
+		return LearningCandidate{}, fmt.Errorf("read learning presentation ID: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return LearningCandidate{}, fmt.Errorf("commit presentation transaction: %w", err)
+	}
+
+	return LearningCandidate{
+		Vocabulary: item, Card: card, PresentationID: presentationID, ShownAt: shownAt,
+	}, nil
 }
 
 func (db *DB) ReviewComments(

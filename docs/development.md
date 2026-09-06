@@ -59,9 +59,15 @@ SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchro
 - one vocabulary item per owner and normalized term;
 - one active dictionary snapshot per provider, term, dataset version, and parser version;
 - one production card per vocabulary item;
-- immutable review-attempt rows;
+- immutable review-attempt and presentation-event rows, retained after vocabulary deletion;
 - unique, rotating review tokens;
 - automatic learning-card creation for new or reactivated items.
+
+`learning_next` is a mutating, non-destructive, non-idempotent operation. Candidate selection, vocabulary hydration, and presentation insertion share one SQLite transaction and connection. Each committed selection records owner/item/card IDs, exercise mode, review token, issuance and due timestamps, and selection kind. The response exposes the event ID and UTC issuance time; issuing an item does not modify FSRS scheduling state or rotate its review token.
+
+Selection uses all due and FSRS-new cards, a last-three-presentations/30-minute cooldown, and bounded urgency, failure, and 24-hour recency weights. A 20% new-pool probability applies only when both pools remain after cooldown. Future cards are fallback-only. See [the selection policy](how-it-works.md#how-the-next-item-is-selected) for the small-pool rotation and future fallback rules.
+
+Timestamp strings may have variable fractional precision: parse them as times before temporal comparisons rather than ordering their SQLite text lexically. Presentation history records server issuance, not guaranteed delivery or human visibility. Request retries append new events, potentially for different items. Review-token linkage can associate several presentations with one accepted review, but does not establish a recall duration. Migrations retain existing timestamps and never backfill invented presentation times.
 
 ## Migrations
 

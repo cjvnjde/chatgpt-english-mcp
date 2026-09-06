@@ -44,6 +44,18 @@ func TestNextReturnsOneCompactNewItemThenClosestFutureReview(t *testing.T) {
 		t.Fatalf("Next(new) metadata = %#v", first)
 	}
 
+	now = now.Add(time.Second + time.Nanosecond)
+	repeated := nextWord(t, service, false)
+	if first.PresentationID <= 0 || repeated.PresentationID == first.PresentationID {
+		t.Fatalf("presentations must have distinct identities: first = %#v, repeated = %#v", first, repeated)
+	}
+	if repeated.Term != first.Term || repeated.ReviewToken != first.ReviewToken {
+		t.Fatalf("presenting again must preserve the pending review: first = %#v, repeated = %#v", first, repeated)
+	}
+	if repeated.ShownAt != storage.TimeString(now) || !mustParseTime(t, repeated.ShownAt).After(mustParseTime(t, first.ShownAt)) {
+		t.Fatalf("presentation times must record each issuance: first = %q, repeated = %q", first.ShownAt, repeated.ShownAt)
+	}
+
 	review, err := service.Record(ctx, RecordOptions{
 		ReviewToken: first.ReviewToken,
 		Rating:      domain.ReviewRatingGood,

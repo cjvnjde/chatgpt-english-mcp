@@ -49,6 +49,12 @@ Every active vocabulary item has one production-recall card. The card stores FSR
 
 Review tokens prevent duplicate attempts. Retrying the same token with the same rating and comment returns the original result with `duplicate: true`; reusing it with different data is rejected.
 
+Each committed `learning_next` selection also appends an immutable presentation event, atomically with selecting and reading the item. It records the owner, vocabulary and card IDs, exercise mode, current `reviewToken`, server issuance time (`shownAt`), scheduled due time at issuance, and selection kind (`new`, `due`, or `early`). The response exposes the event's `presentationId` and its UTC `shownAt`.
+
+A presentation means the server issued an item, not that a learner saw it or answered it. Delivery may fail after the event commits. Retrying `learning_next` records a fresh presentation and may choose another item; it does not retry the same presentation idempotently. Multiple presentations before a review share the card's pending `reviewToken`. An accepted review rotates that token, so the saved token links presentations to the eventual review attempt without implying a separate attempt for every presentation.
+
+Presentation and review history survives vocabulary deletion. Recorded timestamps are retained as facts; upgrading does not invent presentation events or past presentation times from existing cards or reviews. Consequently, pre-upgrade exposure, actual human visibility, and recall duration cannot be inferred from this history alone.
+
 ## Expected workflows
 
 ### Look up and save a new term
@@ -87,18 +93,21 @@ After feedback, call `learning_next` again only when the learner wants another i
 - Use `vocabulary_get` by `itemId` for one exact saved meaning. Term lookup works only while that spelling has one saved meaning.
 - Use `vocabulary_list` for search, status/tag filters, and cursor pagination.
 - Use `vocabulary_update` to replace selected metadata fields or archive/reactivate an item.
-- Use `vocabulary_delete` only when the item should be removed. Dictionary snapshots remain cached; learning cards are deleted with the item, while review attempts remain as immutable history.
+- Use `vocabulary_delete` only when the item should be removed. Dictionary snapshots remain cached; learning cards are deleted with the item, while review attempts and presentation events remain as immutable history.
 
 ## How the next item is selected
 
-`learning_next` always returns one active item when any exists. The database orders candidates as follows:
+`learning_next` always returns one active item when any exists. Selection varies the practice material without changing FSRS scheduling:
 
-1. due reviewed items with failures or at least three lapses;
-2. other due reviewed items;
-3. unseen items, oldest first;
-4. the reviewed item with the nearest future due time.
+1. Consider all reviewed cards due now and all FSRS-new cards (not merely the oldest new items). Never select a future review while either eligible group exists. FSRS-new means unreviewed scheduling state, not the vocabulary item's learner-managed status.
+2. Avoid cards in the owner's last three presentation events whose issuance times fall within the past 30 minutes, when another eligible card exists. If all eligible cards are recent, choose the least recently presented so small pools rotate. One active card can repeat; the cooldown is finite, not permanent exclusion.
+3. When both due and new pools remain after the cooldown, choose the new pool with probability 20% and the due pool otherwise. This is an approximate 80/20 mix across many such selections, not a quota: availability and cooldown can change the observed mix.
+4. Choose randomly within the selected pool using weights. Due cards receive an urgency multiplier of `1 + min(overdue time / max(scheduled interval, 1 day), 4)` and a failure multiplier of `1 + 0.5 × min(consecutive failures, 2) + 0.25 × min(lapses, 3)`. Both are bounded, so troublesome cards get extra weight without permanently dominating.
+5. Apply a recency multiplier of `0.25 + 0.75 × clamp(time since last presentation / 24 hours, 0, 1)` to due and new cards; never-presented cards have multiplier 1. New cards use only this weight. The short cooldown expires after 30 minutes, while recency weight gradually recovers over 24 hours.
 
-Within the first groups, consecutive failures and lapses receive higher priority. The response explains the result with `reason`: `troublesome`, `failed`, `overdue`, `due`, `new`, or `early`.
+Only when no due or new cards exist does selection fall back to a future review: choose the nearest due time among nonrecent cards if possible, otherwise the least recently presented card. Failure counts do not move a later future review ahead of a nearer one.
+
+The response describes the selected card with `reason`: `troublesome`, `failed`, `overdue`, `due`, `new`, or `early`. These descriptions are not a strict priority ordering; the presentation event's selection kind separately records whether the card was new, due, or early.
 
 An item becomes `troublesome` after two consecutive `again` ratings or three total lapses. A tutor should then change the cue, contrast commonly confused terms, or introduce a mnemonic instead of repeating the same question.
 

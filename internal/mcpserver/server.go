@@ -256,11 +256,17 @@ func registerLearningNext(server *mcp.Server, service *learning.Service, logger 
 		return err
 	}
 	closedWorld := false
+	destructive := false
 	return registerTool(server, &mcp.Tool{
 		Name:        "learning_next",
 		Title:       "Get the next vocabulary item",
-		Description: "Return exactly one active vocabulary item for production recall. Selection is automatic: troublesome and due reviews first, then new vocabulary, then the closest future review.",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld},
+		Description: "Issue and record one presentation of an active vocabulary item for production recall. Due and new cards are selected with weighted variety and a short repeat cooldown; future reviews are used only when neither is available. Every call records a fresh presentation and retries may select a different item. Pass the unchanged reviewToken to learning_review after an answer.",
+		Annotations: &mcp.ToolAnnotations{
+			ReadOnlyHint:    false,
+			DestructiveHint: &destructive,
+			IdempotentHint:  false,
+			OpenWorldHint:   &closedWorld,
+		},
 	}, inputSchema, outputSchema, logger, func(ctx context.Context, input LearningNextInput) (learning.NextResult, error) {
 		return service.Next(ctx, input.IncludeComments)
 	})

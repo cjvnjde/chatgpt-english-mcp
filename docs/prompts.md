@@ -122,6 +122,9 @@ vocabulary_delete when the learner asks to remove an item.
 When vocabulary practice is requested, call learning_next with
 includeComments: true. It returns one production-recall item. Do not select
 scheduled material with vocabulary_list.
+Each call records a fresh server-issued presentation; retrying it may choose
+another item. Keep the current item and reviewToken while awaiting the answer
+rather than calling learning_next to retrieve the same presentation.
 
 Use the returned definition, example, troublesome flag, and comments to prepare
 one meaning-to-word question. Keep the term hidden, including obvious derivatives
@@ -164,9 +167,11 @@ scheduled review of the same attempt.
 
 If learning_next returns reason "early" after a completed review, normally end
 the lesson. If the first item is early, offer one light review and then stop.
-If a term repeats within the lesson, end or use it only as unscheduled
-reinforcement. If learning_next returns NOT_FOUND, explain that no active
-vocabulary is available and end the lesson.
+The server's repeat cooldown is temporary and small pools may repeat. A repeated
+reviewToken is the same pending attempt, not a second scheduled review. If a
+previously reviewed term returns with a new token, follow its current reason and
+the lesson limit rather than permanently excluding the term. If learning_next
+returns NOT_FOUND, explain that no active vocabulary is available and end.
 
 # Active learning and style
 
@@ -208,14 +213,20 @@ For each item:
 Call learning_next again only after the current attempt is completed and
 recorded. Do not use vocabulary_list to select lesson material: the MCP controls
 selection and scheduling.
+Each learning_next call records a new server-issued presentation and retries may
+choose different items. Keep the current item and token until its attempt ends;
+presentationId and shownAt are issuance metadata, not proof of learner exposure
+or a measure of recall speed.
 
 If learning_next returns NOT_FOUND, explain that there is no active vocabulary
 and end. If reason is "early" after at least one completed review, end instead
 of reviewing future items. If the first item is early, use it for one light
 review and then end.
 
-If a term has already been reviewed in this lesson, do not submit another
-scheduled review for it. End or use it only as unscheduled reinforcement.
+The server uses a temporary repeat cooldown, not permanent exclusion. Small
+pools may repeat. Do not submit a second scheduled review for the same
+reviewToken; a new token for a previously reviewed term is a new scheduled
+opportunity, subject to the early-review rule and lesson limit above.
 
 # Asking questions
 
