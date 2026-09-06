@@ -33,7 +33,7 @@ go build ./cmd/english-learning-mcp
 
 | Package | Responsibility |
 |---|---|
-| `cmd/english-learning-mcp` | Configuration, dependency wiring, two HTTP listeners, and graceful shutdown. |
+| `cmd/english-learning-mcp` | Configuration, dependency wiring, HTTP listeners, and graceful shutdown. |
 | `internal/mcpserver` | MCP server metadata, strict schemas, tool registration, HTTP/auth middleware, and error conversion. |
 | `internal/dictionary` | Cambridge HTTP client, HTML parser, cache policy, and lookup service. |
 | `internal/vocabulary` | Validation and behavior for saved vocabulary and learner metadata. |
@@ -41,6 +41,8 @@ go build ./cmd/english-learning-mcp
 | `internal/storage` | SQLite queries, transactions, cursor encoding, IDs, migrations, and domain hydration. |
 | `internal/domain` | Shared dictionary, vocabulary, learning, and normalization types. |
 | `internal/apperr` | Stable application error codes and safe client messages. |
+| `internal/ankiexport` | Private, export-only authenticated vocabulary snapshot endpoint. |
+| `anki_worker` | Headless AnkiWeb adapter, persistent ownership tracking, authoritative reconciliation, and operator CLI. |
 
 ## Request path
 
@@ -85,3 +87,21 @@ Never modify an applied migration. Its SHA-256 checksum is stored in `schema_mig
 6. Update [the tool reference](tools.md) and [workflow guide](how-it-works.md).
 
 All new errors exposed to callers should use a stable `apperr` code and avoid leaking internal details.
+
+## Anki integration
+
+The optional private endpoint returns a complete owner-scoped snapshot from one SQLite read transaction. Its metadata includes schema version, stable namespace and owner, item count, explicit completeness, and a SHA-256 snapshot digest. The worker validates the entire snapshot before opening or changing Anki state. It never uses the paginated MCP list as a deletion authority.
+
+Source identity combines integration namespace, encoded owner, and saved item ID. The worker keeps independent ownership mappings so a remote edit to the visible fields or deck cannot evade reconciliation. Every poll downloads remote state into the private worker collection, compares actual fields/tags with the source, and publishes corrections. The application database is never a sync destination.
+
+Install the pinned library into an isolated environment:
+
+```sh
+uv venv --python 3.14.7 .venv
+uv pip install --python .venv/bin/python -r anki_worker/requirements.txt
+.venv/bin/python -W error::ResourceWarning -m unittest anki_worker.test_worker -v
+```
+
+Routine worker checks use temporary real Anki collections and controlled sync boundaries, not AnkiWeb credentials. They cover authoritative deletion, remote edits, card/review preservation, malformed exports, ownership collisions, shared-note protection, crash recovery, locks, and full-sync direction safety. Structure creation records temporary identities before allocating Anki IDs, so an interrupted first run can recover without claiming unrelated deck names.
+
+The pinned runtime/library has been exercised against a disposable AnkiWeb account for login, empty-account bootstrap, existing-account full download, add/update/delete, remote repair, and restart. A complete Go HTTP export was also synced to AnkiWeb using the real worker CLI and polling loop. A real Anki review retained its card ID and review log after content repair; a before/after SQLite dump confirmed the application database did not change. See [the explicit integration procedure](deployment.md#version-upgrades-and-live-verification).

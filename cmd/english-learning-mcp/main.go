@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"english-learning-mcp/internal/ankiexport"
 	"english-learning-mcp/internal/config"
 	"english-learning-mcp/internal/dictionary"
 	"english-learning-mcp/internal/learning"
@@ -24,6 +25,7 @@ const shutdownTimeout = 10 * time.Second
 type httpEndpoint struct {
 	name    string
 	address string
+	path    string
 	handler http.Handler
 }
 
@@ -77,16 +79,32 @@ func run() (runErr error) {
 		{
 			name:    "tunnel",
 			address: configuration.MCPTunnelListenAddress,
+			path:    mcpserver.EndpointPath,
 			handler: mcpserver.NewHTTPHandler(server, logger),
 		},
 		{
 			name:    "external",
 			address: configuration.MCPExternalListenAddress,
+			path:    mcpserver.EndpointPath,
 			handler: mcpserver.NewAuthenticatedHTTPHandler(server, configuration.MCPBearerToken, logger),
 		},
 	}
+	if configuration.AnkiSyncEnabled {
+		endpoints = append(endpoints, httpEndpoint{
+			name:    "anki-export",
+			address: configuration.AnkiExportListenAddress,
+			path:    ankiexport.EndpointPath,
+			handler: ankiexport.NewHTTPHandler(
+				store,
+				configuration.OwnerKey,
+				configuration.AnkiSourceNamespace,
+				configuration.AnkiExportToken,
+				logger,
+			),
+		})
+	}
 	if err := runHTTPServers(ctx, endpoints, logger); err != nil {
-		return fmt.Errorf("run MCP HTTP servers: %w", err)
+		return fmt.Errorf("run HTTP servers: %w", err)
 	}
 	return nil
 }
@@ -130,15 +148,15 @@ func runHTTPServer(ctx context.Context, endpoint httpEndpoint, logger *slog.Logg
 		shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownContext); err != nil {
-			logger.Error("MCP HTTP server shutdown failed", "error", err)
+			logger.Error("HTTP server shutdown failed", "access", endpoint.name, "error", err)
 		}
 	}()
 
 	logger.Info(
-		"MCP HTTP server listening",
+		"HTTP server listening",
 		"access", endpoint.name,
 		"address", endpoint.address,
-		"path", mcpserver.EndpointPath,
+		"path", endpoint.path,
 	)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

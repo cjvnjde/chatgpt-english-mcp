@@ -12,6 +12,8 @@ It provides eight tools for:
 
 The MCP stores and schedules learning data; the connected AI tutor decides how to explain, quiz, and respond to the learner.
 
+The Compose stack includes [one-way AnkiWeb sync](docs/deployment.md#ankiweb-sync), publishing saved vocabulary to a dedicated managed deck. Server content overrides Anki edits; Anki scheduling remains independent.
+
 ## Documentation
 
 - [How it works and expected workflows](docs/how-it-works.md)
@@ -25,10 +27,12 @@ The MCP stores and schedules learning data; the connected AI tutor decides how t
 
 ```sh
 cp .env.example .env
-# Fill in the required values in .env
+# Fill in the tunnel, MCP token, Anki export token, and AnkiWeb credentials.
 docker compose up -d --build
 ```
 
 The Streamable HTTP endpoint is `/mcp`. The Compose deployment exposes it to an OpenAI tunnel on internal port `8080` and to authenticated direct clients on internal port `8081`.
+
+For Dokploy, select `docker-compose.yml`, copy the variables from `.env.example` into Environment, fill in the required values, and deploy. No additional Compose file is needed.
 
 > This project retrieves data from Cambridge Dictionary and is not affiliated with or endorsed by Cambridge University Press & Assessment.

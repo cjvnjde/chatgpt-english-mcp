@@ -4,3 +4,9 @@
 *.sqlite-wal
 data/
 /english-learning-mcp
+.secrets/
+.venv/
+__pycache__/
+*.pyc
+*.anki2
+*.anki2-*
