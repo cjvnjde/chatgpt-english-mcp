@@ -92,39 +92,7 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy.sqlite")
-	legacy, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("sql.Open() error = %v", err)
-	}
-	migrations, err := loadMigrations()
-	if err != nil {
-		t.Fatalf("loadMigrations() error = %v", err)
-	}
-	if _, err := legacy.ExecContext(ctx, `
-		CREATE TABLE schema_migrations (
-			version INTEGER PRIMARY KEY,
-			name TEXT NOT NULL,
-			checksum TEXT NOT NULL,
-			applied_at TEXT NOT NULL
-		)
-	`); err != nil {
-		t.Fatalf("create legacy migration table: %v", err)
-	}
-	for _, migration := range migrations[:3] {
-		if _, err := legacy.ExecContext(ctx, migration.contents); err != nil {
-			t.Fatalf("apply legacy migration %d: %v", migration.version, err)
-		}
-		if _, err := legacy.ExecContext(
-			ctx,
-			"INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
-			migration.version,
-			migration.name,
-			migration.checksum,
-			"2026-09-01T00:00:00Z",
-		); err != nil {
-			t.Fatalf("record legacy migration %d: %v", migration.version, err)
-		}
-	}
+	legacy := openLegacyDatabase(t, path, 3)
 	for _, item := range []struct {
 		id     string
 		term   string
@@ -211,6 +179,47 @@ func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory
 	if _, err := store.sql.ExecContext(ctx, "DELETE FROM review_attempts WHERE id = ?", attempt.ReviewID); err == nil {
 		t.Fatal("immutable review DELETE succeeded")
 	}
+}
+
+func openLegacyDatabase(t *testing.T, path string, version int) *sql.DB {
+	t.Helper()
+	ctx := context.Background()
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	legacy.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = legacy.Close() })
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations() error = %v", err)
+	}
+	if _, err := legacy.ExecContext(ctx, `
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			checksum TEXT NOT NULL,
+			applied_at TEXT NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy migration table: %v", err)
+	}
+	for _, migration := range migrations[:version] {
+		if _, err := legacy.ExecContext(ctx, migration.contents); err != nil {
+			t.Fatalf("apply legacy migration %d: %v", migration.version, err)
+		}
+		if _, err := legacy.ExecContext(
+			ctx,
+			"INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+			migration.version,
+			migration.name,
+			migration.checksum,
+			"2026-09-01T00:00:00Z",
+		); err != nil {
+			t.Fatalf("record legacy migration %d: %v", migration.version, err)
+		}
+	}
+	return legacy
 }
 
 func TestNextLearningItemKeepsEligibleCardsAheadOfFutureAndIsolatesOwners(t *testing.T) {

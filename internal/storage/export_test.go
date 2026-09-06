@@ -76,7 +76,7 @@ func TestExportVocabularyIncludesEveryOwnerItemAndSense(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !snapshot.Complete || snapshot.SchemaVersion != 1 || snapshot.Owner != "owner:日本語" || snapshot.Namespace != "english-mcp" || snapshot.ItemCount != len(want) {
+	if !snapshot.Complete || snapshot.SchemaVersion != 2 || snapshot.Owner != "owner:日本語" || snapshot.Namespace != "english-mcp" || snapshot.ItemCount != len(want) {
 		t.Fatalf("invalid snapshot metadata: %#v", snapshot)
 	}
 	if len(snapshot.Items) != len(want) {

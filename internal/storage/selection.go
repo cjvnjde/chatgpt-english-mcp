@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"english-learning-mcp/internal/domain"
 )
 
 // Selection only loads scheduling and presentation state; vocabulary content is
@@ -18,6 +20,7 @@ type selectionCard struct {
 	lapses              uint64
 	lastPresentationID  int64
 	lastShownAt         time.Time
+	usefulness          domain.Usefulness
 }
 
 func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey string) ([]selectionCard, int64, error) {
@@ -35,7 +38,7 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 	rows, err := transaction.QueryContext(ctx, `
 		SELECT card.id, card.due_at, card.fsrs_state, card.scheduled_days,
 			card.consecutive_failures, card.lapses,
-			COALESCE(presentation.id, 0), presentation.shown_at
+			COALESCE(presentation.id, 0), presentation.shown_at, vocabulary.usefulness
 		FROM learning_cards card
 		JOIN vocabulary_items vocabulary ON vocabulary.id = card.vocabulary_item_id
 		LEFT JOIN learning_presentations presentation ON presentation.id = (
@@ -58,8 +61,11 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 		var dueAt string
 		var shownAt sql.NullString
 		if err := rows.Scan(&card.cardID, &dueAt, &card.fsrsState, &card.scheduledDays,
-			&card.consecutiveFailures, &card.lapses, &card.lastPresentationID, &shownAt); err != nil {
+			&card.consecutiveFailures, &card.lapses, &card.lastPresentationID, &shownAt, &card.usefulness); err != nil {
 			return nil, 0, fmt.Errorf("scan learning selection card: %w", err)
+		}
+		if !card.usefulness.Valid() {
+			return nil, 0, fmt.Errorf("%w: learning candidate usefulness", ErrCorruptData)
 		}
 		card.dueAt, err = parseStoredTime(dueAt, "learning due date")
 		if err != nil {
@@ -160,16 +166,23 @@ func presentedBefore(card, other *selectionCard) bool {
 }
 
 func selectionWeight(card *selectionCard, now time.Time) float64 {
+	usefulness := 1.0
+	switch card.usefulness {
+	case domain.UsefulnessLow:
+		usefulness = 0.5
+	case domain.UsefulnessHigh:
+		usefulness = 2
+	}
 	recency := 1.0
 	if card.lastPresentationID > 0 {
 		recency = 0.25 + 0.75*max(0, min(now.Sub(card.lastShownAt).Hours()/24, 1))
 	}
 	if card.fsrsState == 0 {
-		return recency
+		return recency * usefulness
 	}
 
 	intervalHours := max(float64(card.scheduledDays)*24, 24)
 	urgency := 1 + min(max(now.Sub(card.dueAt).Hours(), 0)/intervalHours, 4)
 	failures := 1 + 0.5*float64(min(card.consecutiveFailures, 2)) + 0.25*float64(min(card.lapses, 3))
-	return urgency * failures * recency
+	return urgency * failures * recency * usefulness
 }

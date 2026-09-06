@@ -43,16 +43,17 @@ type ReviewFeedback struct {
 }
 
 type NextResult struct {
-	PresentationID int64            `json:"presentationId"`
-	ShownAt        string           `json:"shownAt"`
-	ReviewToken    string           `json:"reviewToken"`
-	Term           string           `json:"term"`
-	Definition     string           `json:"definition,omitempty"`
-	Example        string           `json:"example,omitempty"`
-	Reason         string           `json:"reason"`
-	Troublesome    bool             `json:"troublesome"`
-	LatestComment  *ReviewFeedback  `json:"latestComment,omitempty"`
-	Comments       []ReviewFeedback `json:"comments,omitempty"`
+	PresentationID int64             `json:"presentationId"`
+	ShownAt        string            `json:"shownAt"`
+	ReviewToken    string            `json:"reviewToken"`
+	Term           string            `json:"term"`
+	Usefulness     domain.Usefulness `json:"usefulness"`
+	Definition     string            `json:"definition,omitempty"`
+	Example        string            `json:"example,omitempty"`
+	Reason         string            `json:"reason"`
+	Troublesome    bool              `json:"troublesome"`
+	LatestComment  *ReviewFeedback   `json:"latestComment,omitempty"`
+	Comments       []ReviewFeedback  `json:"comments,omitempty"`
 }
 
 type RecordOptions struct {
@@ -102,6 +103,7 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 		ShownAt:        storage.TimeString(candidate.ShownAt),
 		ReviewToken:    candidate.Card.ReviewToken,
 		Term:           candidate.Vocabulary.Term,
+		Usefulness:     candidate.Vocabulary.Usefulness,
 		Definition:     definition,
 		Example:        example,
 		Reason:         selectionReason(candidate.Card, now),

@@ -23,6 +23,7 @@ func TestNextReturnsOneCompactNewItemThenClosestFutureReview(t *testing.T) {
 		Term:              "meticulous",
 		NormalizedTerm:    "meticulous",
 		Status:            domain.LearningStatusNew,
+		Usefulness:        domain.UsefulnessHigh,
 		Tags:              []string{},
 		CustomDescription: description,
 		Notes:             []string{},
@@ -39,6 +40,9 @@ func TestNextReturnsOneCompactNewItemThenClosestFutureReview(t *testing.T) {
 	}
 	if first.Term != "meticulous" || first.Definition != description || first.Example == "" || first.Reason != "new" {
 		t.Fatalf("Next(new) = %#v", first)
+	}
+	if first.Usefulness != domain.UsefulnessHigh {
+		t.Fatalf("Next(new) usefulness = %q", first.Usefulness)
 	}
 	if first.ReviewToken == "" || first.LatestComment != nil || first.Comments != nil || first.Troublesome {
 		t.Fatalf("Next(new) metadata = %#v", first)

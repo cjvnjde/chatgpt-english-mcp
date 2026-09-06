@@ -1,16 +1,19 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
+
+	"english-learning-mcp/internal/domain"
 )
 
 func TestSelectLearningCardBalancesNewAndDueWithoutShortlists(t *testing.T) {
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
 	cards := []selectionCard{
-		{cardID: "troublesome", dueAt: now.Add(-100 * 24 * time.Hour), fsrsState: 2, consecutiveFailures: 100, lapses: 100},
-		{cardID: "new", dueAt: now.Add(24 * time.Hour)},
+		{cardID: "troublesome", dueAt: now.Add(-100 * 24 * time.Hour), fsrsState: 2, consecutiveFailures: 100, lapses: 100, usefulness: domain.UsefulnessLow},
+		{cardID: "new", dueAt: now.Add(24 * time.Hour), usefulness: domain.UsefulnessHigh},
 	}
 	for _, test := range []struct {
 		draw float64
@@ -143,8 +146,8 @@ func TestSelectLearningCardAppliesCooldownBeforePoolChoice(t *testing.T) {
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
 	for _, recentState := range []int{0, 2} {
 		cards := []selectionCard{
-			{cardID: "recent", fsrsState: recentState, dueAt: now, lastPresentationID: 1, lastShownAt: now},
-			{cardID: "alternative", fsrsState: 2 - recentState, dueAt: now},
+			{cardID: "recent", fsrsState: recentState, dueAt: now, lastPresentationID: 1, lastShownAt: now, usefulness: domain.UsefulnessHigh},
+			{cardID: "alternative", fsrsState: 2 - recentState, dueAt: now, usefulness: domain.UsefulnessLow},
 		}
 		for _, draw := range []float64{0, 0.99} {
 			selected, ok := selectLearningCard(cards, 1, now, func() float64 { return draw })
@@ -165,8 +168,8 @@ func TestSelectLearningCardFutureFallbackRespectsEligibilityAndCooldown(t *testi
 		{
 			name: "recent due still precedes unseen future",
 			cards: []selectionCard{
-				{cardID: "due", fsrsState: 2, dueAt: now, lastPresentationID: 1, lastShownAt: now},
-				{cardID: "future", fsrsState: 2, dueAt: now.Add(time.Minute)},
+				{cardID: "due", fsrsState: 2, dueAt: now, lastPresentationID: 1, lastShownAt: now, usefulness: domain.UsefulnessLow},
+				{cardID: "future", fsrsState: 2, dueAt: now.Add(time.Minute), usefulness: domain.UsefulnessHigh},
 			},
 			want: "due",
 		},
@@ -181,8 +184,8 @@ func TestSelectLearningCardFutureFallbackRespectsEligibilityAndCooldown(t *testi
 		{
 			name: "future failures never outrank earlier due time",
 			cards: []selectionCard{
-				{cardID: "failed", fsrsState: 1, dueAt: now.Add(24 * time.Hour), consecutiveFailures: 100, lapses: 100},
-				{cardID: "near", fsrsState: 2, dueAt: now.Add(time.Minute)},
+				{cardID: "failed", fsrsState: 1, dueAt: now.Add(24 * time.Hour), consecutiveFailures: 100, lapses: 100, usefulness: domain.UsefulnessHigh},
+				{cardID: "near", fsrsState: 2, dueAt: now.Add(time.Minute), usefulness: domain.UsefulnessLow},
 			},
 			want: "near",
 		},
@@ -208,6 +211,78 @@ func TestSelectLearningCardFutureFallbackRespectsEligibilityAndCooldown(t *testi
 			if !ok || selected.cardID != test.want {
 				t.Fatalf("selected %q, want %q", selected.cardID, test.want)
 			}
+		})
+	}
+}
+
+func TestLearningSelectionUsesCurrentPersistedUsefulness(t *testing.T) {
+	for _, state := range []int{0, 2} {
+		t.Run(fmt.Sprintf("fsrs-state-%d", state), func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+			store, err := Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			levels := []domain.Usefulness{domain.UsefulnessLow, domain.UsefulnessNormal, domain.UsefulnessHigh}
+			var items []domain.VocabularyItem
+			var cardIDs []string
+			for _, level := range levels {
+				_, item, err := store.SaveVocabulary(ctx, VocabularyCreate{
+					OwnerKey: "owner", Term: string(level), NormalizedTerm: string(level),
+					Status: domain.LearningStatusNew, Usefulness: level, Now: now,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				items = append(items, item)
+				var cardID string
+				if err := store.sql.QueryRowContext(ctx, "SELECT id FROM learning_cards WHERE vocabulary_item_id = ?", item.ItemID).Scan(&cardID); err != nil {
+					t.Fatal(err)
+				}
+				cardIDs = append(cardIDs, cardID)
+			}
+			if _, err := store.sql.ExecContext(ctx, "UPDATE learning_cards SET fsrs_state = ?, due_at = ?", state, TimeString(now)); err != nil {
+				t.Fatal(err)
+			}
+
+			assertSelectionCounts := func(want []int) {
+				t.Helper()
+				transaction, err := store.sql.BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer transaction.Rollback()
+				cards, recentSinceID, err := loadSelectionCards(ctx, transaction, "owner")
+				if err != nil {
+					t.Fatal(err)
+				}
+				counts := make(map[string]int)
+				for index := range 14 {
+					draw := (float64(index) + 0.5) / 14
+					selected, ok := selectLearningCard(cards, recentSinceID, now, func() float64 { return draw })
+					if !ok {
+						t.Fatal("persisted vocabulary was not selectable")
+					}
+					counts[selected.cardID]++
+				}
+				for index, cardID := range cardIDs {
+					if counts[cardID] != want[index] {
+						t.Fatalf("usefulness selection counts = %v, card %s got %d, want %d", counts, cardID, counts[cardID], want[index])
+					}
+				}
+			}
+
+			assertSelectionCounts([]int{2, 4, 8})
+			for index, level := range []domain.Usefulness{domain.UsefulnessHigh, domain.UsefulnessNormal, domain.UsefulnessLow} {
+				if _, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+					OwnerKey: "owner", ItemID: items[index].ItemID, Usefulness: &level, Now: now,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertSelectionCounts([]int{8, 4, 2})
 		})
 	}
 }

@@ -84,6 +84,95 @@ func TestSaveDoesNotOverwriteAndUpdateIsPartial(t *testing.T) {
 	assertApplicationError(t, err, apperr.InvalidArgument)
 }
 
+func TestUsefulnessPersistsWithoutOverwritingOtherMetadata(t *testing.T) {
+	service := newTestService(t, "owner-one")
+	ctx := context.Background()
+	initial := InitialValues{Usefulness: domain.UsefulnessHigh}
+	saved, err := service.Save(ctx, "bank", initial)
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if saved.Item.Usefulness != domain.UsefulnessHigh || initial.Usefulness != domain.UsefulnessHigh {
+		t.Fatalf("saved usefulness = %q, input = %#v", saved.Item.Usefulness, initial)
+	}
+	duplicate, err := service.Save(ctx, "bank", InitialValues{Usefulness: domain.UsefulnessLow})
+	if err != nil {
+		t.Fatalf("duplicate Save() error = %v", err)
+	}
+	if duplicate.Created || duplicate.Item.ItemID != saved.Item.ItemID || duplicate.Item.Usefulness != domain.UsefulnessHigh {
+		t.Fatalf("duplicate Save() changed usefulness: %#v", duplicate)
+	}
+
+	usefulness := domain.UsefulnessLow
+	updated, err := service.Update(ctx, saved.Item.ItemID, "", UpdateChanges{Usefulness: &usefulness})
+	if err != nil {
+		t.Fatalf("Update(usefulness) error = %v", err)
+	}
+	if updated.Usefulness != domain.UsefulnessLow || updated.Status != saved.Item.Status {
+		t.Fatalf("usefulness-only update = %#v", updated)
+	}
+	notes := []string{"A personal reminder."}
+	preserved, err := service.Update(ctx, "", "bank", UpdateChanges{Notes: &notes})
+	if err != nil {
+		t.Fatalf("Update(notes) error = %v", err)
+	}
+	if preserved.Usefulness != domain.UsefulnessLow || !equalValues(preserved.Notes, notes) {
+		t.Fatalf("partial update = %#v", preserved)
+	}
+	fetched, err := service.Get(ctx, saved.Item.ItemID, "")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if fetched.Usefulness != domain.UsefulnessLow {
+		t.Fatalf("Get() usefulness = %q", fetched.Usefulness)
+	}
+	listed, err := service.List(ctx, ListOptions{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed.Items) != 1 || listed.Items[0].Usefulness != domain.UsefulnessLow {
+		t.Fatalf("List() = %#v", listed)
+	}
+
+	empty := InitialValues{}
+	normal, err := service.Save(ctx, "ordinary", empty)
+	if err != nil {
+		t.Fatalf("Save(default) error = %v", err)
+	}
+	if normal.Item.Usefulness != domain.UsefulnessNormal || empty.Usefulness != "" {
+		t.Fatalf("default usefulness = %q, input = %#v", normal.Item.Usefulness, empty)
+	}
+}
+
+func TestInvalidUsefulnessDoesNotMutateVocabulary(t *testing.T) {
+	service := newTestService(t, "owner-one")
+	ctx := context.Background()
+	saved, err := service.Save(ctx, "bank", InitialValues{Usefulness: domain.UsefulnessHigh})
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	for _, invalid := range []domain.Usefulness{"urgent", "HIGH", ""} {
+		t.Run(string(invalid), func(t *testing.T) {
+			if invalid != "" {
+				_, err := service.Save(ctx, "invalid", InitialValues{Usefulness: invalid})
+				assertApplicationError(t, err, apperr.InvalidArgument)
+				_, err = service.Get(ctx, "", "invalid")
+				assertApplicationError(t, err, apperr.NotFound)
+			}
+			notes := []string{"Must not be persisted."}
+			_, err := service.Update(ctx, saved.Item.ItemID, "", UpdateChanges{Usefulness: &invalid, Notes: &notes})
+			assertApplicationError(t, err, apperr.InvalidArgument)
+			fetched, err := service.Get(ctx, saved.Item.ItemID, "")
+			if err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+			if fetched.Usefulness != domain.UsefulnessHigh || len(fetched.Notes) != 0 {
+				t.Fatalf("invalid update mutated item: %#v", fetched)
+			}
+		})
+	}
+}
+
 func TestListFiltersLearningMetadataAndUsesBoundCursor(t *testing.T) {
 	service := newTestService(t, "owner-one")
 	ctx := context.Background()

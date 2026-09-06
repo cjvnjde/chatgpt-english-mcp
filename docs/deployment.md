@@ -168,6 +168,8 @@ The worker image pins Python `3.14.7` and `anki==26.8.1`. The package was select
 
 Before upgrading, stop and back up the worker, verify the new stable package/runtime combination, run the local behavior checks, then exercise a disposable AnkiWeb account. Local collection tests and controlled sync doubles do not prove live protocol compatibility. Live checks need real disposable-account credentials and outbound access; never use a production account to test full-sync recovery.
 
+The usefulness update introduces export schema version `2`; rebuild and redeploy both the Go service and worker together. Migration `008` initializes all saved words to `normal` without resetting learning state. Usefulness affects MCP selection only, not Anki fields, tags, or scheduling.
+
 For live integration, use a separate deployment environment containing only disposable-account credentials. Stop its polling worker before the test. The command requires an explicit acknowledgement and matching account email:
 
 ```sh

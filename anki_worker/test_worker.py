@@ -28,6 +28,7 @@ def vocabulary(item_id="one", **changes):
         "term": "word",
         "normalizedTerm": "word",
         "status": "new",
+        "usefulness": "normal",
         "tags": [],
         "notes": [],
         "examples": [],
@@ -40,7 +41,7 @@ def vocabulary(item_id="one", **changes):
 
 def envelope(config, items, digest="a" * 64):
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "namespace": config.namespace,
         "owner": config.owner,
         "digest": digest,
@@ -99,6 +100,37 @@ class RealCollectionCase(unittest.TestCase):
 
 
 class ReconciliationTests(RealCollectionCase):
+    def test_usefulness_changes_leave_anki_content_and_schedule_unchanged(self):
+        item = vocabulary(usefulness="low")
+        self.apply(item)
+        note = self.managed_note()
+        card = note.cards()[0]
+        card.queue = 2
+        card.type = 2
+        card.ivl = 14
+        card.due = 40
+        card.reps = 5
+        self.collection.update_card(card)
+
+        item["usefulness"] = "high"
+        self.apply(item)
+        restored = self.managed_note()
+        restored_card = restored.cards()[0]
+        self.assertEqual(
+            (restored.id, restored.fields, restored.tags),
+            (note.id, note.fields, note.tags),
+        )
+        self.assertEqual(
+            (
+                restored_card.id,
+                restored_card.queue,
+                restored_card.ivl,
+                restored_card.due,
+                restored_card.reps,
+            ),
+            (card.id, 2, 14, 40, 5),
+        )
+
     def test_remote_content_edits_and_movement_preserve_card_and_schedule(self):
         item = vocabulary(
             tags=["Tag", "tag", "two words"], customDescription="Original"
@@ -311,6 +343,7 @@ class ValidationTests(unittest.TestCase):
             ("owner", "other"),
             ("digest", "not-a-digest"),
             ("schemaVersion", True),
+            ("schemaVersion", 1),
         ):
             payload = deepcopy(good)
             payload[key] = value
@@ -325,6 +358,9 @@ class ValidationTests(unittest.TestCase):
         nested = deepcopy(good)
         nested["items"][0]["vocabulary"]["descriptionSource"] = {"url": ["bad"]}
         variants.append(nested)
+        unknown_usefulness = deepcopy(good)
+        unknown_usefulness["items"][0]["vocabulary"]["usefulness"] = "urgent"
+        variants.append(unknown_usefulness)
         for payload in variants:
             with self.subTest(payload=payload), self.assertRaises(WorkerError):
                 validate_snapshot(payload, self.config)

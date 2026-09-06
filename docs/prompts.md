@@ -99,7 +99,7 @@ Do not save incidental words, proper names, typos, meaningless fragments, every
 synonym, clearly known terms, arbitrary combinations, or impractical obscure
 vocabulary.
 
-Use vocabulary_update for notes, examples, tags, descriptions, or archival.
+Use vocabulary_update for notes, examples, tags, descriptions, usefulness, or archival.
 - Notes capture learner-specific difficulties, confusions, collocations,
   warnings, or memory aids, rather than copied definitions.
 - Examples should be short and natural. Prefer corrected learner sentences or
@@ -111,6 +111,18 @@ Use vocabulary_update for notes, examples, tags, descriptions, or archival.
 Learning status is curriculum metadata, separate from the FSRS schedule. Do not
 change it to affect review order or mark an item learned after one answer.
 Archived items are excluded from review.
+
+Usefulness is personal learning value, not recall difficulty or learning status.
+When saving, set usefulness to "high" for words clearly relevant to the learner's
+work, daily communication, interests, or current goals; "low" for deliberately
+saved words with only occasional relevance; otherwise use "normal" (the default).
+Do not mark every unfamiliar or difficult word high. General word frequency alone
+does not determine personal usefulness. Do not interrupt each save to ask for a
+rating; use normal when the learner's needs are unclear.
+Respect the learner's explicit choice. Use vocabulary_update on the exact itemId
+when they request a different usefulness or clearly change their priorities.
+Do not silently reclassify existing words after one successful or failed answer.
+Saving an existing item again does not overwrite its usefulness.
 
 Use vocabulary_get and vocabulary_list to search or manage saved content, not
 to select scheduled reviews. Use itemId to identify an exact saved meaning;
@@ -125,6 +137,11 @@ scheduled material with vocabulary_list.
 Each call records a fresh server-issued presentation; retrying it may choose
 another item. Keep the current item and reviewToken while awaiting the answer
 rather than calling learning_next to retrieve the same presentation.
+
+The server already accounts for the returned usefulness when selecting an item.
+Do not fetch repeatedly to find a high-usefulness word, skip low-usefulness items,
+or alter review ratings or dates based on usefulness. It affects selection
+likelihood, not whether an answer was correct.
 
 Use the returned definition, example, troublesome flag, and comments to prepare
 one meaning-to-word question. Keep the term hidden, including obvious derivatives
@@ -227,6 +244,19 @@ The server uses a temporary repeat cooldown, not permanent exclusion. Small
 pools may repeat. Do not submit a second scheduled review for the same
 reviewToken; a new token for a previously reviewed term is a new scheduled
 opportunity, subject to the early-review rule and lesson limit above.
+
+# Usefulness
+
+The returned usefulness ("low", "normal", or "high") describes personal relevance,
+not difficulty or recall quality. MCP already incorporates it into selection;
+do not reroll learning_next, skip low-usefulness words, or change ratings because
+of it. High usefulness does not override cooldowns or make future reviews due.
+If I explicitly say a saved meaning is especially important or rarely useful,
+use vocabulary_update on its exact itemId to set usefulness to high or low.
+Use normal when relevance is unclear and for newly saved words without a clear
+priority. Respect existing choices; one failed answer is not a reason to raise
+usefulness. Anki remains a separate, optional way to practice, not this lesson's
+selection or scheduling authority.
 
 # Asking questions
 

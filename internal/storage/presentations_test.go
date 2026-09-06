@@ -200,13 +200,18 @@ func TestPresentationMigrationPreservesScheduleWithoutInventingHistory(t *testin
 			t.Fatal(err)
 		}
 	}
-	previous := &DB{sql: legacy}
 	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
-	item := savePresentationVocabulary(t, previous, "owner", "steadfast", now.Add(-24*time.Hour))
+	itemID := "steadfast-id"
+	if _, err := legacy.ExecContext(ctx, `
+		INSERT INTO vocabulary_items(id, owner_key, term, normalized_term, created_at, updated_at, sense_key)
+		VALUES (?, 'owner', 'steadfast', 'steadfast', ?, ?, '')
+	`, itemID, TimeString(now.Add(-24*time.Hour)), TimeString(now.Add(-24*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := legacy.ExecContext(ctx, `
 		UPDATE learning_cards SET fsrs_state = 2, repetitions = 5, stability = 4,
 			due_at = ?, last_review_at = ? WHERE vocabulary_item_id = ?
-	`, TimeString(now.Add(time.Hour)), TimeString(now.Add(-24*time.Hour)), item.ItemID); err != nil {
+	`, TimeString(now.Add(time.Hour)), TimeString(now.Add(-24*time.Hour)), itemID); err != nil {
 		t.Fatal(err)
 	}
 	before, err := scanLearningCard(legacy.QueryRowContext(ctx, "SELECT "+learningCardColumns+" FROM learning_cards card"))

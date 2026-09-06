@@ -13,6 +13,7 @@ var schemaOptions = &jsonschema.ForOptions{
 	TypeSchemas: map[reflect.Type]*jsonschema.Schema{
 		reflect.TypeFor[domain.CacheState]():     enumSchema("hit", "miss", "refreshed", "stale_fallback"),
 		reflect.TypeFor[domain.LearningStatus](): enumSchema("new", "learning", "learned", "archived"),
+		reflect.TypeFor[domain.Usefulness]():     enumSchema("low", "normal", "high"),
 		reflect.TypeFor[domain.ReviewRating]():   enumSchema("again", "hard", "good", "easy"),
 		reflect.TypeFor[SortOrder]():             enumSchema("recent", "oldest", "alphabetical"),
 	},

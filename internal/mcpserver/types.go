@@ -18,6 +18,7 @@ type DictionaryLookupInput struct {
 type VocabularySaveInput struct {
 	Term              string                    `json:"term" jsonschema:"word, phrase, idiom, or expression to save"`
 	Status            domain.LearningStatus     `json:"status,omitempty" jsonschema:"initial learning status; defaults to new"`
+	Usefulness        domain.Usefulness         `json:"usefulness,omitempty" jsonschema:"personal learning usefulness, not difficulty; defaults to normal"`
 	Tags              []string                  `json:"tags,omitempty" jsonschema:"initial normalized learning tags"`
 	CustomDescription *string                   `json:"customDescription,omitempty" jsonschema:"initial learner description from any source"`
 	DescriptionSource *domain.DescriptionSource `json:"descriptionSource,omitempty" jsonschema:"source attribution for the custom description"`
@@ -29,6 +30,7 @@ type VocabularySaveInput struct {
 
 type VocabularyUpdateChanges struct {
 	Status            *domain.LearningStatus    `json:"status,omitempty" jsonschema:"replacement learning status"`
+	Usefulness        *domain.Usefulness        `json:"usefulness,omitempty" jsonschema:"replacement personal learning usefulness, not difficulty"`
 	Tags              *[]string                 `json:"tags,omitempty" jsonschema:"replacement tags; an empty array clears them"`
 	CustomDescription *string                   `json:"customDescription,omitempty" jsonschema:"replacement description; an empty string clears it"`
 	DescriptionSource *domain.DescriptionSource `json:"descriptionSource,omitempty" jsonschema:"replacement source; an empty object clears it"`

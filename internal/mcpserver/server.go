@@ -93,6 +93,7 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 		return err
 	}
 	configureInputSchema(inputSchema)
+	setDefault(inputSchema, "usefulness", `"normal"`)
 	outputSchema, err := inferredSchema[vocabulary.SaveResult]()
 	if err != nil {
 		return err
@@ -111,6 +112,7 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularySaveInput) (vocabulary.SaveResult, error) {
 		return service.Save(ctx, input.Term, vocabulary.InitialValues{
 			Status:            input.Status,
+			Usefulness:        input.Usefulness,
 			Tags:              input.Tags,
 			CustomDescription: input.CustomDescription,
 			DescriptionSource: input.DescriptionSource,
@@ -143,7 +145,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_update",
 		Title:       "Update saved vocabulary",
-		Description: "Partially update an existing item's status, tags, description source, notes, or personal examples. Omitted fields are preserved.",
+		Description: "Partially update an item's status, personal learning usefulness, tags, description source, notes, or examples. Omitted fields are preserved.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			OpenWorldHint:   &closedWorld,
@@ -151,6 +153,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularyUpdateInput) (domain.VocabularyItem, error) {
 		item, err := service.Update(ctx, input.ItemID, input.Term, vocabulary.UpdateChanges{
 			Status:            input.Changes.Status,
+			Usefulness:        input.Changes.Usefulness,
 			Tags:              input.Changes.Tags,
 			CustomDescription: input.Changes.CustomDescription,
 			DescriptionSource: input.Changes.DescriptionSource,
@@ -260,7 +263,7 @@ func registerLearningNext(server *mcp.Server, service *learning.Service, logger 
 	return registerTool(server, &mcp.Tool{
 		Name:        "learning_next",
 		Title:       "Get the next vocabulary item",
-		Description: "Issue and record one presentation of an active vocabulary item for production recall. Due and new cards are selected with weighted variety and a short repeat cooldown; future reviews are used only when neither is available. Every call records a fresh presentation and retries may select a different item. Pass the unchanged reviewToken to learning_review after an answer.",
+		Description: "Issue and record one presentation of an active vocabulary item for production recall. Due and new cards are selected with usefulness-weighted variety and a short repeat cooldown; future reviews are used only when neither is available. Every call records a fresh presentation and retries may select a different item. Pass the unchanged reviewToken to learning_review after an answer.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: &destructive,

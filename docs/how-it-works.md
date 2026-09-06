@@ -9,7 +9,7 @@ The server can:
 - look up words, phrases, idioms, phrasal verbs, and expressions on Cambridge Dictionary;
 - cache complete lookup snapshots, including definitions, examples, pronunciation, audio, images, related words, idioms, and collocations;
 - save a personal vocabulary item independently of a dictionary lookup;
-- attach custom descriptions and source attribution, notes, examples, tags, and a learning status;
+- attach custom descriptions and source attribution, notes, examples, tags, learning status, and personal usefulness;
 - browse and filter saved vocabulary;
 - choose exactly one item for production-recall practice;
 - store immutable review attempts and optional notes about mistakes;
@@ -33,6 +33,7 @@ Empty lookup results are saved, but an ordinary future lookup retries them. If a
 A vocabulary item belongs to the namespace configured by `MCP_OWNER_KEY` and represents one learnable meaning. Multiple items may have the same normalized term. They share a cached dictionary lookup but have independent metadata, cards, and review histories. An item can exist without dictionary data and can contain:
 
 - `new`, `learning`, `learned`, or `archived` status;
+- `low`, `normal`, or `high` usefulness;
 - normalized tags;
 - a custom description with optional source attribution;
 - ordered personal notes and examples;
@@ -42,6 +43,8 @@ A vocabulary item belongs to the namespace configured by `MCP_OWNER_KEY` and rep
 Saving is idempotent for the same normalized term and selected definition. A different selected definition creates a separate item. Intentional edits go through `vocabulary_update`. Archived items stay stored but are excluded from practice.
 
 Learning status is learner-managed metadata. FSRS reviews do not automatically change `new` to `learning` or `learned`; all three active statuses remain eligible for selection. Only `archived` removes an item from the review queue.
+
+Usefulness measures personal relevance, independently of recall difficulty and status. It defaults to `normal`; migration also sets every existing vocabulary item to `normal` without resetting cards, review tokens, or history. Set it when saving or deliberately change it with `vocabulary_update`. Changing usefulness changes selection weight, not FSRS review dates. Different saved senses can have different usefulness.
 
 ### Learning state
 
@@ -103,11 +106,12 @@ After feedback, call `learning_next` again only when the learner wants another i
 2. Avoid cards in the owner's last three presentation events whose issuance times fall within the past 30 minutes, when another eligible card exists. If all eligible cards are recent, choose the least recently presented so small pools rotate. One active card can repeat; the cooldown is finite, not permanent exclusion.
 3. When both due and new pools remain after the cooldown, choose the new pool with probability 20% and the due pool otherwise. This is an approximate 80/20 mix across many such selections, not a quota: availability and cooldown can change the observed mix.
 4. Choose randomly within the selected pool using weights. Due cards receive an urgency multiplier of `1 + min(overdue time / max(scheduled interval, 1 day), 4)` and a failure multiplier of `1 + 0.5 × min(consecutive failures, 2) + 0.25 × min(lapses, 3)`. Both are bounded, so troublesome cards get extra weight without permanently dominating.
-5. Apply a recency multiplier of `0.25 + 0.75 × clamp(time since last presentation / 24 hours, 0, 1)` to due and new cards; never-presented cards have multiplier 1. New cards use only this weight. The short cooldown expires after 30 minutes, while recency weight gradually recovers over 24 hours.
+5. Apply a recency multiplier of `0.25 + 0.75 × clamp(time since last presentation / 24 hours, 0, 1)` to due and new cards; never-presented cards have multiplier 1. The short cooldown expires after 30 minutes, while recency weight gradually recovers over 24 hours.
+6. Multiply both pools' card weights by personal usefulness: `low ×0.5`, `normal ×1`, `high ×2`. New-card weight is recency × usefulness; due-card weight is urgency × failures × recency × usefulness. All else equal within the selected pool, a high-usefulness word has twice a normal word's selection weight, while low-usefulness words remain selectable. This does not change the 20% new-pool probability or bypass eligibility and cooldown rules.
 
-Only when no due or new cards exist does selection fall back to a future review: choose the nearest due time among nonrecent cards if possible, otherwise the least recently presented card. Failure counts do not move a later future review ahead of a nearer one.
+Only when no due or new cards exist does selection fall back to a future review: choose the nearest due time among nonrecent cards if possible, otherwise the least recently presented card. Neither usefulness nor failure counts move a later future review ahead of a nearer one.
 
-The response describes the selected card with `reason`: `troublesome`, `failed`, `overdue`, `due`, `new`, or `early`. These descriptions are not a strict priority ordering; the presentation event's selection kind separately records whether the card was new, due, or early.
+The response includes the selected vocabulary item's `usefulness` and describes the selected card with `reason`: `troublesome`, `failed`, `overdue`, `due`, `new`, or `early`. These descriptions are not a strict priority ordering; the presentation event's selection kind separately records whether the card was new, due, or early. Tutors should use the server's selection rather than rerolling for a more useful word, and grade recall independently of usefulness.
 
 An item becomes `troublesome` after two consecutive `again` ratings or three total lapses. A tutor should then change the cue, contrast commonly confused terms, or introduce a mnemonic instead of repeating the same question.
 

@@ -48,6 +48,7 @@ type SaveResult struct {
 
 type InitialValues struct {
 	Status            domain.LearningStatus
+	Usefulness        domain.Usefulness
 	Tags              []string
 	CustomDescription *string
 	DescriptionSource *domain.DescriptionSource
@@ -59,6 +60,7 @@ type InitialValues struct {
 
 type UpdateChanges struct {
 	Status            *domain.LearningStatus
+	Usefulness        *domain.Usefulness
 	Tags              *[]string
 	CustomDescription *string
 	DescriptionSource *domain.DescriptionSource
@@ -145,6 +147,7 @@ func (service *Service) Save(ctx context.Context, term string, initial InitialVa
 		NormalizedTerm:          normalizedTerm,
 		LookupID:                lookupID,
 		Status:                  metadata.Status,
+		Usefulness:              metadata.Usefulness,
 		Tags:                    metadata.Tags,
 		CustomDescription:       metadata.CustomDescription,
 		DescriptionSource:       metadata.DescriptionSource,
@@ -351,6 +354,7 @@ func validateTerm(term string) (displayTerm, normalizedTerm string, err error) {
 
 type normalizedMetadata struct {
 	Status            domain.LearningStatus
+	Usefulness        domain.Usefulness
 	Tags              []string
 	CustomDescription string
 	DescriptionSource *domain.DescriptionSource
@@ -365,6 +369,13 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 	}
 	if !status.Valid() {
 		return normalizedMetadata{}, apperr.New(apperr.InvalidArgument, "status is unsupported")
+	}
+	usefulness := input.Usefulness
+	if usefulness == "" {
+		usefulness = domain.UsefulnessNormal
+	}
+	if !usefulness.Valid() {
+		return normalizedMetadata{}, apperr.New(apperr.InvalidArgument, "usefulness is unsupported")
 	}
 	description, err := normalizeDescription(input.CustomDescription)
 	if err != nil {
@@ -394,6 +405,7 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 	}
 	return normalizedMetadata{
 		Status:            status,
+		Usefulness:        usefulness,
 		Tags:              tags,
 		CustomDescription: description,
 		DescriptionSource: source,
@@ -403,8 +415,8 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 }
 
 func normalizeUpdateChanges(input UpdateChanges, current domain.VocabularyItem) (storage.VocabularyUpdate, error) {
-	if input.Status == nil && input.Tags == nil && input.CustomDescription == nil &&
-		input.DescriptionSource == nil && input.Notes == nil && input.Examples == nil {
+	if input.Status == nil && input.Usefulness == nil && input.Tags == nil &&
+		input.CustomDescription == nil && input.DescriptionSource == nil && input.Notes == nil && input.Examples == nil {
 		return storage.VocabularyUpdate{}, apperr.New(apperr.InvalidArgument, "changes must contain at least one field")
 	}
 
@@ -415,6 +427,13 @@ func normalizeUpdateChanges(input UpdateChanges, current domain.VocabularyItem) 
 		}
 		status := *input.Status
 		update.Status = &status
+	}
+	if input.Usefulness != nil {
+		if !input.Usefulness.Valid() {
+			return storage.VocabularyUpdate{}, apperr.New(apperr.InvalidArgument, "usefulness is unsupported")
+		}
+		usefulness := *input.Usefulness
+		update.Usefulness = &usefulness
 	}
 	if input.Tags != nil {
 		tags, err := normalizeTags(*input.Tags)

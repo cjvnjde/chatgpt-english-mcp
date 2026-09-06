@@ -24,6 +24,7 @@ type VocabularyCreate struct {
 	NormalizedTerm          string
 	LookupID                string
 	Status                  domain.LearningStatus
+	Usefulness              domain.Usefulness
 	Tags                    []string
 	CustomDescription       string
 	DescriptionSource       *domain.DescriptionSource
@@ -41,6 +42,7 @@ type VocabularyUpdate struct {
 	OwnerKey             string
 	ItemID               string
 	Status               *domain.LearningStatus
+	Usefulness           *domain.Usefulness
 	Tags                 *[]string
 	CustomDescription    *string
 	SetDescriptionSource bool
@@ -67,6 +69,14 @@ func (db *DB) SaveVocabulary(
 	ctx context.Context,
 	input VocabularyCreate,
 ) (created bool, item domain.VocabularyItem, err error) {
+	usefulness := input.Usefulness
+	if usefulness == "" {
+		usefulness = domain.UsefulnessNormal
+	}
+	if !usefulness.Valid() {
+		return false, domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary usefulness %q", usefulness)
+	}
+
 	itemID, err := NewID()
 	if err != nil {
 		return false, domain.VocabularyItem{}, err
@@ -96,10 +106,10 @@ func (db *DB) SaveVocabulary(
 	result, err := db.sql.ExecContext(ctx, `
 		INSERT INTO vocabulary_items(
 			id, owner_key, term, normalized_term, created_at, updated_at,
-			lookup_id, custom_description, learning_status,
+			lookup_id, custom_description, learning_status, usefulness,
 			description_source_json, notes_json, examples_json, tags_json,
 			sense_key, context, selected_entry_index, selected_definition_index, selected_definition_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(owner_key, normalized_term, sense_key) DO NOTHING
 	`,
 		itemID,
@@ -111,6 +121,7 @@ func (db *DB) SaveVocabulary(
 		sql.NullString{String: input.LookupID, Valid: input.LookupID != ""},
 		input.CustomDescription,
 		input.Status,
+		usefulness,
 		descriptionSourceJSON,
 		notesJSON,
 		examplesJSON,
@@ -144,11 +155,18 @@ func (db *DB) SaveVocabulary(
 }
 
 func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (domain.VocabularyItem, error) {
-	assignments := make([]string, 0, 7)
-	arguments := make([]any, 0, 10)
+	assignments := make([]string, 0, 9)
+	arguments := make([]any, 0, 11)
 	if input.Status != nil {
 		assignments = append(assignments, "learning_status = ?")
 		arguments = append(arguments, *input.Status)
+	}
+	if input.Usefulness != nil {
+		if !input.Usefulness.Valid() {
+			return domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary usefulness %q", *input.Usefulness)
+		}
+		assignments = append(assignments, "usefulness = ?")
+		arguments = append(arguments, *input.Usefulness)
 	}
 	if input.Tags != nil {
 		encoded, err := encodeStringList(*input.Tags, "vocabulary tags")
@@ -332,7 +350,7 @@ func (db *DB) DeleteVocabulary(ctx context.Context, ownerKey, itemID string) err
 
 const vocabularySelect = `
 	SELECT
-		v.id, v.term, v.normalized_term, v.learning_status, v.tags_json,
+		v.id, v.term, v.normalized_term, v.learning_status, v.usefulness, v.tags_json,
 		v.custom_description, v.description_source_json, v.notes_json,
 		v.examples_json, v.context, v.selected_entry_index, v.selected_definition_index,
 		v.selected_definition_json, v.created_at, v.updated_at,
@@ -371,6 +389,7 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		&item.Term,
 		&item.NormalizedTerm,
 		&item.Status,
+		&item.Usefulness,
 		&tagsJSON,
 		&item.CustomDescription,
 		&descriptionSourceJSON,
@@ -401,6 +420,9 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 	}
 	if !item.Status.Valid() {
 		return domain.VocabularyItem{}, fmt.Errorf("%w: vocabulary item %s learning_status", ErrCorruptData, item.ItemID)
+	}
+	if !item.Usefulness.Valid() {
+		return domain.VocabularyItem{}, fmt.Errorf("%w: vocabulary item %s usefulness", ErrCorruptData, item.ItemID)
 	}
 	if err := decodeJSON(tagsJSON, &item.Tags, item.ItemID, "tags"); err != nil {
 		return domain.VocabularyItem{}, err

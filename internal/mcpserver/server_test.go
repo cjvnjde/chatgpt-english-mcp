@@ -48,39 +48,7 @@ func (provider *fixtureProvider) Lookup(context.Context, string) (domain.Diction
 
 func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	ctx := context.Background()
-	store, err := storage.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("storage.Open() error = %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	provider := &fixtureProvider{}
-	source := storage.SourceVersion{
-		Provider:      provider.Name(),
-		ParserVersion: provider.ParserVersion(),
-	}
-	server, err := New(Services{
-		Dictionary: dictionary.NewService(store, provider, logger),
-		Vocabulary: vocabulary.NewService(store, "owner-one", source),
-		Learning:   learning.NewService(store, "owner-one"),
-	}, logger)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatalf("server.Connect() error = %v", err)
-	}
-	t.Cleanup(func() { _ = serverSession.Close() })
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client.Connect() error = %v", err)
-	}
-	t.Cleanup(func() { _ = clientSession.Close() })
+	clientSession, provider := newTestSession(t, ctx)
 
 	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
@@ -238,6 +206,135 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	stillCached := callTool[domain.DictionaryLookupResult](t, ctx, clientSession, "dictionary_lookup", DictionaryLookupInput{Term: "bank"})
 	if stillCached.LookupID != refreshed.LookupID || stillCached.Cache.State != domain.CacheHit {
 		t.Fatalf("lookup after vocabulary delete = %#v", stillCached)
+	}
+}
+
+func TestMCPUsefulnessMetadataAndValidation(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t, ctx)
+	saved := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "bank", "usefulness": "high",
+	})
+	if !saved.Created || saved.Usefulness != domain.UsefulnessHigh {
+		t.Fatalf("saved usefulness = %#v", saved)
+	}
+	duplicate := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "bank", "usefulness": "low",
+	})
+	if duplicate.Created || duplicate.ItemID != saved.ItemID || duplicate.Usefulness != domain.UsefulnessHigh {
+		t.Fatalf("duplicate save changed usefulness: %#v", duplicate)
+	}
+
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "unknown", value: "urgent"},
+		{name: "empty", value: ""},
+		{name: "null", value: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertToolInvalidArgument(t, ctx, session, "vocabulary_save", map[string]any{
+				"term": "invalid", "usefulness": test.value,
+			})
+			assertToolInvalidArgument(t, ctx, session, "vocabulary_update", map[string]any{
+				"itemId": saved.ItemID,
+				"changes": map[string]any{
+					"usefulness": test.value,
+					"notes":      []string{"Must not be persisted."},
+				},
+			})
+			items := callTool[VocabularyListOutput](t, ctx, session, "vocabulary_list", VocabularyListInput{})
+			if len(items.Items) != 1 || items.Items[0].ItemID != saved.ItemID ||
+				items.Items[0].Usefulness != domain.UsefulnessHigh || len(items.Items[0].Notes) != 0 {
+				t.Fatalf("invalid input mutated vocabulary: %#v", items)
+			}
+		})
+	}
+
+	updated := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", map[string]any{
+		"itemId": saved.ItemID, "changes": map[string]any{"usefulness": "low"},
+	})
+	if updated.Usefulness != domain.UsefulnessLow || updated.Status != saved.Status {
+		t.Fatalf("usefulness-only update = %#v", updated)
+	}
+	preserved := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", map[string]any{
+		"term": "bank", "changes": map[string]any{"notes": []string{"A personal reminder."}},
+	})
+	if preserved.Usefulness != domain.UsefulnessLow || len(preserved.Notes) != 1 {
+		t.Fatalf("partial update = %#v", preserved)
+	}
+	fetched := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_get", vocabularyGetByIDInput{ItemID: saved.ItemID})
+	if fetched.Usefulness != domain.UsefulnessLow {
+		t.Fatalf("get usefulness = %q", fetched.Usefulness)
+	}
+	listed := callTool[VocabularyListOutput](t, ctx, session, "vocabulary_list", VocabularyListInput{})
+	if len(listed.Items) != 1 || listed.Items[0].Usefulness != domain.UsefulnessLow {
+		t.Fatalf("list usefulness = %#v", listed)
+	}
+	next := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{})
+	if next.Term != "bank" || next.Usefulness != domain.UsefulnessLow {
+		t.Fatalf("next usefulness = %#v", next)
+	}
+	normal := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{"term": "ordinary"})
+	if normal.Usefulness != domain.UsefulnessNormal {
+		t.Fatalf("default usefulness = %q", normal.Usefulness)
+	}
+}
+
+func newTestSession(t *testing.T, ctx context.Context) (*mcp.ClientSession, *fixtureProvider) {
+	t.Helper()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("storage.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	provider := &fixtureProvider{}
+	source := storage.SourceVersion{
+		Provider:      provider.Name(),
+		ParserVersion: provider.ParserVersion(),
+	}
+	server, err := New(Services{
+		Dictionary: dictionary.NewService(store, provider, logger),
+		Vocabulary: vocabulary.NewService(store, "owner-one", source),
+		Learning:   learning.NewService(store, "owner-one"),
+	}, logger)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server.Connect() error = %v", err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client.Connect() error = %v", err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+	return clientSession, provider
+}
+
+func assertToolInvalidArgument(t *testing.T, ctx context.Context, session *mcp.ClientSession, name string, arguments any) {
+	t.Helper()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: arguments})
+	if err != nil {
+		t.Fatalf("CallTool(%s) protocol error = %v", name, err)
+	}
+	if !result.IsError {
+		t.Fatalf("CallTool(%s) accepted invalid input", name)
+	}
+	var applicationError struct {
+		Code apperr.Code `json:"code"`
+	}
+	decodeToolContent(t, result, &applicationError)
+	if applicationError.Code != apperr.InvalidArgument {
+		t.Fatalf("CallTool(%s) code = %s, want %s", name, applicationError.Code, apperr.InvalidArgument)
 	}
 }
 

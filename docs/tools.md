@@ -20,10 +20,11 @@ The server implements eight MCP tools over stateless Streamable HTTP. Inputs use
 ```ts
 type CacheState = "hit" | "miss" | "refreshed" | "stale_fallback";
 type LearningStatus = "new" | "learning" | "learned" | "archived";
+type Usefulness = "low" | "normal" | "high";
 type ReviewRating = "again" | "hard" | "good" | "easy";
 ```
 
-A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, tags, optional custom description and source, notes, examples, an optional complete dictionary lookup, and creation/update timestamps.
+A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, an optional complete dictionary lookup, and creation/update timestamps. Usefulness is personal learning relevance, not difficulty or recall quality; existing items migrate to `normal`.
 
 ## `dictionary_lookup`
 
@@ -66,6 +67,7 @@ Entries may contain headwords, parts of speech, UK/US pronunciation and audio, i
 {
   term: string;
   status?: LearningStatus; // default: "new"
+  usefulness?: Usefulness; // default: "normal"
   tags?: string[];
   customDescription?: string;
   descriptionSource?: { title?: string; url?: string };
@@ -85,6 +87,8 @@ For terms with dictionary data, callers should always pass `definition`. Omittin
 
 Tags are trimmed, lowercased, deduplicated, and sorted. `descriptionSource.url`, when present, must be an absolute HTTP(S) URL and requires a non-empty custom description.
 
+Use `high` for vocabulary especially relevant to the learner's goals, `low` for occasional relevance, and `normal` when no priority is known. Saving an already existing meaning does not overwrite usefulness; use `vocabulary_update` for intentional changes.
+
 ## `vocabulary_update`
 
 Identify exactly one item by `itemId` or `term`:
@@ -95,6 +99,7 @@ Identify exactly one item by `itemId` or `term`:
   itemId: string; // or term: string
   changes: {
     status?: LearningStatus;
+    usefulness?: Usefulness;
     tags?: string[];
     customDescription?: string;
     descriptionSource?: { title?: string; url?: string };
@@ -107,6 +112,8 @@ Identify exactly one item by `itemId` or `term`:
 ```
 
 `changes` must contain at least one field. Omitted fields are preserved; supplied arrays replace the previous arrays, so `[]` clears them. An empty custom description clears its source too unless another valid source change is supplied. An empty source object clears only the attribution.
+
+An update containing only `usefulness` is valid. Omission preserves its existing value; an empty string, null, or unsupported value is rejected. This updates vocabulary metadata without resetting the FSRS card, due date, review token, or review history.
 
 ## `vocabulary_get`
 
@@ -165,6 +172,7 @@ This removes the vocabulary item and its learning card. It does not remove cache
   shownAt: string; // server issuance time, RFC3339Nano in UTC
   reviewToken: string;
   term: string;
+  usefulness: Usefulness;
   definition?: string;
   example?: string;
   reason: "troublesome" | "failed" | "overdue" | "due" | "new" | "early";
@@ -185,6 +193,8 @@ This removes the vocabulary item and its learning card. It does not remove cache
 The tool returns exactly one non-archived item. `latestComment` is included when available. `comments` is included only when `includeComments` is true. Pass `reviewToken` unchanged to `learning_review` after the learner answers.
 
 Selection uses weighted variety among due and FSRS-new cards, with a cooldown for the owner's last three presentations within 30 minutes. If all eligible cards are recent, the least recently presented card may repeat. When both pools remain after cooldown, the new pool has a 20% chance; this is an approximate mix, not a quota. Due urgency and failures receive bounded extra weight, while recently presented cards have reduced weight that recovers over 24 hours. Future reviews are considered only when no due or new cards exist, using the nearest nonrecent future review or the least recently presented fallback. See [the complete selection policy](how-it-works.md#how-the-next-item-is-selected).
+
+Within the selected pool, usefulness multiplies each card's weight by `0.5` for `low`, `1` for `normal`, or `2` for `high`. It never bypasses cooldowns, changes the new/due pool ratio, or moves future reviews ahead of eligible items. It does not affect `learning_review` ratings or FSRS intervals.
 
 This tool mutates storage but is non-destructive and non-idempotent. Each committed selection records a fresh immutable event; retries can return different words. `presentationId` identifies that issuance, while `shownAt` records when the server issued it, not proof that a learner saw or answered it. The event retains the card's due time and `reviewToken` at issuance; multiple presentations may share a pending token and link to one eventual review attempt. Neither metadata field is an input to `learning_review`, and presenting an item does not change its FSRS schedule.
 

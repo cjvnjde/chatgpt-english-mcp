@@ -67,7 +67,7 @@ SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchro
 
 `learning_next` is a mutating, non-destructive, non-idempotent operation. Candidate selection, vocabulary hydration, and presentation insertion share one SQLite transaction and connection. Each committed selection records owner/item/card IDs, exercise mode, review token, issuance and due timestamps, and selection kind. The response exposes the event ID and UTC issuance time; issuing an item does not modify FSRS scheduling state or rotate its review token.
 
-Selection uses all due and FSRS-new cards, a last-three-presentations/30-minute cooldown, and bounded urgency, failure, and 24-hour recency weights. A 20% new-pool probability applies only when both pools remain after cooldown. Future cards are fallback-only. See [the selection policy](how-it-works.md#how-the-next-item-is-selected) for the small-pool rotation and future fallback rules.
+Selection uses all due and FSRS-new cards, a last-three-presentations/30-minute cooldown, and bounded urgency, failure, and 24-hour recency weights. Persisted vocabulary usefulness multiplies weights in both pools: low ×0.5, normal ×1, high ×2. A 20% new-pool probability applies only when both pools remain after cooldown. Future cards are fallback-only. See [the selection policy](how-it-works.md#how-the-next-item-is-selected) for the small-pool rotation and future fallback rules.
 
 Timestamp strings may have variable fractional precision: parse them as times before temporal comparisons rather than ordering their SQLite text lexically. Presentation history records server issuance, not guaranteed delivery or human visibility. Request retries append new events, potentially for different items. Review-token linkage can associate several presentations with one accepted review, but does not establish a recall duration. Migrations retain existing timestamps and never backfill invented presentation times.
 
@@ -76,6 +76,8 @@ Timestamp strings may have variable fractional precision: parse them as times be
 SQL migrations live in `internal/storage/migrations/` and are embedded in the binary. Filenames must form an uninterrupted numeric sequence such as `006_description.sql`.
 
 Never modify an applied migration. Its SHA-256 checksum is stored in `schema_migrations`, and a changed checksum prevents startup. Add a new migration instead and test both a fresh database and an upgrade from the previous schema.
+
+Migration `008` adds constrained vocabulary usefulness with a default of `normal` for all existing rows and future inserts that omit it. It does not rewrite learning cards, presentations, review history, or existing vocabulary timestamps.
 
 ## Adding or changing a tool
 
@@ -93,6 +95,8 @@ All new errors exposed to callers should use a stable `apperr` code and avoid le
 The optional private endpoint returns a complete owner-scoped snapshot from one SQLite read transaction. Its metadata includes schema version, stable namespace and owner, item count, explicit completeness, and a SHA-256 snapshot digest. The worker validates the entire snapshot before opening or changing Anki state. It never uses the paginated MCP list as a deletion authority.
 
 Source identity combines integration namespace, encoded owner, and saved item ID. The worker keeps independent ownership mappings so a remote edit to the visible fields or deck cannot evade reconciliation. Every poll downloads remote state into the private worker collection, compares actual fields/tags with the source, and publishes corrections. The application database is never a sync destination.
+
+Snapshot schema version `2` includes required usefulness metadata. The Python worker validates it but does not render it into Anki fields/tags or use it for Anki scheduling. Deploy the Go exporter and Python worker together; older snapshots are rejected instead of silently weakening validation. Existing source IDs, note mappings, and Anki cards remain unchanged.
 
 Install the pinned library into an isolated environment:
 
