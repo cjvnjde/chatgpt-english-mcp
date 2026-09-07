@@ -112,17 +112,23 @@ Learning status is curriculum metadata, separate from the FSRS schedule. Do not
 change it to affect review order or mark an item learned after one answer.
 Archived items are excluded from review.
 
-Usefulness is personal learning value, not recall difficulty or learning status.
-When saving, set usefulness to "high" for words clearly relevant to the learner's
-work, daily communication, interests, or current goals; "low" for deliberately
-saved words with only occasional relevance; otherwise use "normal" (the default).
-Do not mark every unfamiliar or difficult word high. General word frequency alone
-does not determine personal usefulness. Do not interrupt each save to ask for a
-rating; use normal when the learner's needs are unclear.
-Respect the learner's explicit choice. Use vocabulary_update on the exact itemId
-when they request a different usefulness or clearly change their priorities.
-Do not silently reclassify existing words after one successful or failed answer.
-Saving an existing item again does not overwrite its usefulness.
+Usefulness estimates general English value, not personal relevance, recall
+difficulty, or learning status. The server calculates it offline from exact
+matches in bundled word-frequency datasets and an optional API hint.
+Normally omit usefulness when saving and let the server infer it. If you have
+additional evidence about the meaning or expression, you may supply "high" for
+broadly useful English, "low" for uncommon or narrowly useful vocabulary, or
+"normal" for an intermediate assessment. Do not submit normal merely because
+you are uncertain; omission means no vote. Do not rate unfamiliar words high
+just because they are difficult or relevant to one learner's interests.
+Your hint has twice the weight of each matched dataset, but is not an override.
+Treat returned usefulness as the combined result, which may differ from your
+hint. Do not feed that result back into an update or retry to force your rating.
+For idioms or a particular word sense, use general language knowledge when the
+frequency data lacks that context; do not infer phrase frequency from its words.
+Use vocabulary_update on the exact itemId to revise a hint when warranted.
+An unrelated update preserves it, and saving an existing item again does not
+overwrite it. One successful or failed answer is not a reason to reclassify.
 
 Use vocabulary_get and vocabulary_list to search or manage saved content, not
 to select scheduled reviews. Use itemId to identify an exact saved meaning;
@@ -247,16 +253,19 @@ opportunity, subject to the early-review rule and lesson limit above.
 
 # Usefulness
 
-The returned usefulness ("low", "normal", or "high") describes personal relevance,
-not difficulty or recall quality. MCP already incorporates it into selection;
-do not reroll learning_next, skip low-usefulness words, or change ratings because
-of it. High usefulness does not override cooldowns or make future reviews due.
-If I explicitly say a saved meaning is especially important or rarely useful,
-use vocabulary_update on its exact itemId to set usefulness to high or low.
-Use normal when relevance is unclear and for newly saved words without a clear
-priority. Respect existing choices; one failed answer is not a reason to raise
-usefulness. Anki remains a separate, optional way to practice, not this lesson's
-selection or scheduling authority.
+The returned usefulness ("low", "normal", or "high") estimates general English
+value from offline frequency evidence and any saved AI hint, not personal
+relevance, difficulty, or recall quality. MCP already incorporates it into
+selection; do not reroll learning_next, skip low-usefulness words, or change
+ratings because of it. High usefulness does not override cooldowns or make
+future reviews due.
+For newly saved vocabulary, normally omit usefulness for automatic inference.
+When you have additional evidence about an expression's general usefulness,
+you may supply a hint or revise it through vocabulary_update on the exact
+itemId. Hints are double-weighted inputs, not forced overrides; the returned
+result may differ. Do not resubmit the combined result as a new hint.
+One failed answer is not a reason to raise usefulness. Anki remains a separate,
+optional way to practice, not this lesson's selection or scheduling authority.
 
 # Asking questions
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/usefulness"
 )
 
 func TestVocabularyUsefulnessPersistsWithoutReplacingExistingMetadata(t *testing.T) {
@@ -22,7 +23,7 @@ func TestVocabularyUsefulnessPersistsWithoutReplacingExistingMetadata(t *testing
 	t.Cleanup(func() { _ = store.Close() })
 	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	input := VocabularyCreate{
-		OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", SenseKey: "finance",
+		OwnerKey: "owner", Term: "fixture bank sense", NormalizedTerm: "fixture bank sense", SenseKey: "finance",
 		Status: domain.LearningStatusLearning, Tags: []string{"finance"},
 		CustomDescription: "A useful institution", DescriptionSource: &domain.DescriptionSource{Title: "My source"},
 		Notes: []string{"Remember this"}, Examples: []string{"I visited the bank."}, Now: now,
@@ -139,7 +140,7 @@ func TestVocabularyRejectsInvalidUsefulnessWritesAndCorruptReads(t *testing.T) {
 	}
 }
 
-func TestUsefulnessMigrationPreservesVocabularyAndLearningState(t *testing.T) {
+func TestUsefulnessMigrationsPreserveVocabularyAndLearningState(t *testing.T) {
 	ctx := context.Background()
 	legacy := openLegacyDatabase(t, filepath.Join(t.TempDir(), "pre008.sqlite"), 7)
 	store := &DB{sql: legacy}
@@ -219,12 +220,41 @@ func TestUsefulnessMigrationPreservesVocabularyAndLearningState(t *testing.T) {
 		"review_attempts":        "*",
 	}
 	for table := range projections {
-		if _, err := legacy.ExecContext(ctx, "CREATE TEMP TABLE before_"+table+" AS SELECT * FROM "+table); err != nil {
+		if _, err := legacy.ExecContext(ctx, "CREATE TEMP TABLE before_"+table+" AS SELECT "+projections[table]+" FROM "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical := migrations[7]
+	if _, err := legacy.ExecContext(ctx, historical.contents); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range fixtures {
+		var value domain.Usefulness
+		if err := legacy.QueryRowContext(ctx, "SELECT usefulness FROM vocabulary_items WHERE id = ?", fixture.id).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		if value != domain.UsefulnessNormal {
+			t.Fatalf("migration008 assigned %s usefulness %q, want normal", fixture.id, value)
+		}
+	}
+	if _, err := legacy.ExecContext(ctx,
+		"INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+		historical.version, historical.name, historical.checksum, TimeString(now),
+	); err != nil {
+		t.Fatal(err)
+	}
+	hints := []domain.Usefulness{domain.UsefulnessLow, domain.UsefulnessNormal, domain.UsefulnessHigh, domain.UsefulnessLow}
+	for index, fixture := range fixtures {
+		if _, err := legacy.ExecContext(ctx, "UPDATE vocabulary_items SET usefulness = ? WHERE id = ?", hints[index], fixture.id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := store.migrate(ctx); err != nil {
-		t.Fatalf("migrate pre008 database: %v", err)
+		t.Fatalf("migrate pre009 database: %v", err)
 	}
 	assertPreserved := func(table, columns string) {
 		t.Helper()
@@ -244,9 +274,16 @@ func TestUsefulnessMigrationPreservesVocabularyAndLearningState(t *testing.T) {
 	for table, columns := range projections {
 		assertPreserved(table, columns)
 	}
-	for _, fixture := range fixtures {
+	for index, fixture := range fixtures {
+		var hint domain.Usefulness
+		if err := legacy.QueryRowContext(ctx, "SELECT usefulness_hint FROM vocabulary_items WHERE id = ?", fixture.id).Scan(&hint); err != nil {
+			t.Fatal(err)
+		}
+		if hint != hints[index] {
+			t.Fatalf("migrated %s hint = %q, want %q", fixture.id, hint, hints[index])
+		}
 		item, err := store.VocabularyByID(ctx, fixture.owner, fixture.id)
-		if err != nil || item.Usefulness != domain.UsefulnessNormal || item.Status != fixture.status {
+		if err != nil || item.Usefulness != usefulness.Estimate("bank", hint) || item.Status != fixture.status {
 			t.Fatalf("migrated %s = %#v, error %v", fixture.id, item, err)
 		}
 		low := domain.UsefulnessLow

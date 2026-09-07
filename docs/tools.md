@@ -24,7 +24,7 @@ type Usefulness = "low" | "normal" | "high";
 type ReviewRating = "again" | "hard" | "good" | "easy";
 ```
 
-A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, an optional complete dictionary lookup, and creation/update timestamps. Usefulness is personal learning relevance, not difficulty or recall quality; existing items migrate to `normal`.
+A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, an optional complete dictionary lookup, and creation/update timestamps. Returned usefulness is the effective general-usefulness classification calculated from offline frequency evidence and any saved API hint, not personal relevance, difficulty, or recall quality.
 
 ## `dictionary_lookup`
 
@@ -67,7 +67,7 @@ Entries may contain headwords, parts of speech, UK/US pronunciation and audio, i
 {
   term: string;
   status?: LearningStatus; // default: "new"
-  usefulness?: Usefulness; // default: "normal"
+  usefulness?: Usefulness; // optional hint; omission uses only offline evidence
   tags?: string[];
   customDescription?: string;
   descriptionSource?: { title?: string; url?: string };
@@ -87,7 +87,9 @@ For terms with dictionary data, callers should always pass `definition`. Omittin
 
 Tags are trimmed, lowercased, deduplicated, and sorted. `descriptionSource.url`, when present, must be an absolute HTTP(S) URL and requires a non-empty custom description.
 
-Use `high` for vocabulary especially relevant to the learner's goals, `low` for occasional relevance, and `normal` when no priority is known. Saving an already existing meaning does not overwrite usefulness; use `vocabulary_update` for intentional changes.
+Omit `usefulness` to let the server infer it from exact normalized matches in its bundled wordfreq and FrequencyWords datasets. An explicit value is a general-usefulness hint with twice the weight of each matched dataset, not a forced override. Use `high` for broadly useful English, `low` for uncommon or narrowly useful vocabulary, and `normal` for an intermediate assessment. Do not submit `normal` merely because you have no assessment: omit the field instead. Missing sources abstain; with no evidence or hint the result is `normal`. See [the scoring policy](how-it-works.md#offline-usefulness-inference).
+
+The returned `usefulness` may differ from the submitted hint. Saving an already existing meaning does not overwrite either the hint or result; use `vocabulary_update` for intentional changes. Frequency matching never splits an idiom into individual words or requires a dictionary lookup.
 
 ## `vocabulary_update`
 
@@ -113,7 +115,7 @@ Identify exactly one item by `itemId` or `term`:
 
 `changes` must contain at least one field. Omitted fields are preserved; supplied arrays replace the previous arrays, so `[]` clears them. An empty custom description clears its source too unless another valid source change is supplied. An empty source object clears only the attribution.
 
-An update containing only `usefulness` is valid. Omission preserves its existing value; an empty string, null, or unsupported value is rejected. This updates vocabulary metadata without resetting the FSRS card, due date, review token, or review history.
+An update containing only `usefulness` is valid. It replaces the saved hint and recalculates effective usefulness with offline evidence. Omission preserves both hint and result; an empty string, null, or unsupported value is rejected. There is no clear-hint operation. Do not repeatedly submit the returned result as a new hint: it is already the combined assessment. This updates vocabulary metadata without resetting the FSRS card, due date, review token, or review history.
 
 ## `vocabulary_get`
 

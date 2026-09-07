@@ -98,6 +98,10 @@ func (db *DB) migrate(ctx context.Context) error {
 		}
 	}
 
+	if err := refreshUsefulness(ctx, transaction); err != nil {
+		return err
+	}
+
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("commit migrations: %w", err)
 	}

@@ -9,7 +9,7 @@ The server can:
 - look up words, phrases, idioms, phrasal verbs, and expressions on Cambridge Dictionary;
 - cache complete lookup snapshots, including definitions, examples, pronunciation, audio, images, related words, idioms, and collocations;
 - save a personal vocabulary item independently of a dictionary lookup;
-- attach custom descriptions and source attribution, notes, examples, tags, learning status, and personal usefulness;
+- attach custom descriptions and source attribution, notes, examples, tags, learning status, and general usefulness;
 - browse and filter saved vocabulary;
 - choose exactly one item for production-recall practice;
 - store immutable review attempts and optional notes about mistakes;
@@ -44,7 +44,28 @@ Saving is idempotent for the same normalized term and selected definition. A dif
 
 Learning status is learner-managed metadata. FSRS reviews do not automatically change `new` to `learning` or `learned`; all three active statuses remain eligible for selection. Only `archived` removes an item from the review queue.
 
-Usefulness measures personal relevance, independently of recall difficulty and status. It defaults to `normal`; migration also sets every existing vocabulary item to `normal` without resetting cards, review tokens, or history. Set it when saving or deliberately change it with `vocabulary_update`. Changing usefulness changes selection weight, not FSRS review dates. Different saved senses can have different usefulness.
+Usefulness estimates general English value, independently of personal interests, recall difficulty, and learning status. It combines bundled word-frequency evidence with an optional API hint. Changing usefulness changes selection weight, not FSRS review dates. Different saved senses share word-level frequency evidence but can have different hints.
+
+### Offline usefulness inference
+
+The application embeds English ranks from [wordfreq](https://github.com/rspeer/wordfreq) and [FrequencyWords](https://github.com/hermitdave/FrequencyWords). Inference requires no external API, runtime download, Python process, or Cambridge lookup. Both sources are historical corpora and overlap in subtitle coverage; the combination is a transparent heuristic, not independent statistical evidence or a guarantee that a word is worth learning.
+
+Each source votes only on an exact normalized full-term match:
+
+| Rank in that source | Vote |
+| --- | --- |
+| 1–1,000 | `high` (+1) |
+| 1,001–5,000 | `normal` (0) |
+| Above 5,000 | `low` (−1) |
+| Missing | Abstain |
+
+Each matched source has weight 1. An explicitly supplied `usefulness` hint has weight 2, using the same −1/0/+1 values. A weighted mean strictly above ⅓ produces `high`; strictly below −⅓ produces `low`; the inclusive middle produces `normal`. With no evidence or hint, the result is `normal`.
+
+For example, two `high` source votes and a `low` API hint produce `normal`, not a forced override in either direction. Two `high` votes and a `normal` hint still produce `high`. Omitting the hint is different from submitting `normal`: omission contributes no vote.
+
+Matching uses the same case, whitespace, and quote normalization as saved vocabulary. It does not stem words, combine inflected forms, or estimate an idiom from its component words. An unmatched phrase uses the supplied hint, or `normal` if omitted. Word-level ranks do not identify how common a particular meaning is.
+
+The original API hint is stored separately from the effective result. Duplicate saves preserve both; a usefulness update replaces the hint and recalculates the result; unrelated updates preserve both. Migration `009` retains every previous usefulness value as a hint and recalculates existing vocabulary across all owners and statuses. Future dataset or scoring-policy revisions recalculate from those original hints, never from the previous calculated result. Revision-matched restarts do not rescan vocabulary. Backfills preserve existing timestamps, cards, review tokens, presentations, and review history.
 
 ### Learning state
 
@@ -107,7 +128,7 @@ After feedback, call `learning_next` again only when the learner wants another i
 3. When both due and new pools remain after the cooldown, choose the new pool with probability 20% and the due pool otherwise. This is an approximate 80/20 mix across many such selections, not a quota: availability and cooldown can change the observed mix.
 4. Choose randomly within the selected pool using weights. Due cards receive an urgency multiplier of `1 + min(overdue time / max(scheduled interval, 1 day), 4)` and a failure multiplier of `1 + 0.5 × min(consecutive failures, 2) + 0.25 × min(lapses, 3)`. Both are bounded, so troublesome cards get extra weight without permanently dominating.
 5. Apply a recency multiplier of `0.25 + 0.75 × clamp(time since last presentation / 24 hours, 0, 1)` to due and new cards; never-presented cards have multiplier 1. The short cooldown expires after 30 minutes, while recency weight gradually recovers over 24 hours.
-6. Multiply both pools' card weights by personal usefulness: `low ×0.5`, `normal ×1`, `high ×2`. New-card weight is recency × usefulness; due-card weight is urgency × failures × recency × usefulness. All else equal within the selected pool, a high-usefulness word has twice a normal word's selection weight, while low-usefulness words remain selectable. This does not change the 20% new-pool probability or bypass eligibility and cooldown rules.
+6. Multiply both pools' card weights by calculated usefulness: `low ×0.5`, `normal ×1`, `high ×2`. New-card weight is recency × usefulness; due-card weight is urgency × failures × recency × usefulness. All else equal within the selected pool, a high-usefulness word has twice a normal word's selection weight, while low-usefulness words remain selectable. This does not change the 20% new-pool probability or bypass eligibility and cooldown rules.
 
 Only when no due or new cards exist does selection fall back to a future review: choose the nearest due time among nonrecent cards if possible, otherwise the least recently presented card. Neither usefulness nor failure counts move a later future review ahead of a nearer one.
 

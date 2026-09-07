@@ -27,6 +27,7 @@ RUN mkdir -p /app/data /home/app \
 COPY --from=mcp-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=tunnel-builder /out/tunnel-client /usr/local/bin/tunnel-client
 COPY --from=mcp-builder /out/english-learning-mcp /usr/local/bin/english-learning-mcp
+COPY --from=mcp-builder /src/english-learning-mcp/internal/usefulness/licenses /usr/share/licenses/english-learning-mcp/frequency
 
 ENV HOME=/home/app
 USER 10001:10001

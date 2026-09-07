@@ -213,13 +213,13 @@ func TestMCPUsefulnessMetadataAndValidation(t *testing.T) {
 	ctx := context.Background()
 	session, _ := newTestSession(t, ctx)
 	saved := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
-		"term": "bank", "usefulness": "high",
+		"term": "count clouds before breakfast", "usefulness": "high",
 	})
 	if !saved.Created || saved.Usefulness != domain.UsefulnessHigh {
 		t.Fatalf("saved usefulness = %#v", saved)
 	}
 	duplicate := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
-		"term": "bank", "usefulness": "low",
+		"term": "count clouds before breakfast", "usefulness": "low",
 	})
 	if duplicate.Created || duplicate.ItemID != saved.ItemID || duplicate.Usefulness != domain.UsefulnessHigh {
 		t.Fatalf("duplicate save changed usefulness: %#v", duplicate)
@@ -259,7 +259,7 @@ func TestMCPUsefulnessMetadataAndValidation(t *testing.T) {
 		t.Fatalf("usefulness-only update = %#v", updated)
 	}
 	preserved := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", map[string]any{
-		"term": "bank", "changes": map[string]any{"notes": []string{"A personal reminder."}},
+		"term": "count clouds before breakfast", "changes": map[string]any{"notes": []string{"A personal reminder."}},
 	})
 	if preserved.Usefulness != domain.UsefulnessLow || len(preserved.Notes) != 1 {
 		t.Fatalf("partial update = %#v", preserved)
@@ -273,12 +273,55 @@ func TestMCPUsefulnessMetadataAndValidation(t *testing.T) {
 		t.Fatalf("list usefulness = %#v", listed)
 	}
 	next := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{})
-	if next.Term != "bank" || next.Usefulness != domain.UsefulnessLow {
+	if next.Term != "count clouds before breakfast" || next.Usefulness != domain.UsefulnessLow {
 		t.Fatalf("next usefulness = %#v", next)
 	}
-	normal := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{"term": "ordinary"})
+	normal := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{"term": "compare seven invisible umbrellas"})
 	if normal.Usefulness != domain.UsefulnessNormal {
 		t.Fatalf("default usefulness = %q", normal.Usefulness)
+	}
+}
+
+func TestMCPCombinesOfflineFrequencyWithUsefulnessHints(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t, ctx)
+	saved := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{"term": "  THE  "})
+	if saved.NormalizedTerm != "the" || saved.Usefulness != domain.UsefulnessHigh {
+		t.Fatalf("automatic common-word usefulness = %#v", saved)
+	}
+	updated := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", map[string]any{
+		"itemId": saved.ItemID, "changes": map[string]any{"usefulness": "low"},
+	})
+	if updated.Usefulness != domain.UsefulnessNormal {
+		t.Fatalf("two high frequency votes combined with double-weighted low hint = %q", updated.Usefulness)
+	}
+	preserved := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", map[string]any{
+		"itemId": saved.ItemID, "changes": map[string]any{"notes": []string{"Keep the original hint."}},
+	})
+	if preserved.Usefulness != domain.UsefulnessNormal {
+		t.Fatalf("unrelated update recomputed from the effective result: %#v", preserved)
+	}
+	duplicate := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "the", "usefulness": "high",
+	})
+	if duplicate.Created || duplicate.Usefulness != domain.UsefulnessNormal {
+		t.Fatalf("duplicate save replaced the hint: %#v", duplicate)
+	}
+	hinted := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "and", "usefulness": "normal",
+	})
+	if hinted.Usefulness != domain.UsefulnessHigh {
+		t.Fatalf("unanimous frequency evidence should refine a normal hint: %#v", hinted)
+	}
+	singleSource := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{"term": "so-called"})
+	if singleSource.Usefulness != domain.UsefulnessLow {
+		t.Fatalf("omitted hint should not become a normal vote: %#v", singleSource)
+	}
+	neutralHint := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", map[string]any{
+		"itemId": singleSource.ItemID, "changes": map[string]any{"usefulness": "normal"},
+	})
+	if neutralHint.Usefulness != domain.UsefulnessNormal {
+		t.Fatalf("explicit normal hint should contribute its own vote: %#v", neutralHint)
 	}
 }
 

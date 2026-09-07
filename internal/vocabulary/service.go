@@ -371,10 +371,7 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 		return normalizedMetadata{}, apperr.New(apperr.InvalidArgument, "status is unsupported")
 	}
 	usefulness := input.Usefulness
-	if usefulness == "" {
-		usefulness = domain.UsefulnessNormal
-	}
-	if !usefulness.Valid() {
+	if usefulness != "" && !usefulness.Valid() {
 		return normalizedMetadata{}, apperr.New(apperr.InvalidArgument, "usefulness is unsupported")
 	}
 	description, err := normalizeDescription(input.CustomDescription)

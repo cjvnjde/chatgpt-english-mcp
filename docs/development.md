@@ -29,6 +29,20 @@ go test ./...
 go build ./cmd/english-learning-mcp
 ```
 
+## Offline frequency datasets
+
+`internal/usefulness` embeds both complete English rank lists in a compressed binary table. The current bundle covers 1,737,503 distinct normalized terms and adds approximately 15.8 MB to the executable. It decompresses once into approximately 36.1 MB of immutable lookup data; normalized lookups allocate no memory and perform no I/O. There is no runtime Python dependency.
+
+Refresh the checked-in assets with:
+
+```sh
+uv run --no-project --with msgpack scripts/build_usefulness.py
+```
+
+This maintenance command needs network access; ordinary builds and inference do not download frequency data. It downloads pinned, checksummed inputs, preserves source rank order, resolves normalization collisions to the best rank, and recreates `assets/ranks.bin.gz`, `assets/manifest.json`, `revision.go`, and verbatim upstream license files. Do not hand-edit those outputs. Before changing an input pin, verify its upstream release or dataset revision and update its checksum. The manifest records exact inputs, counts, and the decoded content checksum.
+
+The dataset checksum and scoring-policy version form the persisted inference revision. A data refresh or policy change must produce a new revision so startup recalculates existing vocabulary. Re-run the usefulness and migration tests after either change. The runtime Docker image also includes the upstream legal files from `internal/usefulness/licenses`.
+
 ## Package map
 
 | Package | Responsibility |
@@ -37,6 +51,7 @@ go build ./cmd/english-learning-mcp
 | `internal/mcpserver` | MCP server metadata, strict schemas, tool registration, HTTP/auth middleware, and error conversion. |
 | `internal/dictionary` | Cambridge HTTP client, HTML parser, cache policy, and lookup service. |
 | `internal/vocabulary` | Validation and behavior for saved vocabulary and learner metadata. |
+| `internal/usefulness` | Embedded exact-match English frequency ranks and weighted general-usefulness inference. |
 | `internal/learning` | Candidate presentation, FSRS scheduling, review ratings, and troublesome-item detection. |
 | `internal/storage` | SQLite queries, transactions, cursor encoding, IDs, migrations, and domain hydration. |
 | `internal/domain` | Shared dictionary, vocabulary, learning, and normalization types. |
@@ -77,7 +92,9 @@ SQL migrations live in `internal/storage/migrations/` and are embedded in the bi
 
 Never modify an applied migration. Its SHA-256 checksum is stored in `schema_migrations`, and a changed checksum prevents startup. Add a new migration instead and test both a fresh database and an upgrade from the previous schema.
 
-Migration `008` adds constrained vocabulary usefulness with a default of `normal` for all existing rows and future inserts that omit it. It does not rewrite learning cards, presentations, review history, or existing vocabulary timestamps.
+Migration `008` originally added constrained vocabulary usefulness with a SQL default of `normal`. Migration `009` adds a nullable API hint and a scoring revision marker. It copies existing values into hints before the offline scorer recalculates effective usefulness. Application writes now calculate usefulness rather than relying on the SQL default.
+
+The scoring revision covers bundled frequency data and the scoring policy. The migration transaction also performs revision-gated backfills across all owners and statuses; unchanged revisions skip the scan. Backfills update only effective usefulness and the revision marker, preserving vocabulary timestamps, cards, presentations, and reviews. Never feed effective usefulness back into the hint column. Changes to the scoring policy must advance its revision.
 
 ## Adding or changing a tool
 

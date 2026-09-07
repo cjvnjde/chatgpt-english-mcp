@@ -1,0 +1,23 @@
+{
+  "format": "little-endian uint32 count; count records of text offset, wordfreq rank, FrequencyWords rank; UTF-8 text",
+  "normalization": "domain.NormalizeTerm: simple lowercase, whitespace collapse, curly quote folding; best original rank on collisions",
+  "dataset_sha256": "13a7bf3cc451a3ef713ed32b0eed885f93db406a07f768afd58af5fe44642cac",
+  "terms": 1737503,
+  "uncompressed_bytes": 36121441,
+  "compressed_bytes": 15811615,
+  "wordfreq": {
+    "version": "3.1.1",
+    "url": "https://files.pythonhosted.org/packages/24/61/62835c475d69872d30689f284497853fe33fe1d6dd18f57346d13305861d/wordfreq-3.1.1-py3-none-any.whl",
+    "sha256": "4b1c6ecffc6198be3396d5cf871c4423ca71c907c231348d352dd54d62b97473",
+    "data_sha256": "dffae8066b78dce0a6667cf5f58e567054f902674667090a7ac8a8a44628b05c",
+    "original_rows": 321180,
+    "normalized_terms": 321180
+  },
+  "FrequencyWords": {
+    "commit": "072bbed282316a23651aa7068c7173aa7898cf80",
+    "url": "https://raw.githubusercontent.com/hermitdave/FrequencyWords/072bbed282316a23651aa7068c7173aa7898cf80/content/2018/en/en_full.txt",
+    "sha256": "7fea67ab954e2c01df6c608c9826e594cf36f8823b3243554f88245fb75dc506",
+    "original_rows": 1656996,
+    "normalized_terms": 1656928
+  }
+}

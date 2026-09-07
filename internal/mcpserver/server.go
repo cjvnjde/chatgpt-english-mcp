@@ -93,7 +93,6 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 		return err
 	}
 	configureInputSchema(inputSchema)
-	setDefault(inputSchema, "usefulness", `"normal"`)
 	outputSchema, err := inferredSchema[vocabulary.SaveResult]()
 	if err != nil {
 		return err
@@ -103,7 +102,7 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_save",
 		Title:       "Save vocabulary",
-		Description: "Save one learnable meaning. Pass the exact definition from dictionary_lookup to learn homonyms and polysemous terms separately; all meanings share the cached lookup.",
+		Description: "Save one learnable meaning. Pass the exact definition from dictionary_lookup to learn homonyms and polysemous terms separately; all meanings share the cached lookup. General usefulness is calculated offline from exact frequency matches and an optional double-weighted usefulness hint; the returned usefulness is the combined result.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			IdempotentHint:  true,
@@ -145,7 +144,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_update",
 		Title:       "Update saved vocabulary",
-		Description: "Partially update an item's status, personal learning usefulness, tags, description source, notes, or examples. Omitted fields are preserved.",
+		Description: "Partially update an item's status, usefulness hint, tags, description source, notes, or examples. A usefulness hint is combined with offline frequency evidence, not applied as a forced override. Omitted fields are preserved.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			OpenWorldHint:   &closedWorld,

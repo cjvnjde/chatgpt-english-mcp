@@ -88,14 +88,14 @@ func TestUsefulnessPersistsWithoutOverwritingOtherMetadata(t *testing.T) {
 	service := newTestService(t, "owner-one")
 	ctx := context.Background()
 	initial := InitialValues{Usefulness: domain.UsefulnessHigh}
-	saved, err := service.Save(ctx, "bank", initial)
+	saved, err := service.Save(ctx, "count clouds before breakfast", initial)
 	if err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	if saved.Item.Usefulness != domain.UsefulnessHigh || initial.Usefulness != domain.UsefulnessHigh {
 		t.Fatalf("saved usefulness = %q, input = %#v", saved.Item.Usefulness, initial)
 	}
-	duplicate, err := service.Save(ctx, "bank", InitialValues{Usefulness: domain.UsefulnessLow})
+	duplicate, err := service.Save(ctx, "count clouds before breakfast", InitialValues{Usefulness: domain.UsefulnessLow})
 	if err != nil {
 		t.Fatalf("duplicate Save() error = %v", err)
 	}
@@ -112,7 +112,7 @@ func TestUsefulnessPersistsWithoutOverwritingOtherMetadata(t *testing.T) {
 		t.Fatalf("usefulness-only update = %#v", updated)
 	}
 	notes := []string{"A personal reminder."}
-	preserved, err := service.Update(ctx, "", "bank", UpdateChanges{Notes: &notes})
+	preserved, err := service.Update(ctx, "", "count clouds before breakfast", UpdateChanges{Notes: &notes})
 	if err != nil {
 		t.Fatalf("Update(notes) error = %v", err)
 	}
@@ -135,7 +135,7 @@ func TestUsefulnessPersistsWithoutOverwritingOtherMetadata(t *testing.T) {
 	}
 
 	empty := InitialValues{}
-	normal, err := service.Save(ctx, "ordinary", empty)
+	normal, err := service.Save(ctx, "compare seven invisible umbrellas", empty)
 	if err != nil {
 		t.Fatalf("Save(default) error = %v", err)
 	}

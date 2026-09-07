@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/usefulness"
 )
 
 type SourceVersion struct {
@@ -69,12 +70,8 @@ func (db *DB) SaveVocabulary(
 	ctx context.Context,
 	input VocabularyCreate,
 ) (created bool, item domain.VocabularyItem, err error) {
-	usefulness := input.Usefulness
-	if usefulness == "" {
-		usefulness = domain.UsefulnessNormal
-	}
-	if !usefulness.Valid() {
-		return false, domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary usefulness %q", usefulness)
+	if input.Usefulness != "" && !input.Usefulness.Valid() {
+		return false, domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary usefulness hint %q", input.Usefulness)
 	}
 
 	itemID, err := NewID()
@@ -106,10 +103,10 @@ func (db *DB) SaveVocabulary(
 	result, err := db.sql.ExecContext(ctx, `
 		INSERT INTO vocabulary_items(
 			id, owner_key, term, normalized_term, created_at, updated_at,
-			lookup_id, custom_description, learning_status, usefulness,
+			lookup_id, custom_description, learning_status, usefulness, usefulness_hint,
 			description_source_json, notes_json, examples_json, tags_json,
 			sense_key, context, selected_entry_index, selected_definition_index, selected_definition_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(owner_key, normalized_term, sense_key) DO NOTHING
 	`,
 		itemID,
@@ -121,7 +118,8 @@ func (db *DB) SaveVocabulary(
 		sql.NullString{String: input.LookupID, Valid: input.LookupID != ""},
 		input.CustomDescription,
 		input.Status,
-		usefulness,
+		usefulness.Estimate(input.NormalizedTerm, input.Usefulness),
+		sql.NullString{String: string(input.Usefulness), Valid: input.Usefulness != ""},
 		descriptionSourceJSON,
 		notesJSON,
 		examplesJSON,
@@ -155,18 +153,29 @@ func (db *DB) SaveVocabulary(
 }
 
 func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (domain.VocabularyItem, error) {
-	assignments := make([]string, 0, 9)
-	arguments := make([]any, 0, 11)
+	assignments := make([]string, 0, 10)
+	arguments := make([]any, 0, 12)
 	if input.Status != nil {
 		assignments = append(assignments, "learning_status = ?")
 		arguments = append(arguments, *input.Status)
 	}
 	if input.Usefulness != nil {
 		if !input.Usefulness.Valid() {
-			return domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary usefulness %q", *input.Usefulness)
+			return domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary usefulness hint %q", *input.Usefulness)
 		}
-		assignments = append(assignments, "usefulness = ?")
-		arguments = append(arguments, *input.Usefulness)
+		var normalizedTerm string
+		err := db.sql.QueryRowContext(ctx,
+			"SELECT normalized_term FROM vocabulary_items WHERE owner_key = ? AND id = ?",
+			input.OwnerKey, input.ItemID,
+		).Scan(&normalizedTerm)
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.VocabularyItem{}, ErrNotFound
+		}
+		if err != nil {
+			return domain.VocabularyItem{}, fmt.Errorf("read vocabulary term for usefulness update: %w", err)
+		}
+		assignments = append(assignments, "usefulness_hint = ?", "usefulness = ?")
+		arguments = append(arguments, *input.Usefulness, usefulness.Estimate(normalizedTerm, *input.Usefulness))
 	}
 	if input.Tags != nil {
 		encoded, err := encodeStringList(*input.Tags, "vocabulary tags")

@@ -229,8 +229,9 @@ func TestLearningSelectionUsesCurrentPersistedUsefulness(t *testing.T) {
 			var items []domain.VocabularyItem
 			var cardIDs []string
 			for _, level := range levels {
+				term := "fixture usefulness " + string(level)
 				_, item, err := store.SaveVocabulary(ctx, VocabularyCreate{
-					OwnerKey: "owner", Term: string(level), NormalizedTerm: string(level),
+					OwnerKey: "owner", Term: term, NormalizedTerm: term,
 					Status: domain.LearningStatusNew, Usefulness: level, Now: now,
 				})
 				if err != nil {
