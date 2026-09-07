@@ -94,7 +94,7 @@ Unexpected internal causes are logged server-side and replaced with a safe `INTE
 
 SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchronous=NORMAL`, and one open connection. Important invariants include:
 
-- one vocabulary item per owner and normalized term;
+- one vocabulary item per owner, normalized term, and sense key;
 - one active dictionary snapshot per provider, term, dataset version, and parser version;
 - one production card per vocabulary item;
 - immutable review-attempt and presentation-event rows, retained after vocabulary deletion;
@@ -103,7 +103,7 @@ SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchro
 
 `learning_next` is a mutating, non-destructive, non-idempotent operation. Candidate selection, vocabulary hydration, and presentation insertion share one SQLite transaction and connection. Each committed selection records owner/item/card IDs, exercise mode, review token, issuance and due timestamps, and selection kind. The response exposes the event ID and UTC issuance time; issuing an item does not modify FSRS scheduling state or rotate its review token.
 
-Selection uses all due and FSRS-new cards, a last-three-presentations/30-minute cooldown, and bounded urgency, failure, and 24-hour recency weights. Persisted vocabulary usefulness multiplies weights in both pools: low ×0.5, normal ×1, high ×2. A 20% new-pool probability applies only when both pools remain after cooldown. Future cards are fallback-only. See [the selection policy](how-it-works.md#how-the-next-item-is-selected) for the small-pool rotation and future fallback rules.
+Selection uses all due and FSRS-new cards, a last-three-presentations/30-minute cooldown, and bounded urgency, failure, and 24-hour recency weights. Persisted vocabulary usefulness multiplies weights in both pools: low ×0.5, normal ×1, high ×2. A 20% new-pool probability applies only when both pools remain after cooldown. Future cards are fallback-only. See [the selection algorithm and exact probabilities](how-it-works.md#how-the-next-item-is-selected) for the decision flow, worked examples, small-pool rotation, and future fallback rules, and [the scheduling equations](how-it-works.md#how-a-review-changes-the-schedule) for the separate FSRS model.
 
 Timestamp strings have variable fractional precision. Compare parsed times, or compare canonical UTC timestamp prefixes with the terminal `Z` removed; raw RFC3339Nano text does not sort chronologically. Presentation history records server issuance, not guaranteed delivery or human visibility. Request retries append new events, potentially for different items. Review-token linkage can associate several presentations with one accepted review, but does not establish a recall duration. Migrations retain existing timestamps and never backfill invented presentation times.
 

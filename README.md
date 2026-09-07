@@ -16,7 +16,7 @@ The Compose stack includes [one-way AnkiWeb sync](docs/deployment.md#ankiweb-syn
 
 ## Documentation
 
-- [How it works and expected workflows](docs/how-it-works.md)
+- [How it works: algorithms, formulas, diagrams, and workflows](docs/how-it-works.md)
 - [MCP tool reference](docs/tools.md)
 - [Suggested tutor and daily-review prompts](docs/prompts.md)
 - [Configuration](docs/configuration.md)
