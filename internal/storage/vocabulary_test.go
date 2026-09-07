@@ -13,6 +13,60 @@ import (
 	"english-learning-mcp/internal/usefulness"
 )
 
+func TestVocabularyPaginationOrdersStoredTimestampsChronologically(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "chronological.sqlite")
+	legacy := openLegacyDatabase(t, path, 9)
+	timestamps := []string{
+		"2026-09-07T12:00:00Z",
+		"2026-09-07T12:00:00.1Z",
+		"2026-09-07T12:00:00.11Z",
+		"2026-09-07T12:00:00.110000001Z",
+		"2026-09-07T12:00:01Z",
+	}
+	terms := []string{"zero", "one", "two", "three", "four"}
+	for index, timestamp := range timestamps {
+		if _, err := legacy.ExecContext(ctx, `
+			INSERT INTO vocabulary_items(id, owner_key, term, normalized_term, created_at, updated_at, sense_key)
+			VALUES (?, 'owner', ?, ?, ?, ?, 'legacy')
+		`, terms[index], terms[index], terms[index], timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	for _, sortOrder := range []string{"oldest", "recent"} {
+		t.Run(sortOrder, func(t *testing.T) {
+			query := VocabularyListQuery{OwnerKey: "owner", Sort: sortOrder, Limit: 1}
+			for page := range timestamps {
+				items, err := store.ListVocabulary(ctx, query)
+				if err != nil || len(items) != 1 {
+					t.Fatalf("page %d = %#v, error %v", page, items, err)
+				}
+				index := page
+				if sortOrder == "recent" {
+					index = len(timestamps) - 1 - page
+				}
+				item := items[0]
+				if item.Term != terms[index] || item.UpdatedAt != timestamps[index] || item.CreatedAt != timestamps[index] {
+					t.Fatalf("page %d = %#v; want %s at unchanged timestamp %s", page, item, terms[index], timestamps[index])
+				}
+				query.CursorPrimary, query.CursorID = item.UpdatedAt, item.ItemID
+			}
+			if items, err := store.ListVocabulary(ctx, query); err != nil || len(items) != 0 {
+				t.Fatalf("final page = %#v, error %v", items, err)
+			}
+		})
+	}
+}
+
 func TestVocabularyUsefulnessPersistsWithoutReplacingExistingMetadata(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "usefulness.sqlite")

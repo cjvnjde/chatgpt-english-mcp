@@ -297,19 +297,21 @@ func (db *DB) ListVocabulary(ctx context.Context, input VocabularyListQuery) ([]
 		}
 	}
 
+	// TimeString emits UTC RFC3339Nano. Removing its trailing Z makes
+	// different fractional precisions sort chronologically without rounding.
 	switch input.Sort {
 	case "recent":
 		if input.CursorPrimary != "" {
-			query += " AND (v.updated_at < ? OR (v.updated_at = ? AND v.id > ?))"
+			query += " AND (rtrim(v.updated_at, 'Z') < rtrim(?, 'Z') OR (rtrim(v.updated_at, 'Z') = rtrim(?, 'Z') AND v.id > ?))"
 			arguments = append(arguments, input.CursorPrimary, input.CursorPrimary, input.CursorID)
 		}
-		query += " ORDER BY v.updated_at DESC, v.id ASC"
+		query += " ORDER BY rtrim(v.updated_at, 'Z') DESC, v.id ASC"
 	case "oldest":
 		if input.CursorPrimary != "" {
-			query += " AND (v.updated_at > ? OR (v.updated_at = ? AND v.id > ?))"
+			query += " AND (rtrim(v.updated_at, 'Z') > rtrim(?, 'Z') OR (rtrim(v.updated_at, 'Z') = rtrim(?, 'Z') AND v.id > ?))"
 			arguments = append(arguments, input.CursorPrimary, input.CursorPrimary, input.CursorID)
 		}
-		query += " ORDER BY v.updated_at ASC, v.id ASC"
+		query += " ORDER BY rtrim(v.updated_at, 'Z') ASC, v.id ASC"
 	case "alphabetical":
 		if input.CursorPrimary != "" {
 			query += " AND (v.normalized_term > ? OR (v.normalized_term = ? AND v.id > ?))"

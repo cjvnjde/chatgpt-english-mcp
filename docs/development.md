@@ -48,11 +48,17 @@ uv run --no-project --with msgpack scripts/build_expressions.py --cache-dir /pat
 uv run --offline --no-project --with msgpack scripts/build_expressions.py --offline --cache-dir /path/to/expression-sources
 ```
 
-The first command downloads missing pinned inputs; the second requires cached Python dependencies and source inputs, and disables network access in both `uv` and the builder. The cached sources total roughly 2.9 GB, including the complete supported Kaikki raw export; processing streams the corpus and retains only English multiword records. Ordinary application builds need only the checked-in compressed assets, not these caches. The current expression index contains 218,258 canonical entries, 170,130 explicit aliases, and 2,321 genuine WordNet exception forms.
+The first command downloads missing pinned inputs; the second requires cached Python dependencies and source inputs, and disables network access in both `uv` and the builder. The cached sources total roughly 2.9 GB, including the complete supported Kaikki raw export; processing streams the corpus and retains only English multiword records. Ordinary application builds need only the checked-in compressed assets, not these caches. The current expression index contains 218,249 canonical entries, 169,565 explicit aliases, and 2,321 genuine WordNet exception forms.
 
 `assets/expressions-manifest.json` supplies the source, input-checksum, and legal-file configuration and records generated counts/checksums. To refresh a moving Kaikki snapshot, verify the new upstream snapshot and update those input pins deliberately; do not bypass a checksum failure or edit computed output fields. A pinned snapshot may no longer be available at its moving URL, so retain its source cache when offline regeneration is required. The builder supports `--output-dir` for independent reproduction without overwriting the checked-in outputs.
 
-The builder retains unrestricted senses, collapses only unambiguous pure form/alternative entries, ignores false or unclear MAGPIE annotations, and uses only contiguous valid observed spans as aliases. Source POS gates first-verb inflection: a noun phrase such as `bank holiday` cannot become `banked holiday` merely because `bank` is also a verb. No regular inflections are fabricated. Corpus observations and tagged counts are attestation heuristics, not phrase-frequency ranks; the source `common` tag is deliberately not a positive-frequency signal.
+Run the builder regressions without loading the source corpus:
+
+```sh
+uv run --offline --no-project --with msgpack python -m unittest discover -s scripts -p 'test_*.py'
+```
+
+The builder retains unrestricted senses, collapses only unambiguous pure form/alternative entries, ignores false or unclear MAGPIE annotations, and uses only contiguous valid observed spans as aliases. Form-chain traversal stops at intermediate entries with independent lexical or usage evidence rather than bypassing them. Source POS gates first-verb inflection: a noun phrase such as `bank holiday` cannot become `banked holiday` merely because `bank` is also a verb. No regular inflections are fabricated. Corpus observations and tagged counts are attestation heuristics, not phrase-frequency ranks; the source `common` tag is deliberately not a positive-frequency signal.
 
 Linguatools is not included: its commercial package requires a supplied data file and access terms. There is no placeholder adapter or runtime call to its API.
 
@@ -99,7 +105,7 @@ SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchro
 
 Selection uses all due and FSRS-new cards, a last-three-presentations/30-minute cooldown, and bounded urgency, failure, and 24-hour recency weights. Persisted vocabulary usefulness multiplies weights in both pools: low ×0.5, normal ×1, high ×2. A 20% new-pool probability applies only when both pools remain after cooldown. Future cards are fallback-only. See [the selection policy](how-it-works.md#how-the-next-item-is-selected) for the small-pool rotation and future fallback rules.
 
-Timestamp strings may have variable fractional precision: parse them as times before temporal comparisons rather than ordering their SQLite text lexically. Presentation history records server issuance, not guaranteed delivery or human visibility. Request retries append new events, potentially for different items. Review-token linkage can associate several presentations with one accepted review, but does not establish a recall duration. Migrations retain existing timestamps and never backfill invented presentation times.
+Timestamp strings have variable fractional precision. Compare parsed times, or compare canonical UTC timestamp prefixes with the terminal `Z` removed; raw RFC3339Nano text does not sort chronologically. Presentation history records server issuance, not guaranteed delivery or human visibility. Request retries append new events, potentially for different items. Review-token linkage can associate several presentations with one accepted review, but does not establish a recall duration. Migrations retain existing timestamps and never backfill invented presentation times.
 
 ## Migrations
 
@@ -110,6 +116,8 @@ Never modify an applied migration. Its SHA-256 checksum is stored in `schema_mig
 Migration `008` originally added constrained vocabulary usefulness with a SQL default of `normal`. Migration `009` adds a nullable API hint and a scoring revision marker. It copies existing values into hints before the offline scorer recalculates effective usefulness. Application writes now calculate usefulness rather than relying on the SQL default.
 
 The scoring revision covers bundled frequency data and the scoring policy. The migration transaction also performs revision-gated backfills across all owners and statuses; unchanged revisions skip the scan. Backfills update only effective usefulness and the revision marker, preserving vocabulary timestamps, cards, presentations, and reviews. Never feed effective usefulness back into the hint column. Changes to the scoring policy must advance its revision.
+
+Migration `010` rebuilds vocabulary time-ordering and review-comment indexes over UTC timestamp prefixes without the terminal `Z`. Pagination and latest-comment queries preserve nanosecond ordering without rewriting stored timestamps or immutable history.
 
 ## Adding or changing a tool
 

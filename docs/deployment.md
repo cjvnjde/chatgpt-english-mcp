@@ -162,6 +162,8 @@ If a manually added note has cards in both managed and unrelated decks, only its
 
 Vocabulary tags are encoded as `vocab::u` followed by lowercase UTF-8 hex. This preserves tag identity despite Anki's whitespace and case-insensitive tag rules; the worker owns the full tag set on its managed notes.
 
+Rendered Anki fields use NFC Unicode and omit Anki-unsupported ASCII controls so unchanged content converges instead of triggering repeated repairs. Application text, source identity, and encoded tag identity remain unchanged. NUL-containing snapshots are still rejected before collection mutation.
+
 ### Version upgrades and live verification
 
 The worker image pins Python `3.14.7` and `anki==26.8.1`. The package was selected from [official PyPI metadata](https://pypi.org/project/anki/26.8.1/) and Python from the [official image manifest](https://github.com/docker-library/official-images/blob/master/library/python). Version-specific synchronization operations are isolated in the adapter.

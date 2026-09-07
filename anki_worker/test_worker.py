@@ -543,6 +543,86 @@ class WorkerCycleTests(unittest.TestCase):
             jitter=lambda: 0,
         )
 
+    def test_decomposed_unicode_converges_without_rewriting_reviewed_cards(self):
+        self.items = [
+            vocabulary(
+                customDescription="cafe\u0301",
+                notes=["re\u0301sume\u0301"],
+                descriptionSource={
+                    "title": "Cafe\u0301",
+                    "url": "https://example.com/cafe\u0301",
+                },
+                tags=["e\u0301", "é"],
+            )
+        ]
+        self.assertTrue(self.worker.once()["healthy"])
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            nid = next(iter(self.worker.store.state["notes"].values()))
+            note = collection.get_note(nid)
+            self.assertEqual(note["Meaning"], "café")
+            self.assertEqual(note["Notes"], "<p>résumé</p>")
+            self.assertEqual(sorted(note.tags), ["vocab::u65cc81", "vocab::uc3a9"])
+            card = note.cards()[0]
+            card.reps = 7
+            card.ivl = 19
+            card.due = 45
+            card.queue = 2
+            card.type = 2
+            collection.update_card(card)
+
+        result = self.worker.once()
+        self.assertTrue(result["healthy"])
+        self.assertEqual(result["counts"]["updated"], 0)
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            restored = collection.get_note(nid).cards()[0]
+            self.assertEqual(
+                (
+                    restored.id,
+                    restored.reps,
+                    restored.ivl,
+                    restored.due,
+                    restored.queue,
+                ),
+                (card.id, 7, 19, 45, 2),
+            )
+
+    def test_supported_snapshot_controls_converge_after_anki_field_normalization(self):
+        self.items = [vocabulary(notes=["left\x1fright\x7f\nnext\tpart"])]
+        self.assertTrue(self.worker.once()["healthy"])
+        result = self.worker.once()
+        self.assertTrue(result["healthy"])
+        self.assertEqual(result["counts"]["updated"], 0)
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            nid = next(iter(self.worker.store.state["notes"].values()))
+            self.assertEqual(
+                collection.get_note(nid)["Notes"], "<p>leftright<br>next\tpart</p>"
+            )
+
+    def test_nul_text_still_fails_before_collection_mutation(self):
+        self.worker.once()
+        before = self.config.collection_path.read_bytes()
+        self.items = [vocabulary(notes=["left\x00right"])]
+        with self.assertRaisesRegex(WorkerError, "NUL"):
+            self.worker.once()
+        self.assertEqual(self.config.collection_path.read_bytes(), before)
+        self.assertFalse(load_json(self.worker.store.status_path)["healthy"])
+
+    def test_backup_preserves_collections_with_uri_delimiters_in_the_path(self):
+        config = replace(
+            self.config,
+            collection_path=self.config.collection_path.with_name(
+                "collection#backup?.anki2"
+            ),
+        )
+        store = Store(config)
+        store.load()
+        with closing(Collection(str(config.collection_path))) as collection:
+            note = add_basic(collection, collection.decks.id("Unrelated"))
+            backup = store.backup()
+        with closing(Collection(str(backup / config.collection_path.name))) as restored:
+            self.assertEqual(restored.get_note(note.id)["Back"], "Unrelated answer")
+        self.assertEqual(load_json(backup / store.state_path.name), store.state)
+
     def test_failed_export_never_opens_or_mutates_collection(self):
         self.worker.once()
         before = self.config.collection_path.read_bytes()

@@ -152,7 +152,10 @@ class Store:
         destination.mkdir(parents=True, mode=0o700)
         if self.config.collection_path.exists():
             with closing(
-                sqlite3.connect(f"file:{self.config.collection_path}?mode=ro", uri=True)
+                sqlite3.connect(
+                    self.config.collection_path.absolute().as_uri() + "?mode=ro",
+                    uri=True,
+                )
             ) as source:
                 target_path = destination / self.config.collection_path.name
                 with closing(sqlite3.connect(target_path)) as target:

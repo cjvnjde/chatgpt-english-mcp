@@ -285,7 +285,7 @@ def wordnet_entries(path, entries):
 
 
 def canonicalize_forms(entries, targets, independent):
-    resolved = {}
+    collapsible = {}
     for term in targets:
         entry = entries[term]
         if (
@@ -296,14 +296,18 @@ def canonicalize_forms(entries, targets, independent):
             or entry["literal_instances"]
         ):
             continue
+        collapsible[term] = targets[term]
+
+    resolved = {}
+    for term in collapsible:
         current = term
         visited = set()
-        while current in targets and current not in independent:
-            if current in visited or len(targets[current]) != 1:
+        while current in collapsible:
+            if current in visited or len(collapsible[current]) != 1:
                 current = ""
                 break
             visited.add(current)
-            current = next(iter(targets[current]))
+            current = next(iter(collapsible[current]))
         if current and current != term and current in entries:
             resolved[term] = current
     for term, canonical in resolved.items():

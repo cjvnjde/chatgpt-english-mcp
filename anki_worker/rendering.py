@@ -1,4 +1,6 @@
+import re
 from html import escape
+from unicodedata import normalize
 from urllib.parse import urlsplit
 
 FIELDS = (
@@ -34,11 +36,18 @@ BACK = '{{FrontSide}}<hr id="answer">' + "".join(
     )
 )
 CSS = ".card { font-family: sans-serif; font-size: 20px; text-align: left; line-height: 1.5; } .word { font-size: 32px; font-weight: bold; } .pronunciation { opacity: .75; } section { margin: 1em 0; } h3 { font-size: .75em; opacity: .7; margin-bottom: .2em; } ul { padding-left: 1.4em; }"
+INVALID_FIELD_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def normalize_field_text(value):
+    # Anki strips these controls and normalizes fields on save. Render the same
+    # representation so authoritative reconciliation can reach a fixed point.
+    return normalize("NFC", INVALID_FIELD_CHARACTERS.sub("", value))
 
 
 def text(value):
     return (
-        escape(value, quote=True)
+        escape(normalize_field_text(value), quote=True)
         .replace("\r\n", "\n")
         .replace("\r", "\n")
         .replace("\n", "<br>")
@@ -64,7 +73,7 @@ def attribution(title, url):
     if safe and not any(ord(char) < 32 for char in url):
         return (
             '<a href="'
-            + escape(url, quote=True)
+            + escape(normalize_field_text(url), quote=True)
             + '" rel="noreferrer">'
             + text(label)
             + "</a>"

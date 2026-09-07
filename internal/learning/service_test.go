@@ -158,6 +158,35 @@ func TestCommentsAndTroublesomeStateGuideLaterReviews(t *testing.T) {
 	}
 }
 
+func TestLatestCommentUsesChronologicalOrderWithinASecond(t *testing.T) {
+	store, service := newTestService(t)
+	start := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	now := start
+	service.now = func() time.Time { return now }
+	saveVocabulary(t, store, "economical", start.Add(-time.Hour), domain.LearningStatusNew)
+	offsets := []time.Duration{0, 100 * time.Millisecond, 110 * time.Millisecond, 110*time.Millisecond + time.Nanosecond}
+	texts := []string{"First attempt", "Second attempt", "Third attempt", "Latest attempt"}
+	for index, offset := range offsets {
+		now = start.Add(offset)
+		next := nextWord(t, service, false)
+		recordReview(t, service, next.ReviewToken, domain.ReviewRatingAgain, texts[index])
+	}
+
+	latest := nextWord(t, service, false)
+	if latest.LatestComment == nil || latest.LatestComment.Text != texts[len(texts)-1] {
+		t.Fatalf("latest comment = %#v", latest.LatestComment)
+	}
+	history := nextWord(t, service, true)
+	if len(history.Comments) != len(texts) {
+		t.Fatalf("comment history = %#v", history.Comments)
+	}
+	for index, comment := range history.Comments {
+		if comment.Text != texts[len(texts)-1-index] {
+			t.Fatalf("comment %d = %#v; want %q", index, comment, texts[len(texts)-1-index])
+		}
+	}
+}
+
 func TestArchivedVocabularyIsExcludedAndTokenCannotBeReviewed(t *testing.T) {
 	ctx := context.Background()
 	store, service := newTestService(t)

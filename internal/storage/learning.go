@@ -143,7 +143,7 @@ func (db *DB) ReviewComments(
 		SELECT comment, rating, reviewed_at
 		FROM review_attempts
 		WHERE owner_key = ? AND vocabulary_item_id = ? AND comment <> ''
-		ORDER BY reviewed_at DESC, id DESC`
+		ORDER BY rtrim(reviewed_at, 'Z') DESC, id DESC`
 	if !includeAll {
 		query += " LIMIT 1"
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -135,6 +136,10 @@ func runHTTPServers(ctx context.Context, endpoints []httpEndpoint, logger *slog.
 }
 
 func runHTTPServer(ctx context.Context, endpoint httpEndpoint, logger *slog.Logger) error {
+	listener, err := net.Listen("tcp", endpoint.address)
+	if err != nil {
+		return err
+	}
 	httpServer := &http.Server{
 		Addr:              endpoint.address,
 		Handler:           endpoint.handler,
@@ -142,26 +147,41 @@ func runHTTPServer(ctx context.Context, endpoint httpEndpoint, logger *slog.Logg
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    16 << 10,
 	}
+	defer listener.Close()
+
+	serveDone := make(chan struct{})
+	shutdownDone := make(chan error, 1)
 
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-serveDone:
+			shutdownDone <- nil
+			return
+		}
 		shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownContext); err != nil {
 			logger.Error("HTTP server shutdown failed", "access", endpoint.name, "error", err)
+			shutdownDone <- errors.Join(fmt.Errorf("shutdown HTTP server: %w", err), httpServer.Close())
+			return
 		}
+		shutdownDone <- nil
 	}()
 
 	logger.Info(
 		"HTTP server listening",
 		"access", endpoint.name,
-		"address", endpoint.address,
+		"address", listener.Addr().String(),
 		"path", endpoint.path,
 	)
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	serveErr := httpServer.Serve(listener)
+	close(serveDone)
+	shutdownErr := <-shutdownDone
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		return errors.Join(serveErr, shutdownErr)
 	}
-	return nil
+	return shutdownErr
 }
 
 func newLogger(configuration config.Config) *slog.Logger {
