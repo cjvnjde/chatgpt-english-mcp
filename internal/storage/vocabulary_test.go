@@ -245,23 +245,37 @@ func TestUsefulnessMigrationsPreserveVocabularyAndLearningState(t *testing.T) {
 	`, token); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.RecordReview(ctx, RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: token, Rating: domain.ReviewRatingHard, Comment: "Needed a hint", Now: now,
-	}, func(card LearningCard, reviewedAt time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
-		card.DueAt = reviewedAt.Add(48 * time.Hour)
-		card.Stability = 2.5
-		card.Difficulty = 6
-		card.Retrievability = 0.9
-		card.ScheduledDays = 2
-		card.Repetitions = 3
-		card.Lapses = 1
-		card.FSRSState = 2
-		card.LastReviewAt = reviewedAt
-		card.RemainingSteps = 1
-		card.LastRating = rating
-		card.ConsecutiveFailures = 1
-		return card, 0.7, nil
-	}); err != nil {
+	if _, err := legacy.ExecContext(ctx, `
+		INSERT INTO review_attempts (
+			id, owner_key, submission_id, vocabulary_item_id, learning_card_id,
+			exercise_mode, rating, comment, reviewed_at, due_before,
+			stability_before, difficulty_before, retrievability_before,
+			scheduled_days_before, repetitions_before, lapses_before, fsrs_state_before,
+			remaining_steps_before, consecutive_failures_before,
+			due_after, stability_after, difficulty_after, retrievability_after,
+			scheduled_days_after, repetitions_after, lapses_after, fsrs_state_after,
+			remaining_steps_after, consecutive_failures_after
+		) VALUES (
+			'review-id', 'owner', ?, 'learning-id', 'learning-id:production',
+			'production', 'hard', 'Needed a hint', ?, '2026-09-01T00:00:00Z',
+			0, 0, 0.7, 0, 0, 0, 0, 0, 0,
+			?, 2.5, 6, 0.9, 2, 3, 1, 2, 1, 1
+		)
+	`, token, TimeString(now), TimeString(now.Add(48*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.ExecContext(ctx, `
+		UPDATE learning_cards
+		SET due_at = ?, stability = 2.5, difficulty = 6, retrievability = 0.9,
+			scheduled_days = 2, repetitions = 3, lapses = 1, fsrs_state = 2,
+			last_review_at = ?, remaining_steps = 1, last_rating = 'hard',
+			consecutive_failures = 1, review_token = 'next-token', updated_at = ?
+		WHERE vocabulary_item_id = 'learning-id'
+	`, TimeString(now.Add(48*time.Hour)), TimeString(now), TimeString(now)); err != nil {
+		t.Fatal(err)
+	}
+	var reviewColumns string
+	if err := legacy.QueryRowContext(ctx, "SELECT group_concat(name, ', ') FROM pragma_table_info('review_attempts')").Scan(&reviewColumns); err != nil {
 		t.Fatal(err)
 	}
 	projections := map[string]string{
@@ -271,7 +285,7 @@ func TestUsefulnessMigrationsPreserveVocabularyAndLearningState(t *testing.T) {
 		"dictionary_snapshots":   "*",
 		"learning_cards":         "*",
 		"learning_presentations": "*",
-		"review_attempts":        "*",
+		"review_attempts":        reviewColumns,
 	}
 	for table := range projections {
 		if _, err := legacy.ExecContext(ctx, "CREATE TEMP TABLE before_"+table+" AS SELECT "+projections[table]+" FROM "+table); err != nil {
@@ -348,6 +362,6 @@ func TestUsefulnessMigrationsPreserveVocabularyAndLearningState(t *testing.T) {
 		}
 	}
 	for _, table := range []string{"learning_cards", "learning_presentations", "review_attempts"} {
-		assertPreserved(table, "*")
+		assertPreserved(table, projections[table])
 	}
 }

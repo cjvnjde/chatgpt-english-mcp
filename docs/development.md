@@ -107,6 +107,8 @@ Selection uses all due and FSRS-new cards, a last-three-presentations/30-minute 
 
 Timestamp strings have variable fractional precision. Compare parsed times, or compare canonical UTC timestamp prefixes with the terminal `Z` removed; raw RFC3339Nano text does not sort chronologically. Presentation history records server issuance, not guaranteed delivery or human visibility. Request retries append new events, potentially for different items. Review-token linkage can associate several presentations with one accepted review, but does not establish a recall duration. Migrations retain existing timestamps and never backfill invented presentation times.
 
+Review persistence reads up to two presentations for the owner/card/token inside the review transaction, using a dedicated token index. Exactly one event supplies a parsed issuance time to the learning scheduler; missing or repeated events supply no timing evidence. A nonnegative interval of at most one minute promotes only `good` to `easy`. The effective rating is stored separately from the submitted rating so retry comparisons and comment history retain the original input. Duplicate lookup precedes timing evaluation and returns the persisted effective result without recomputing it.
+
 ## Migrations
 
 SQL migrations live in `internal/storage/migrations/` and are embedded in the binary. Filenames must form an uninterrupted numeric sequence such as `006_description.sql`.
@@ -118,6 +120,8 @@ Migration `008` originally added constrained vocabulary usefulness with a SQL de
 The scoring revision covers bundled frequency data and the scoring policy. The migration transaction also performs revision-gated backfills across all owners and statuses; unchanged revisions skip the scan. Backfills update only effective usefulness and the revision marker, preserving vocabulary timestamps, cards, presentations, and reviews. Never feed effective usefulness back into the hint column. Changes to the scoring policy must advance its revision.
 
 Migration `010` rebuilds vocabulary time-ordering and review-comment indexes over UTC timestamp prefixes without the terminal `Z`. Pagination and latest-comment queries preserve nanosecond ordering without rewriting stored timestamps or immutable history.
+
+Migration `011` adds nullable `review_attempts.effective_rating` and a presentation-token lookup index. Legacy attempts are not rewritten: reads use their original rating when the effective rating is null. New reviews persist the actual FSRS rating. Existing immutability triggers remain in force.
 
 ## Adding or changing a tool
 

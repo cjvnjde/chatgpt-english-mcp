@@ -289,7 +289,7 @@ func registerLearningReview(server *mcp.Server, service *learning.Service, logge
 	return registerTool(server, &mcp.Tool{
 		Name:        "learning_review",
 		Title:       "Record a vocabulary review",
-		Description: "Record one production-recall rating with an optional problem comment and use FSRS to schedule the next review. The server-issued reviewToken makes retries idempotent.",
+		Description: "Record one production-recall rating with an optional problem comment and use FSRS to schedule the next review. Grade answer quality: again for failed or revealed recall, hard for substantial effort or material hints, good for correct recall without material hints, easy for clearly effortless recall. The server promotes good to easy when exactly one presentation for this reviewToken was issued at most 60 seconds ago; longer or ambiguous timing never penalizes an answer. Returns effectiveRating and timingBoost. Retry with the original rating and comment; reviewToken makes retries idempotent.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			IdempotentHint:  true,

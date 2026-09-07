@@ -88,7 +88,7 @@ The original API hint is stored separately from the effective result. Duplicate 
 
 ### Learning state
 
-Every active vocabulary item has one production-recall card. The card stores FSRS scheduling state separately from the learning content. Each accepted review creates an immutable attempt containing the rating, schedule before and after the review, and an optional comment.
+Every active vocabulary item has one production-recall card. The card stores FSRS scheduling state separately from the learning content. Each accepted review creates an immutable attempt containing the submitted rating, effective scheduling rating, schedule before and after the review, and an optional comment.
 
 Review tokens prevent duplicate attempts. Retrying the same token with the same rating and comment returns the original result with `duplicate: true`; reusing it with different data is rejected.
 
@@ -126,6 +126,10 @@ Rating guidance:
 | `easy` | Recall is immediate and confident. |
 
 The tutor should add a short review comment only when a concrete confusion, failed cue, or useful hint will improve the next attempt.
+
+The server also uses a **one-minute, positive-only timing signal**. For a `good` answer, if exactly one presentation exists for the owner, card, and pending review token and the review arrives within 60 seconds (inclusive), FSRS uses `easy`. The interval includes both AI turns, reading, and answering; it is supporting evidence rather than precise human recall time. Wrong or hinted answers must still be rated `again` or `hard` and never receive this boost.
+
+Anything longer—including a morning question answered hours later—has no timing effect. Missing or repeated presentations and negative clock intervals also have no timing effect. The tutor must not treat delayed messages as hesitation or apply its own time-based adjustment. `learning_review` returns `effectiveRating` and `timingBoost`; retries use the original submitted rating and preserve the original result.
 
 ### Continue a lesson
 

@@ -105,6 +105,7 @@ func TestRecordSupportsAllRatingsWithFSRSScheduling(t *testing.T) {
 		service.now = func() time.Time { return now }
 		saveVocabulary(t, store, string(rating), now.Add(-time.Hour), domain.LearningStatusNew)
 		next := nextWord(t, service, false)
+		service.now = func() time.Time { return now.Add(2 * time.Minute) }
 		result := recordReview(t, service, next.ReviewToken, rating, "")
 		dueTimes = append(dueTimes, mustParseTime(t, result.NextReviewAt))
 	}
@@ -112,6 +113,94 @@ func TestRecordSupportsAllRatingsWithFSRSScheduling(t *testing.T) {
 		if !dueTimes[index].After(dueTimes[index-1]) {
 			t.Fatalf("rating due times = %v, want strictly increasing", dueTimes)
 		}
+	}
+}
+
+func TestReviewTimingOnlyBoostsGoodAnswersWithinOneMinute(t *testing.T) {
+	start := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		elapsed   time.Duration
+		rating    domain.ReviewRating
+		repeated  bool
+		effective domain.ReviewRating
+	}{
+		{name: "one minute inclusive", elapsed: time.Minute, rating: domain.ReviewRatingGood, effective: domain.ReviewRatingEasy},
+		{name: "just outside window", elapsed: time.Minute + time.Nanosecond, rating: domain.ReviewRatingGood, effective: domain.ReviewRatingGood},
+		{name: "morning prompt answered hours later", elapsed: 4 * time.Hour, rating: domain.ReviewRatingGood, effective: domain.ReviewRatingGood},
+		{name: "clock moved backwards", elapsed: -time.Nanosecond, rating: domain.ReviewRatingGood, effective: domain.ReviewRatingGood},
+		{name: "fast wrong answer", elapsed: 30 * time.Second, rating: domain.ReviewRatingAgain, effective: domain.ReviewRatingAgain},
+		{name: "fast hinted answer", elapsed: 30 * time.Second, rating: domain.ReviewRatingHard, effective: domain.ReviewRatingHard},
+		{name: "already easy", elapsed: 30 * time.Second, rating: domain.ReviewRatingEasy, effective: domain.ReviewRatingEasy},
+		{name: "ambiguous repeated presentation", elapsed: 30 * time.Second, rating: domain.ReviewRatingGood, repeated: true, effective: domain.ReviewRatingGood},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, service := newTestService(t)
+			now := start
+			service.now = func() time.Time { return now }
+			saveVocabulary(t, store, "meticulous", start.Add(-time.Hour), domain.LearningStatusNew)
+			next := nextWord(t, service, false)
+			if test.repeated {
+				now = start.Add(20 * time.Second)
+				nextWord(t, service, false)
+			}
+			now = start.Add(test.elapsed)
+			result := recordReview(t, service, next.ReviewToken, test.rating, "")
+			wantBoost := test.effective != test.rating
+			if result.EffectiveRating != test.effective || result.TimingBoost != wantBoost {
+				t.Fatalf("Record() = %#v, want rating %s and timing boost %t", result, test.effective, wantBoost)
+			}
+
+			// Compare the actual schedule with a normally graded review at the
+			// same instant, outside the timing window.
+			referenceStore, reference := newTestService(t)
+			referenceTime := start.Add(-2 * time.Minute)
+			reference.now = func() time.Time { return referenceTime }
+			saveVocabulary(t, referenceStore, "meticulous", start.Add(-time.Hour), domain.LearningStatusNew)
+			referenceNext := nextWord(t, reference, false)
+			referenceTime = now
+			expected := recordReview(t, reference, referenceNext.ReviewToken, test.effective, "")
+			if result.NextReviewAt != expected.NextReviewAt || result.Troublesome != expected.Troublesome {
+				t.Fatalf("schedule = %#v, want equivalent to a %s review: %#v", result, test.effective, expected)
+			}
+		})
+	}
+}
+
+func TestTimingBoostSurvivesRetryWithoutChangingSubmittedRating(t *testing.T) {
+	store, service := newTestService(t)
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	saveVocabulary(t, store, "meticulous", now.Add(-time.Hour), domain.LearningStatusNew)
+	next := nextWord(t, service, false)
+	now = now.Add(45 * time.Second)
+	result := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "Clear distinction.")
+	if !result.TimingBoost || result.EffectiveRating != domain.ReviewRatingEasy {
+		t.Fatalf("fast correct review = %#v", result)
+	}
+
+	service = NewService(store, "owner")
+	now = now.Add(4 * time.Hour)
+	service.now = func() time.Time { return now }
+	duplicate := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "Clear distinction.")
+	expected := result
+	expected.Duplicate = true
+	if duplicate != expected {
+		t.Fatalf("delayed retry = %#v, want original result %#v", duplicate, expected)
+	}
+	_, err := service.Record(context.Background(), RecordOptions{
+		ReviewToken: next.ReviewToken,
+		Rating:      domain.ReviewRatingEasy,
+		Comment:     "Clear distinction.",
+	})
+	assertApplicationCode(t, err, apperr.InvalidArgument)
+
+	// The next review gets its own timing evidence, not the old token's history.
+	following := nextWord(t, service, false)
+	now = now.Add(45 * time.Second)
+	followingResult := recordReview(t, service, following.ReviewToken, domain.ReviewRatingGood, "")
+	if !followingResult.TimingBoost || followingResult.Duplicate {
+		t.Fatalf("next review = %#v, want independent timing boost", followingResult)
 	}
 }
 

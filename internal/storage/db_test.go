@@ -155,7 +155,7 @@ func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory
 		Rating:      domain.ReviewRatingGood,
 		Comment:     "Needed a context clue.",
 		Now:         reviewedAt,
-	}, func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
+	}, func(card LearningCard, now time.Time, rating domain.ReviewRating, shownAt time.Time) (LearningCard, float64, error) {
 		card.DueAt = now.Add(24 * time.Hour)
 		card.Stability = 1
 		card.Difficulty = 5
@@ -178,6 +178,54 @@ func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory
 	}
 	if _, err := store.sql.ExecContext(ctx, "DELETE FROM review_attempts WHERE id = ?", attempt.ReviewID); err == nil {
 		t.Fatal("immutable review DELETE succeeded")
+	}
+}
+
+func TestReviewTimingMigrationPreservesLegacyRetry(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	legacy := openLegacyDatabase(t, path, 10)
+	_, err := legacy.ExecContext(ctx, `
+		INSERT INTO review_attempts (
+			id, owner_key, submission_id, vocabulary_item_id, learning_card_id,
+			exercise_mode, rating, reviewed_at, due_before,
+			stability_before, difficulty_before, retrievability_before,
+			scheduled_days_before, repetitions_before, lapses_before, fsrs_state_before,
+			remaining_steps_before, consecutive_failures_before,
+			due_after, stability_after, difficulty_after, retrievability_after,
+			scheduled_days_after, repetitions_after, lapses_after, fsrs_state_after,
+			remaining_steps_after, consecutive_failures_after
+		) VALUES (
+			'review', 'owner', 'legacy-token', 'item', 'card', 'production', 'good',
+			'2026-09-07T10:00:00Z', '2026-09-07T09:00:00Z',
+			0, 0, 0, 0, 0, 0, 0, 0, 0,
+			'2026-09-08T10:00:00Z', 1, 5, 1, 1, 1, 0, 2, 0, 0
+		)
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	attempt, duplicate, err := store.RecordReview(ctx, RecordReviewInput{
+		OwnerKey: "owner", ReviewToken: "legacy-token", Rating: domain.ReviewRatingGood,
+		Now: time.Date(2026, 9, 7, 14, 0, 0, 0, time.UTC),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !duplicate || attempt.After.LastRating != domain.ReviewRatingGood || TimeString(attempt.After.DueAt) != "2026-09-08T10:00:00Z" {
+		t.Fatalf("legacy retry after migration = %#v, duplicate %t", attempt, duplicate)
+	}
+	if _, err := store.sql.ExecContext(ctx, "UPDATE review_attempts SET effective_rating = 'easy' WHERE id = 'review'"); err == nil {
+		t.Fatal("migration allowed immutable review history to be rewritten")
 	}
 }
 

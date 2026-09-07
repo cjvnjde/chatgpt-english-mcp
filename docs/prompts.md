@@ -173,8 +173,13 @@ Rate the first genuine recall attempt:
 - easy: immediate, confident, precise recall.
 
 Hard means successful recall. If the learner fails and later reaches or repeats
-the answer, keep again. Do not infer speed or confidence solely from message
-delivery timing.
+the answer, keep again. Grade answer quality, not message delivery delays; a long
+gap is not evidence of hesitation. The server uses end-to-end timing only as a
+positive signal: good becomes easy when exactly one presentation for the pending
+token was issued within 60 seconds. Longer or ambiguous timing has no effect,
+and again/hard never get a boost. Do not apply your own time-based adjustment.
+Use the returned effectiveRating and timingBoost to understand the schedule;
+retries must retain the original submitted rating and comment.
 
 Record only one scheduled review per reviewToken. If a retry returns
 duplicate: true, accept it without changing the rating or comment to resubmit.
@@ -244,7 +249,8 @@ selection and scheduling.
 Each learning_next call records a new server-issued presentation and retries may
 choose different items. Keep the current item and token until its attempt ends;
 presentationId and shownAt are issuance metadata, not proof of learner exposure
-or a measure of recall speed.
+or a precise measure of recall speed. The server applies the bounded timing
+signal described below; do not restart the clock by requesting the word again.
 
 If learning_next returns NOT_FOUND, explain that there is no active vocabulary
 and end. If reason is "early" after at least one completed review, end instead
@@ -299,8 +305,13 @@ Rate the first genuine recall attempt:
 
 Hard is successful recall, not an incorrect answer. If I initially fail but
 later reach the answer through guidance, keep again. Do not upgrade the rating
-because I repeated a revealed answer. Do not infer speed or confidence solely
-from message delivery timing.
+because I repeated a revealed answer. Grade answer quality, not message delivery
+delays; hours away from chat must not count as hesitation. The server promotes
+good to easy only when exactly one presentation for the pending token was issued
+within 60 seconds, allowing for both AI turns, reading, and answering. Longer or
+ambiguous timing has no effect; again/hard never get a boost. Do not apply your
+own time-based adjustment. The result reports effectiveRating and timingBoost.
+Always retry with the original submitted rating and comment.
 
 Submit one learning_review per reviewToken. If a retry is reported as a
 duplicate, continue normally without changing the submission. Do not calculate

@@ -17,6 +17,7 @@ import (
 const (
 	maximumReviewTokenRunes = 200
 	maximumCommentRunes     = 1000
+	fastReviewWindow        = time.Minute
 )
 
 type Store interface {
@@ -63,10 +64,12 @@ type RecordOptions struct {
 }
 
 type RecordResult struct {
-	Recorded     bool   `json:"recorded"`
-	Duplicate    bool   `json:"duplicate"`
-	NextReviewAt string `json:"nextReviewAt"`
-	Troublesome  bool   `json:"troublesome"`
+	Recorded        bool                `json:"recorded"`
+	Duplicate       bool                `json:"duplicate"`
+	NextReviewAt    string              `json:"nextReviewAt"`
+	Troublesome     bool                `json:"troublesome"`
+	EffectiveRating domain.ReviewRating `json:"effectiveRating"`
+	TimingBoost     bool                `json:"timingBoost"`
 }
 
 func NewService(store Store, ownerKey string) *Service {
@@ -157,10 +160,12 @@ func (service *Service) Record(ctx context.Context, options RecordOptions) (Reco
 		return RecordResult{}, apperr.Wrap(apperr.InternalError, "failed to record the review", err)
 	}
 	return RecordResult{
-		Recorded:     true,
-		Duplicate:    duplicate,
-		NextReviewAt: storage.TimeString(attempt.After.DueAt),
-		Troublesome:  isTroublesome(attempt.After),
+		Recorded:        true,
+		Duplicate:       duplicate,
+		NextReviewAt:    storage.TimeString(attempt.After.DueAt),
+		Troublesome:     isTroublesome(attempt.After),
+		EffectiveRating: attempt.After.LastRating,
+		TimingBoost:     attempt.Rating == domain.ReviewRatingGood && attempt.After.LastRating == domain.ReviewRatingEasy,
 	}, nil
 }
 
@@ -168,16 +173,25 @@ func (service *Service) schedule(
 	card storage.LearningCard,
 	now time.Time,
 	rating domain.ReviewRating,
+	shownAt time.Time,
 ) (storage.LearningCard, float64, error) {
 	fsrsCard, err := toFSRSCard(card)
 	if err != nil {
 		return storage.LearningCard{}, 0, err
 	}
+	// End-to-end latency includes both model turns. Only a short interval is
+	// evidence; a long interval may simply mean the learner was away.
+	effectiveRating := rating
+	elapsed := now.Sub(shownAt)
+	if rating == domain.ReviewRatingGood && !shownAt.IsZero() && elapsed >= 0 && elapsed <= fastReviewWindow {
+		effectiveRating = domain.ReviewRatingEasy
+	}
+
 	previousRetrievability, err := service.scheduler.Retrievability(fsrsCard, now)
 	if err != nil {
 		return storage.LearningCard{}, 0, fmt.Errorf("calculate FSRS retrievability: %w", err)
 	}
-	result, err := service.scheduler.Next(fsrsCard, now, toFSRSRating(rating))
+	result, err := service.scheduler.Next(fsrsCard, now, toFSRSRating(effectiveRating))
 	if err != nil {
 		return storage.LearningCard{}, 0, fmt.Errorf("schedule FSRS review: %w", err)
 	}
@@ -188,7 +202,7 @@ func (service *Service) schedule(
 
 	next := fromFSRSCard(card, result.Card)
 	next.Retrievability = afterRetrievability
-	next.LastRating = rating
+	next.LastRating = effectiveRating
 	if rating == domain.ReviewRatingAgain {
 		next.ConsecutiveFailures = card.ConsecutiveFailures + 1
 	} else {

@@ -220,10 +220,16 @@ Presentation events and review attempts are retained after vocabulary deletion. 
   duplicate: boolean;
   nextReviewAt: string;
   troublesome: boolean;
+  effectiveRating: ReviewRating; // rating actually used by FSRS
+  timingBoost: boolean; // good promoted to easy by the one-minute signal
 }
 ```
 
 Comments are trimmed and limited to 1,000 Unicode characters. The server records the attempt at its current UTC time, updates the FSRS card, and rotates the token atomically.
+
+Submit the answer-quality rating without adjusting it for chat delivery delays. The server measures from the persisted `learning_next` issuance to receipt of `learning_review`, including model thinking, reading, and answering time. If exactly one presentation exists for this owner, card, and pending token, a nonnegative interval of at most 60 seconds promotes `good` to `easy` for scheduling. This is approximate positive evidence, not a measurement of human recall time. `again`, `hard`, and `easy` stay unchanged. Longer intervals, missing history, repeated presentations, and negative intervals never change the submitted rating.
+
+The response reports `effectiveRating` and whether a `timingBoost` was applied. The submitted rating and effective scheduling rating are persisted separately; comment history retains the submitted rating. Retries must send the original rating and comment, not the effective rating, and return the original schedule and timing result even after the one-minute window expires. Pre-upgrade reviews keep their original ratings.
 
 ## Limits
 

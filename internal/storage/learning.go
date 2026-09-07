@@ -71,7 +71,8 @@ type RecordReviewInput struct {
 	Now         time.Time
 }
 
-type ScheduleReview func(LearningCard, time.Time, domain.ReviewRating) (LearningCard, float64, error)
+// ScheduleReview receives a zero shownAt when presentation timing is unavailable or ambiguous.
+type ScheduleReview func(card LearningCard, now time.Time, rating domain.ReviewRating, shownAt time.Time) (LearningCard, float64, error)
 
 func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, now time.Time) (LearningCandidate, error) {
 	transaction, err := db.sql.BeginTx(ctx, nil)
@@ -206,7 +207,11 @@ func (db *DB) RecordReview(
 	}
 
 	now := input.Now.UTC()
-	next, previousRetrievability, err := schedule(card, now, input.Rating)
+	shownAt, err := reviewPresentationTime(ctx, transaction, input.OwnerKey, card.CardID, input.ReviewToken)
+	if err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	next, previousRetrievability, err := schedule(card, now, input.Rating, shownAt)
 	if err != nil {
 		return ReviewAttempt{}, false, err
 	}
@@ -246,6 +251,27 @@ func (db *DB) RecordReview(
 	}
 
 	return attempt, false, nil
+}
+
+func reviewPresentationTime(ctx context.Context, transaction *sql.Tx, ownerKey, cardID, reviewToken string) (time.Time, error) {
+	var count int
+	var shownAt sql.NullString
+	err := transaction.QueryRowContext(ctx, `
+		SELECT COUNT(*), MIN(shown_at)
+		FROM (
+			SELECT shown_at FROM learning_presentations
+			WHERE owner_key = ? AND review_token = ? AND learning_card_id = ?
+			LIMIT 2
+		)
+	`, ownerKey, reviewToken, cardID).Scan(&count, &shownAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read review presentation timing: %w", err)
+	}
+	if count != 1 {
+		return time.Time{}, nil
+	}
+
+	return parseStoredTime(shownAt.String, "review presentation date")
 }
 
 const learningCardColumns = `
@@ -354,6 +380,7 @@ func reviewAttemptByToken(
 			learning_card_id,
 			exercise_mode,
 			rating,
+			COALESCE(effective_rating, rating),
 			comment,
 			reviewed_at,
 			due_before,
@@ -383,6 +410,7 @@ func reviewAttemptByToken(
 		&attempt.LearningCardID,
 		&attempt.ExerciseMode,
 		&attempt.Rating,
+		&attempt.After.LastRating,
 		&attempt.Comment,
 		&reviewedAt,
 		&previousDueAt,
@@ -418,7 +446,6 @@ func reviewAttemptByToken(
 	attempt.After.VocabularyItemID = attempt.VocabularyItemID
 	attempt.After.ExerciseMode = attempt.ExerciseMode
 	attempt.After.LastReviewAt = attempt.ReviewedAt
-	attempt.After.LastRating = attempt.Rating
 
 	return attempt, nil
 }
@@ -433,14 +460,14 @@ func insertReviewAttempt(
 	_, err := transaction.ExecContext(ctx, `
 		INSERT INTO review_attempts(
 			id, owner_key, submission_id, vocabulary_item_id, learning_card_id,
-			exercise_mode, rating, comment, reviewed_at,
+			exercise_mode, rating, effective_rating, comment, reviewed_at,
 			due_before, stability_before, difficulty_before, retrievability_before,
 			scheduled_days_before, repetitions_before, lapses_before, fsrs_state_before,
 			remaining_steps_before, consecutive_failures_before,
 			due_after, stability_after, difficulty_after, retrievability_after,
 			scheduled_days_after, repetitions_after, lapses_after, fsrs_state_after,
 			remaining_steps_after, consecutive_failures_after
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		attempt.ReviewID,
 		ownerKey,
@@ -449,6 +476,7 @@ func insertReviewAttempt(
 		attempt.LearningCardID,
 		attempt.ExerciseMode,
 		attempt.Rating,
+		attempt.After.LastRating,
 		attempt.Comment,
 		TimeString(attempt.ReviewedAt),
 		TimeString(before.DueAt),
