@@ -325,6 +325,47 @@ func TestMCPCombinesOfflineFrequencyWithUsefulnessHints(t *testing.T) {
 	}
 }
 
+func TestMCPExpressionInferencePreservesSavedSpellingAndIdentity(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t, ctx)
+	canonical := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "spill the beans",
+	})
+	typo := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "spill the beasn",
+	})
+	if canonical.Usefulness != domain.UsefulnessHigh || typo.Usefulness != domain.UsefulnessHigh {
+		t.Fatalf("canonical and unique typo inference = %#v, %#v", canonical, typo)
+	}
+	if canonical.ItemID == typo.ItemID || typo.Term != "spill the beasn" || typo.NormalizedTerm != "spill the beasn" {
+		t.Fatalf("usefulness matching rewrote or merged vocabulary: %#v, %#v", canonical, typo)
+	}
+	fetched := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_get", map[string]any{
+		"term": "spill the beasn",
+	})
+	if fetched.ItemID != typo.ItemID || fetched.Term != "spill the beasn" {
+		t.Fatalf("exact retrieval changed with usefulness matching: %#v", fetched)
+	}
+	updated := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", map[string]any{
+		"itemId": typo.ItemID, "changes": map[string]any{"usefulness": "low"},
+	})
+	if updated.Usefulness != domain.UsefulnessNormal || updated.Term != typo.Term {
+		t.Fatalf("expression evidence and low hint should combine without rewriting: %#v", updated)
+	}
+	duplicate := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "spill the beasn", "usefulness": "high",
+	})
+	if duplicate.Created || duplicate.ItemID != typo.ItemID || duplicate.Usefulness != domain.UsefulnessNormal {
+		t.Fatalf("duplicate replaced the original expression hint: %#v", duplicate)
+	}
+	protected := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "spill the beads",
+	})
+	if protected.Usefulness != domain.UsefulnessNormal {
+		t.Fatalf("real-word substitution was treated as a typo: %#v", protected)
+	}
+}
+
 func newTestSession(t *testing.T, ctx context.Context) (*mcp.ClientSession, *fixtureProvider) {
 	t.Helper()
 	store, err := storage.Open(ctx, ":memory:")

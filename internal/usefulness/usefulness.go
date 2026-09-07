@@ -10,28 +10,29 @@ import (
 	"english-learning-mcp/internal/domain"
 )
 
-// Revision changes when the normalized ranks or scoring policy change.
-// Increment the policy version whenever rank thresholds, weights or cutoffs change.
-const Revision = "rank-v1-weighted-1-1-2-thirds-v1:" + datasetRevision
+// Revision changes when either dataset or the matching/scoring policy changes.
+// Increment the policy version whenever rank thresholds, matching or votes change.
+const Revision = "rank-v1-weighted-1-1-2-thirds-v1-expressions-v1:" + datasetRevision + ":" + expressionDatasetRevision
 
 //go:embed assets/ranks.bin.gz
 var compressedRanks string
 
 var ranks = loadRanks()
 
-// Estimate combines exact full-term corpus ranks with an optional API hint.
+// Estimate combines exact word ranks, matched expression evidence and an API hint.
 // normalizedTerm must already be normalized by domain.NormalizeTerm; a nonempty
 // hint must be a valid domain.Usefulness. Missing sources abstain independently.
 func Estimate(normalizedTerm string, hint domain.Usefulness) domain.Usefulness {
 	wordfreqRank, frequencywordsRank := ranks.lookup(normalizedTerm)
-	return estimateRanks(wordfreqRank, frequencywordsRank, hint)
+	expressionScore, expressionWeight := expressionVotes(normalizedTerm)
+	return estimateRanks(wordfreqRank, frequencywordsRank, hint, expressionScore, expressionWeight)
 }
 
-func estimateRanks(wordfreqRank, frequencywordsRank uint32, hint domain.Usefulness) domain.Usefulness {
+func estimateRanks(wordfreqRank, frequencywordsRank uint32, hint domain.Usefulness, expressionScore, expressionWeight int) domain.Usefulness {
 	score, weight := rankVote(wordfreqRank)
 	frequencywordsScore, frequencywordsWeight := rankVote(frequencywordsRank)
-	score += frequencywordsScore
-	weight += frequencywordsWeight
+	score += frequencywordsScore + expressionScore
+	weight += frequencywordsWeight + expressionWeight
 
 	switch hint {
 	case domain.UsefulnessHigh:

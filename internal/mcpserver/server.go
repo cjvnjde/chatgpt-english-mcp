@@ -102,7 +102,7 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_save",
 		Title:       "Save vocabulary",
-		Description: "Save one learnable meaning. Pass the exact definition from dictionary_lookup to learn homonyms and polysemous terms separately; all meanings share the cached lookup. General usefulness is calculated offline from exact frequency matches and an optional double-weighted usefulness hint; the returned usefulness is the combined result.",
+		Description: "Save one learnable meaning. Pass the exact definition from dictionary_lookup to learn homonyms and polysemous terms separately; all meanings share the cached lookup. General usefulness combines offline word frequencies, idiom/collocation evidence, and an optional double-weighted hint. Conservative expression-variant and typo matching affects usefulness only, never the saved term.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			IdempotentHint:  true,
@@ -144,7 +144,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_update",
 		Title:       "Update saved vocabulary",
-		Description: "Partially update an item's status, usefulness hint, tags, description source, notes, or examples. A usefulness hint is combined with offline frequency evidence, not applied as a forced override. Omitted fields are preserved.",
+		Description: "Partially update an item's status, usefulness hint, tags, description source, notes, or examples. A usefulness hint is combined with offline word and expression evidence, not applied as a forced override. Omitted fields are preserved.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			OpenWorldHint:   &closedWorld,

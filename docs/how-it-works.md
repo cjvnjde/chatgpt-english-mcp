@@ -44,13 +44,13 @@ Saving is idempotent for the same normalized term and selected definition. A dif
 
 Learning status is learner-managed metadata. FSRS reviews do not automatically change `new` to `learning` or `learned`; all three active statuses remain eligible for selection. Only `archived` removes an item from the review queue.
 
-Usefulness estimates general English value, independently of personal interests, recall difficulty, and learning status. It combines bundled word-frequency evidence with an optional API hint. Changing usefulness changes selection weight, not FSRS review dates. Different saved senses share word-level frequency evidence but can have different hints.
+Usefulness estimates general English value, independently of personal interests, recall difficulty, and learning status. It combines bundled word-frequency and expression evidence with an optional API hint. Changing usefulness changes selection weight, not FSRS review dates. Different saved senses share term-level evidence but can have different hints.
 
 ### Offline usefulness inference
 
-The application embeds English ranks from [wordfreq](https://github.com/rspeer/wordfreq) and [FrequencyWords](https://github.com/hermitdave/FrequencyWords). Inference requires no external API, runtime download, Python process, or Cambridge lookup. Both sources are historical corpora and overlap in subtitle coverage; the combination is a transparent heuristic, not independent statistical evidence or a guarantee that a word is worth learning.
+The application embeds English ranks from [wordfreq](https://github.com/rspeer/wordfreq) and [FrequencyWords](https://github.com/hermitdave/FrequencyWords), plus expression data from Wiktionary/Kaikki, MAGPIE, and WordNet. Inference requires no external API, runtime download, Python process, or Cambridge lookup. These sources are historical and partly overlap; the combination is a transparent heuristic, not independent statistical evidence or a guarantee that a word is worth learning.
 
-Each source votes only on an exact normalized full-term match:
+The two word-frequency sources vote only on exact normalized full-term matches:
 
 | Rank in that source | Vote |
 | --- | --- |
@@ -63,7 +63,26 @@ Each matched source has weight 1. An explicitly supplied `usefulness` hint has w
 
 For example, two `high` source votes and a `low` API hint produce `normal`, not a forced override in either direction. Two `high` votes and a `normal` hint still produce `high`. Omitting the hint is different from submitting `normal`: omission contributes no vote.
 
-Matching uses the same case, whitespace, and quote normalization as saved vocabulary. It does not stem words, combine inflected forms, or estimate an idiom from its component words. An unmatched phrase uses the supplied hint, or `normal` if omitted. Word-level ranks do not identify how common a particular meaning is.
+The word-rank path remains exact; it never estimates an idiom's frequency by combining individual word frequencies. Expression evidence is evaluated separately:
+
+| Expression evidence | Vote |
+| --- | --- |
+| Wiktionary marks every applicable sense rare, archaic, obsolete, or dated | `low`, weight 1 |
+| MAGPIE has confident idiomatic uses in at least 10 distinct documents | `high`, weight 1 |
+| WordNet records at least 5 tagged occurrences | `high`, weight 1 |
+| Mere dictionary presence, missing counts, or insufficient attestations | Abstain |
+
+Unlabelled or unrestricted senses prevent a blanket restricted-usage judgement. MAGPIE literal, unclear, and false-extraction instances do not count as idiomatic evidence. MAGPIE was filtered and capped at 200 candidates per idiom type: its counts establish repeated attestation, not a population frequency ranking. WordNet tags likewise come from a limited annotated corpus. Small counts never imply that an expression is useless. The same weighted-mean rule combines these votes with the original API hint.
+
+Wiktionary's generic `common` tag is not used as positive evidence: it can describe common law or a regional preference rather than overall frequency.
+
+Expression matching uses the saved term's case, whitespace, and quote normalization. Exact canonical entries take precedence. Unique source-backed aliases, first-verb inflections, and explicitly documented possessive/object templates are accepted before typo matching. The typo fallback considers only complete multiword expressions with one insertion, deletion, substitution, or adjacent transposition in one token of at least four characters. The other tokens and their order must match; substitutions of an input word ranked in the top 50,000 of either word corpus are not treated as typos. Multiple plausible canonical matches abstain instead of choosing the most useful result.
+
+There is no arbitrary token removal, reordering, substring lookup, or semantic similarity. Matching affects inference only: it never corrects the saved spelling, merges saved meanings, or changes `vocabulary_get`/`vocabulary_list` lookup rules. Unknown or ambiguous expressions use the supplied hint, or `normal` if omitted.
+
+Cambridge definition `labels` can contain CEFR levels and usage information already captured by the dictionary parser. [CEFR labels](https://dictionary.cambridge.org/us/help/) describe learner proficiency, not a direct usefulness rating: advanced vocabulary is not automatically unnecessary. Offline inference does not fetch Cambridge or depend on its availability; the tutor may consider existing definition context when supplying a hint.
+
+The commercial Linguatools collocation package is not bundled. It requires an actual licensed download; permission to use it privately does not provide the data.
 
 The original API hint is stored separately from the effective result. Duplicate saves preserve both; a usefulness update replaces the hint and recalculates the result; unrelated updates preserve both. Migration `009` retains every previous usefulness value as a hint and recalculates existing vocabulary across all owners and statuses. Future dataset or scoring-policy revisions recalculate from those original hints, never from the previous calculated result. Revision-matched restarts do not rescan vocabulary. Backfills preserve existing timestamps, cards, review tokens, presentations, and review history.
 

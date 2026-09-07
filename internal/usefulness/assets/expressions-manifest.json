@@ -1,0 +1,160 @@
+{
+  "sources": {
+    "wiktionary": {
+      "version": "enwiktionary-2026-08-05, extracted 2026-08-28",
+      "input": "kaikki.jsonl.gz",
+      "url": "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz",
+      "verification_url": "https://kaikki.org/dictionary/rawdata.html",
+      "verified_date": "2026-09-07",
+      "wiktextract_commit": "872fc7bfc15c388eca84591268d6f35759c42290",
+      "wikitextprocessor_commit": "4deed5191c9e4cb61ee1a4c822e3f6686ae8541b",
+      "snapshot_policy": "Supported all-language raw export, streamed and filtered to lang_code=en. Moving URL: cached bytes with the pinned checksum are required if upstream replaces this snapshot. No deprecated postprocessed data."
+    },
+    "magpie": {
+      "version": "7fa677b82b9a772dfa54bbdd0fb414412d73db3b",
+      "input": "magpie.jsonl",
+      "url": "https://raw.githubusercontent.com/hslh/magpie-corpus/7fa677b82b9a772dfa54bbdd0fb414412d73db3b/MAGPIE_unfiltered.jsonl",
+      "verification_url": "https://api.github.com/repos/hslh/magpie-corpus/commits/master",
+      "verified_date": "2026-09-07",
+      "selection": "Only MAGPIE_unfiltered.jsonl; labels i/l with confidence>=0.75; unique idiomatic document IDs. No split-file duplication.",
+      "offsets": "Unicode character offsets in context[2], end-exclusive; only word-boundary-valid spans separated solely by whitespace become aliases. Omitted tokens and invalid coordinates are never reconstructed.",
+      "interpretation": "Conservative attestation, not population frequency. Manually selected types; BNC candidates capped at 200/type (PMB additional examples not downsampled).",
+      "methodology_url": "https://aclanthology.org/2020.lrec-1.35.pdf"
+    },
+    "wordnet": {
+      "version": "Princeton WordNet 3.1 (2011 database release)",
+      "input": "wordnet.tar.gz",
+      "url": "https://wordnetcode.princeton.edu/wn3.1.dict.tar.gz",
+      "verification_url": "https://wordnetcode.princeton.edu/",
+      "verified_date": "2026-09-07",
+      "selection": "Latest classic Princeton database listed by the official distribution endpoint; not Open English WordNet. All index.sense multiword lemmas; sum real tag_cnt per unique sense; all noun/verb/adj/adv exception files; no synonym expansion.",
+      "tags": "index.sense fourth column: genuine semantically tagged occurrences, not index.* tagsense_cnt (number of senses)."
+    }
+  },
+  "inputs": {
+    "kaikki.jsonl.gz": {
+      "url": "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz",
+      "sha256": "4c27d202e875550c2cc7ea93a4d21ddf80440e5030606d3edbb8b0e65dc64006",
+      "bytes": 2826623319
+    },
+    "magpie.jsonl": {
+      "url": "https://raw.githubusercontent.com/hslh/magpie-corpus/7fa677b82b9a772dfa54bbdd0fb414412d73db3b/MAGPIE_unfiltered.jsonl",
+      "sha256": "541ee535e93d71eff85351351665115e2a9f22ad736423881da5774a93bc880e",
+      "bytes": 55234513
+    },
+    "wordnet.tar.gz": {
+      "url": "https://wordnetcode.princeton.edu/wn3.1.dict.tar.gz",
+      "sha256": "3f7d8be8ef6ecc7167d39b10d66954ec734280b5bdcd57f7d9eafe429d11c22a",
+      "bytes": 16358468
+    },
+    "kaikki-raw.html": {
+      "url": "https://kaikki.org/dictionary/rawdata.html",
+      "sha256": "67d9ab0e3bebdfb0819776eaacdf0b46896d22191ac97a869132391b1abfa59a",
+      "bytes": 27251
+    },
+    "magpie-LICENSE": {
+      "url": "https://raw.githubusercontent.com/hslh/magpie-corpus/7fa677b82b9a772dfa54bbdd0fb414412d73db3b/LICENSE",
+      "sha256": "05ab88f3f9da1d05f9c5bf0a7c45c49a9007f877dd9c237a5bf668276fe04c3b",
+      "bytes": 18651
+    },
+    "magpie-README": {
+      "url": "https://raw.githubusercontent.com/hslh/magpie-corpus/7fa677b82b9a772dfa54bbdd0fb414412d73db3b/README.md",
+      "sha256": "bc9d281e2348a780b91929e44de0e58bc26a822d69835b0e6dd8a666754af6db",
+      "bytes": 2879
+    },
+    "CC-BY-SA-4.0.txt": {
+      "url": "https://raw.githubusercontent.com/creativecommons/cc-legal-tools-data/6d7046ff3146bbc034e88d9c87854e43d2a28e32/docs/licenses/by-sa/4.0/legalcode.txt",
+      "sha256": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5",
+      "bytes": 20138
+    },
+    "GFDL-1.3.txt": {
+      "url": "https://www.gnu.org/licenses/fdl-1.3.txt",
+      "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+      "bytes": 22955
+    },
+    "wordnet-index.html": {
+      "url": "https://wordnetcode.princeton.edu/",
+      "sha256": "1904b8b547a491d5d8bfe2024e4a8632c77d1441041c48bc0060fab8db216949",
+      "bytes": 11594
+    },
+    "kaikki-English.html": {
+      "url": "https://kaikki.org/dictionary/English/",
+      "sha256": "ea11d79139f99352872aff1af2ebaa9e6590e43fe5c0f345728e84c61673d6c3",
+      "bytes": 17608
+    }
+  },
+  "legal_files": {
+    "Wiktionary/CC-BY-SA-4.0.txt": {
+      "input": "CC-BY-SA-4.0.txt",
+      "sha256": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
+    },
+    "Wiktionary/GFDL-1.3.txt": {
+      "input": "GFDL-1.3.txt",
+      "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+    },
+    "Wiktionary/rawdata.upstream.html": {
+      "input": "kaikki-raw.html",
+      "sha256": "67d9ab0e3bebdfb0819776eaacdf0b46896d22191ac97a869132391b1abfa59a"
+    },
+    "Wiktionary/English.upstream.html": {
+      "input": "kaikki-English.html",
+      "sha256": "ea11d79139f99352872aff1af2ebaa9e6590e43fe5c0f345728e84c61673d6c3"
+    },
+    "MAGPIE/LICENSE": {
+      "input": "magpie-LICENSE",
+      "sha256": "05ab88f3f9da1d05f9c5bf0a7c45c49a9007f877dd9c237a5bf668276fe04c3b"
+    },
+    "MAGPIE/README.upstream": {
+      "input": "magpie-README",
+      "sha256": "bc9d281e2348a780b91929e44de0e58bc26a822d69835b0e6dd8a666754af6db"
+    },
+    "WordNet/distribution.upstream.html": {
+      "input": "wordnet-index.html",
+      "sha256": "1904b8b547a491d5d8bfe2024e4a8632c77d1441041c48bc0060fab8db216949"
+    },
+    "WordNet/LICENSE": {
+      "input": "wordnet.tar.gz",
+      "member": "dict/data.verb",
+      "prefix_lines": 29,
+      "sha256": "2c49a717fc37fbb8ba153203c93ffc1867b1868e7d24ecf8a93826caddab4398"
+    }
+  },
+  "format": "JSON entries and WordNet verb exception forms; gzip mtime=0",
+  "normalization": "build_usefulness.normalize, matching domain.NormalizeTerm; WordNet underscores become spaces; all senses retained on normalized collisions",
+  "dataset_sha256": "5eeb07b660f21cf1ee49a4406fc579b1485bb670a53e16a6ab60568f162e32e3",
+  "terms": 218258,
+  "aliases": 170130,
+  "ambiguous_aliases": 851,
+  "collapsed_form_entries": 138545,
+  "verb_forms": 2321,
+  "restricted_terms": 5413,
+  "uncompressed_bytes": 47060090,
+  "compressed_bytes": 2303657,
+  "counts": {
+    "wiktionary": {
+      "rows": 10806865,
+      "english_rows": 1487639,
+      "multiword_rows": 324332,
+      "normalized_terms": 315686
+    },
+    "magpie": {
+      "rows": 56622,
+      "idiomatic_instances": 36338,
+      "contiguous_offsets": 18518,
+      "noncontiguous_offsets": 17705,
+      "literal_instances": 12093,
+      "excluded_rows": 8191,
+      "invalid_offsets": 115,
+      "multiword_types": 1756,
+      "attested_types": 1717,
+      "at_least_10_documents": 851
+    },
+    "wordnet": {
+      "senses": 207235,
+      "multiword_senses": 68154,
+      "exception_rows": 5952,
+      "normalized_terms": 64225,
+      "at_least_5_tags": 572
+    }
+  }
+}

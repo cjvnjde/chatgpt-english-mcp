@@ -31,7 +31,7 @@ go build ./cmd/english-learning-mcp
 
 ## Offline frequency datasets
 
-`internal/usefulness` embeds both complete English rank lists in a compressed binary table. The current bundle covers 1,737,503 distinct normalized terms and adds approximately 15.8 MB to the executable. It decompresses once into approximately 36.1 MB of immutable lookup data; normalized lookups allocate no memory and perform no I/O. There is no runtime Python dependency.
+`internal/usefulness` embeds both complete English word-rank lists in a compressed binary table. The word-rank bundle covers 1,737,503 distinct normalized terms and adds approximately 15.8 MB to the executable, decoding to approximately 36.1 MB of immutable data. Separate expression assets provide Wiktionary, MAGPIE, and WordNet evidence and matching indexes. There is no runtime Python dependency or source download.
 
 Refresh the checked-in assets with:
 
@@ -41,7 +41,22 @@ uv run --no-project --with msgpack scripts/build_usefulness.py
 
 This maintenance command needs network access; ordinary builds and inference do not download frequency data. It downloads pinned, checksummed inputs, preserves source rank order, resolves normalization collisions to the best rank, and recreates `assets/ranks.bin.gz`, `assets/manifest.json`, `revision.go`, and verbatim upstream license files. Do not hand-edit those outputs. Before changing an input pin, verify its upstream release or dataset revision and update its checksum. The manifest records exact inputs, counts, and the decoded content checksum.
 
-The dataset checksum and scoring-policy version form the persisted inference revision. A data refresh or policy change must produce a new revision so startup recalculates existing vocabulary. Re-run the usefulness and migration tests after either change. The runtime Docker image also includes the upstream legal files from `internal/usefulness/licenses`.
+Expression assets have their own reproducible builder:
+
+```sh
+uv run --no-project --with msgpack scripts/build_expressions.py --cache-dir /path/to/expression-sources
+uv run --offline --no-project --with msgpack scripts/build_expressions.py --offline --cache-dir /path/to/expression-sources
+```
+
+The first command downloads missing pinned inputs; the second requires cached Python dependencies and source inputs, and disables network access in both `uv` and the builder. The cached sources total roughly 2.9 GB, including the complete supported Kaikki raw export; processing streams the corpus and retains only English multiword records. Ordinary application builds need only the checked-in compressed assets, not these caches. The current expression index contains 218,258 canonical entries, 170,130 explicit aliases, and 2,321 genuine WordNet exception forms.
+
+`assets/expressions-manifest.json` supplies the source, input-checksum, and legal-file configuration and records generated counts/checksums. To refresh a moving Kaikki snapshot, verify the new upstream snapshot and update those input pins deliberately; do not bypass a checksum failure or edit computed output fields. A pinned snapshot may no longer be available at its moving URL, so retain its source cache when offline regeneration is required. The builder supports `--output-dir` for independent reproduction without overwriting the checked-in outputs.
+
+The builder retains unrestricted senses, collapses only unambiguous pure form/alternative entries, ignores false or unclear MAGPIE annotations, and uses only contiguous valid observed spans as aliases. Source POS gates first-verb inflection: a noun phrase such as `bank holiday` cannot become `banked holiday` merely because `bank` is also a verb. No regular inflections are fabricated. Corpus observations and tagged counts are attestation heuristics, not phrase-frequency ranks; the source `common` tag is deliberately not a positive-frequency signal.
+
+Linguatools is not included: its commercial package requires a supplied data file and access terms. There is no placeholder adapter or runtime call to its API.
+
+Both dataset checksums and the matching/scoring-policy version form the persisted inference revision. A data refresh or policy change must produce a new revision so startup recalculates existing vocabulary from original hints. No additional SQL migration is needed when only the evidence and matching policy change. Re-run the usefulness and migration tests after either change. The runtime Docker image also includes the upstream legal files from `internal/usefulness/licenses`.
 
 ## Package map
 
@@ -51,7 +66,7 @@ The dataset checksum and scoring-policy version form the persisted inference rev
 | `internal/mcpserver` | MCP server metadata, strict schemas, tool registration, HTTP/auth middleware, and error conversion. |
 | `internal/dictionary` | Cambridge HTTP client, HTML parser, cache policy, and lookup service. |
 | `internal/vocabulary` | Validation and behavior for saved vocabulary and learner metadata. |
-| `internal/usefulness` | Embedded exact-match English frequency ranks and weighted general-usefulness inference. |
+| `internal/usefulness` | Embedded word ranks, expression evidence, conservative variant/typo matching, and weighted general-usefulness inference. |
 | `internal/learning` | Candidate presentation, FSRS scheduling, review ratings, and troublesome-item detection. |
 | `internal/storage` | SQLite queries, transactions, cursor encoding, IDs, migrations, and domain hydration. |
 | `internal/domain` | Shared dictionary, vocabulary, learning, and normalization types. |

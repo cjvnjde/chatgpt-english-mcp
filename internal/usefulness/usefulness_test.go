@@ -1,8 +1,10 @@
 package usefulness
 
 import (
+	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -24,10 +26,10 @@ func TestRankBoundariesAndAbsentSource(t *testing.T) {
 		{"full long tail", 1656996, domain.UsefulnessLow},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := estimateRanks(test.rank, 0, ""); got != test.want {
+			if got := estimateRanks(test.rank, 0, "", 0, 0); got != test.want {
 				t.Fatalf("wordfreq rank %d = %q, want %q", test.rank, got, test.want)
 			}
-			if got := estimateRanks(0, test.rank, ""); got != test.want {
+			if got := estimateRanks(0, test.rank, "", 0, 0); got != test.want {
 				t.Fatalf("FrequencyWords rank %d = %q, want %q", test.rank, got, test.want)
 			}
 		})
@@ -57,7 +59,7 @@ func TestWeightedCorpusAndHintVotes(t *testing.T) {
 		{"hint resolves corpus disagreement", 1, 5001, domain.UsefulnessHigh, domain.UsefulnessHigh},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := estimateRanks(test.wordfreq, test.frequencywords, test.hint)
+			got := estimateRanks(test.wordfreq, test.frequencywords, test.hint, 0, 0)
 			if got != test.want {
 				t.Fatalf("estimateRanks(%d, %d, %q) = %q, want %q", test.wordfreq, test.frequencywords, test.hint, got, test.want)
 			}
@@ -91,7 +93,7 @@ func TestEstimateUsesFullBundledCorpora(t *testing.T) {
 }
 
 func TestEstimateNeverApproximatesPhrasesFromTokens(t *testing.T) {
-	for _, term := range []string{"the and", "new york", "sesquipedalian defenestration"} {
+	for _, term := range []string{"the and", "sesquipedalian defenestration"} {
 		if got := Estimate(term, ""); got != domain.UsefulnessNormal {
 			t.Fatalf("Estimate(%q) = %q; absent full phrases must abstain", term, got)
 		}
@@ -104,8 +106,23 @@ func TestEstimateNeverApproximatesPhrasesFromTokens(t *testing.T) {
 func TestRevisionTracksBundledRankContent(t *testing.T) {
 	// A stale revision would skip persisted-value recomputation after a refresh.
 	digest := sha256.Sum256([]byte(ranks))
-	if !strings.HasSuffix(Revision, ":"+fmt.Sprintf("%x", digest)) {
+	if !strings.Contains(Revision, ":"+fmt.Sprintf("%x", digest)+":") {
 		t.Fatalf("Revision %q does not identify the bundled rank content", Revision)
+	}
+}
+
+func TestRevisionTracksBundledExpressionContent(t *testing.T) {
+	reader, err := gzip.NewReader(strings.NewReader(compressedExpressions))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, reader); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(Revision, ":"+fmt.Sprintf("%x", digest.Sum(nil))) {
+		t.Fatalf("Revision %q does not identify the bundled expression content", Revision)
 	}
 }
 
@@ -113,8 +130,17 @@ func TestNormalizedEstimateDoesNotAllocate(t *testing.T) {
 	allocations := testing.AllocsPerRun(100, func() {
 		Estimate("meticulous", domain.UsefulnessNormal)
 		Estimate("new york", "")
+		Estimate("spill the beasn", "")
 	})
 	if allocations != 0 {
 		t.Fatalf("normalized exact lookups allocate %g times, want zero", allocations)
+	}
+}
+
+func TestExpressionRegionalAndDomainLabelsDoNotImplyFrequency(t *testing.T) {
+	for _, term := range []string{"nasal cannula", "high court"} {
+		if got := Estimate(term, ""); got != domain.UsefulnessNormal {
+			t.Fatalf("regional or domain 'common' label promoted %q to %q", term, got)
+		}
 	}
 }

@@ -5,7 +5,7 @@ A self-hosted MCP server for looking up English terms, maintaining a personal vo
 It provides eight tools for:
 
 - Cambridge Dictionary lookups with permanent SQLite caching
-- vocabulary metadata, offline frequency-based usefulness with optional AI hints, notes, examples, tags, and learning states
+- vocabulary metadata, offline word/expression usefulness with optional AI hints, notes, examples, tags, and learning states
 - usefulness-weighted selection mixing new words and due reviews, with recent-word cooldowns
 - idempotent review recording and spaced-repetition scheduling
 - timestamped presentation history retained for future learning analytics

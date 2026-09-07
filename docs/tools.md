@@ -24,7 +24,7 @@ type Usefulness = "low" | "normal" | "high";
 type ReviewRating = "again" | "hard" | "good" | "easy";
 ```
 
-A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, an optional complete dictionary lookup, and creation/update timestamps. Returned usefulness is the effective general-usefulness classification calculated from offline frequency evidence and any saved API hint, not personal relevance, difficulty, or recall quality.
+A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, an optional complete dictionary lookup, and creation/update timestamps. Returned usefulness is the effective general-usefulness classification calculated from offline word/expression evidence and any saved API hint, not personal relevance, difficulty, or recall quality.
 
 ## `dictionary_lookup`
 
@@ -60,6 +60,8 @@ The result includes:
 
 Entries may contain headwords, parts of speech, UK/US pronunciation and audio, inflections, definitions, examples, labels, phrases, images, usages, related words, synonyms, antonyms, and idioms.
 
+Definition `labels` may include Cambridge CEFR levels such as `B1`, alongside usage/register labels. These are not a direct usefulness score. The offline usefulness engine does not perform Cambridge requests or equate advanced CEFR levels with low usefulness.
+
 ## `vocabulary_save`
 
 ```ts
@@ -87,9 +89,9 @@ For terms with dictionary data, callers should always pass `definition`. Omittin
 
 Tags are trimmed, lowercased, deduplicated, and sorted. `descriptionSource.url`, when present, must be an absolute HTTP(S) URL and requires a non-empty custom description.
 
-Omit `usefulness` to let the server infer it from exact normalized matches in its bundled wordfreq and FrequencyWords datasets. An explicit value is a general-usefulness hint with twice the weight of each matched dataset, not a forced override. Use `high` for broadly useful English, `low` for uncommon or narrowly useful vocabulary, and `normal` for an intermediate assessment. Do not submit `normal` merely because you have no assessment: omit the field instead. Missing sources abstain; with no evidence or hint the result is `normal`. See [the scoring policy](how-it-works.md#offline-usefulness-inference).
+Omit `usefulness` to infer it from bundled word frequencies and expression evidence from Wiktionary/Kaikki, MAGPIE, and WordNet. An explicit value is a general-usefulness hint with twice the weight of each voting evidence source, not a forced override. Mere dictionary presence contributes no vote. Use `high` for broadly useful English, `low` for uncommon or narrowly useful vocabulary, and `normal` for an intermediate assessment. Do not submit `normal` merely because you have no assessment: omit the field instead. Missing or ambiguous evidence abstains; with no evidence or hint the result is `normal`. See [the scoring policy](how-it-works.md#offline-usefulness-inference).
 
-The returned `usefulness` may differ from the submitted hint. Saving an already existing meaning does not overwrite either the hint or result; use `vocabulary_update` for intentional changes. Frequency matching never splits an idiom into individual words or requires a dictionary lookup.
+The returned `usefulness` may differ from the submitted hint. Saving an already existing meaning does not overwrite either the hint or result; use `vocabulary_update` for intentional changes. Expression inference supports unique source-backed variants and tightly constrained one-token typo matches, without rewriting the saved term. It never derives phrase frequency from individual words, requires a dictionary lookup, or makes vocabulary retrieval fuzzy.
 
 ## `vocabulary_update`
 

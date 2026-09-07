@@ -170,6 +170,8 @@ Before upgrading, stop and back up the worker, verify the new stable package/run
 
 Export schema version `2` includes usefulness metadata; deployments upgrading from schema `1` must rebuild and redeploy both the Go service and worker together. Offline frequency inference keeps schema `2` unchanged. Migration `009` preserves old usefulness values as hints and recalculates effective values from the bundled datasets without resetting learning state or existing timestamps. New dataset or scoring-policy revisions trigger the same startup recalculation. No frequency download or external API access is needed at runtime. Usefulness affects MCP selection only, not Anki fields, tags, or scheduling.
 
+Expression inference also keeps the existing database and export schemas. Redeploying the Go service loads the bundled expression index and advances the scoring revision, recalculating saved terms from their original hints. No expression download or Anki worker change is required. Conservative variant and typo matching affects usefulness only, not vocabulary identity or Anki content.
+
 For live integration, use a separate deployment environment containing only disposable-account credentials. Stop its polling worker before the test. The command requires an explicit acknowledgement and matching account email:
 
 ```sh
