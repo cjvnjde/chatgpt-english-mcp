@@ -298,24 +298,23 @@ flowchart TD
     Any -->|"No"| Empty["NOT_FOUND"]
     Any -->|"Yes"| Eligible{"Any FSRS-new or due cards?"}
     Eligible -->|"Yes"| Filter["Temporarily remove recent cards from both eligible pools"]
-    Filter --> Remaining{"Any eligible cards remain?"}
-    Remaining -->|"No"| Rotate["Choose least recently presented eligible card"]
-    Remaining -->|"Yes"| Both{"Both new and due pools remain?"}
-    Both -->|"Yes"| Mix["Choose new with 20% probability; due with 80%"]
+    Filter --> Adapt["Relax oldest exclusions when needed for variety"]
+    Adapt --> Both{"Both new and due pools remain?"}
+    Both -->|"Yes"| Mix["Weight the 20:80 baseline by each pool's mean recency"]
     Both -->|"No"| Only["Choose the nonempty pool"]
     Mix --> Lottery["Weighted random draw within that pool"]
     Only --> Lottery
     Eligible -->|"No"| Future{"Any nonrecent future cards?"}
     Future -->|"Yes"| Nearest["Choose nearest due time among those cards"]
     Future -->|"No"| Oldest["Choose least recently presented future card"]
-    Rotate --> Commit["Read chosen content and commit a presentation event"]
+    Commit["Read chosen content and commit a presentation event"]
     Lottery --> Commit
     Nearest --> Commit
     Oldest --> Commit
     Commit --> Return["Return item, reason, presentation ID, time, and review token"]
 ```
 
-The ordering matters: **eligibility → cooldown → pool choice → within-pool weight**. A large weight cannot bypass an earlier stage.
+The ordering matters: **eligibility → adaptive cooldown → recency-adjusted pool choice → within-pool weight**. A large weight cannot bypass an earlier stage.
 
 ### 1. Build the candidate pools
 
@@ -342,30 +341,41 @@ A card is *recent* only when both conditions hold:
 
 This is not “all words shown in the last 30 minutes,” and the three events need not represent three distinct cards. Once an event falls outside the last three, its card can compete again immediately, but still receives the softer recency penalty below. At exactly 30 minutes the hard cooldown has expired.
 
-Remove recent cards from both new and due pools before deciding which pool to use:
+Start by removing recent cards from both new and due pools. Relax this exclusion only when it would prevent useful variety:
 
-- If any nonrecent eligible cards remain, recent cards cannot win that call.
-- If every eligible card is recent, select the least recently presented **eligible** card. Do not move to a future card to avoid repeating.
-- With only one eligible card, it may repeat immediately.
+- If two or more candidates remain, keep the exclusion unchanged.
+- If exactly one remains and it has never been presented or was last presented at least 30 minutes ago, keep that fresh alternative alone.
+- If exactly one remains but it was shown within 30 minutes, also admit the least recently presented excluded eligible card, unless that card is the most recently presented active card.
+- If none remain, admit the oldest eligible card and, unless it is the most recently presented active card, the second-oldest eligible card.
+- Never admit a future card through this relaxation. Future cards' presentation IDs still identify the latest presentation, so two due cards can both compete when the last-shown card is not due yet.
 
-“Least recently presented” compares each card's latest **event ID**, not its timestamp; ties use ascending card ID. This makes small pools rotate even when events share the same timestamp. Archived/deleted items' retained events can still occupy positions in the owner's last-three-event window.
+This leaves a weighted choice between older candidates instead of forcing three- or four-card pools into a fixed rotation. With only two active cards, avoiding immediate repeats still means alternation. With only one eligible card, it may repeat immediately; future cards do not become due just to add variety. Random draws can still happen to repeat an order.
+
+“Oldest” compares each card's latest **event ID**, not its timestamp; ties use ascending card ID. This preserves issuance order even when events share a timestamp. Archived/deleted items' retained events can still occupy positions in the owner's last-three-event window; the latest active presentation is the greatest event ID among the loaded cards.
 
 The implementation treats a negative elapsed interval after a backward clock change as recent when its ID is in the window. The recency weight clamps that interval to zero. This differs from review timing, where a negative interval supplies no boost.
 
 ### 3. Choose new versus due
 
-After cooldown:
+After adaptive cooldown, let $N$ and $D$ be the remaining new and due pools, including any cards readmitted by relaxation. Each pool's priority uses its **mean** presentation recency multiplier, with $\rho_i$ defined below:
+
+$$
+\bar{\rho}_P = \frac{\sum_{i\in P}\rho_i}{|P|}
+\qquad
+p_N = \frac{\bar{\rho}_N}{\bar{\rho}_N + 4\bar{\rho}_D}
+$$
 
 | Nonempty eligible pools | Pool probability |
 |---|---|
-| New and due | New: 0.2; due: 0.8 |
+| New and due | New: $p_N$; due: $1-p_N$ |
 | New only | New: 1 |
 | Due only | Due: 1 |
-| Neither, but eligible cards existed | Deterministic least-recent fallback; no lottery |
 
-This is a random choice, not “one new card after every four reviews.” Pool sizes, summed weights, backlog size, and usefulness do **not** change the 0.2/0.8 split. One new card against 100 due cards still gets a 20% pool chance while both pools survive cooldown.
+Equal mean recency preserves the **20% new / 80% due baseline**. Unseen new cards have mean recency 1; just-presented due candidates have mean recency near 0.25, producing approximately a **50/50** mix. Once those due cards have not been presented for 24 hours, their recency recovers to 1 and the baseline applies again.
 
-The ratio is conditional on the current state. Each presentation changes that state, so a real session need not contain 20% new items.
+Pool size does not directly buy more priority: one new card and 100 equally recent new cards have the same pool priority. Usefulness, urgency, and failures affect the within-pool lottery, not this mean. With both pools nonempty, the new-pool probability ranges from $1/17$ (about 5.88%) to 50%, depending on their relative recency.
+
+This remains a random choice, not a quota or a per-word repetition limit. Each presentation changes the pool means, cooldown, and possibly the available pools, so a real session need not contain 20% or 50% new items.
 
 ### 4. Calculate each card's weight
 
@@ -406,7 +416,7 @@ $$
 | 24 hours or more | 1 |
 | Never presented | 1 |
 
-The hard cooldown and this multiplier are separate mechanisms. A card leaving cooldown after 30 minutes has recovered eligibility, not full weight.
+The adaptive cooldown and this multiplier are separate mechanisms. A card leaving cooldown after 30 minutes has recovered eligibility, not full weight. The multiplier affects both its pool's mean priority and its own within-pool lottery weight.
 
 **Due urgency multiplier $A_i$:**
 
@@ -452,12 +462,12 @@ When both pools survive cooldown:
 $$
 \Pr(i)=
 \begin{cases}
-0.2\,W_i/\sum_{j\in N}W_j & i\in N\\
-0.8\,W_i/\sum_{j\in D}W_j & i\in D
+p_N\,W_i/\sum_{j\in N}W_j & i\in N\\
+(1-p_N)\,W_i/\sum_{j\in D}W_j & i\in D
 \end{cases}
 $$
 
-Here $N$ and $D$ contain only the surviving new and due cards. An excluded card has probability zero for that call. In a single-pool lottery, replace 0.2 or 0.8 with 1.
+Here $N$ and $D$ contain the new and due candidates after adaptive cooldown, and $p_N$ is the recency-adjusted pool probability above. An excluded card has probability zero for that call. In a single-pool lottery, the pool probability is 1.
 
 The implementation draws a pseudorandom value in $[0,1)$, multiplies it by the pool's total weight, and walks cumulative card weights until that draw is covered. There is no persistent shuffled queue or per-word quota. Nonexcluded low-weight cards remain possible, but there is no guarantee that a particular card appears within a fixed number of calls.
 
@@ -471,13 +481,13 @@ Assume these due cards are outside the hard cooldown:
 | B | 1 day / 2 days | 1 / 1 | 12 hours ago | `high` | $1.5\times1.75\times0.625\times2=3.28125$ |
 | C | 0 / 2 days | 0 / 0 | At least 24 hours ago | `low` | $1\times1\times1\times0.5=0.5$ |
 
-Total due weight is 4.78125. If the due pool is selected, A/B/C have approximately **20.92% / 68.63% / 10.46%** chances. If a nonrecent new pool also exists, their overall probabilities become approximately **16.73% / 54.90% / 8.37%**; the remaining 20% belongs to the new pool.
+Total due weight is 4.78125. If the due pool is selected, A/B/C have approximately **20.92% / 68.63% / 10.46%** chances. Their mean recency is $(1+0.625+1)/3=0.875$. If an unseen new pool also exists, it gets $1/(1+4\times0.875)=2/9$, or **22.22%**. The overall A/B/C probabilities are then approximately **16.27% / 53.38% / 8.13%**.
 
 For three otherwise equal new cards with low/normal/high usefulness, weights are 0.5/1/2 and within-pool probabilities are $1/7,2/7,4/7$. High is twice normal and four times low **within that pool**, not “a 200% chance.”
 
 #### Worked example: cooldown outranks usefulness and the mix
 
-Suppose the only due card is high-usefulness but was just presented, while a low-usefulness new card is nonrecent. Cooldown removes the due card; the new card wins with probability 1, not 0.2.
+Suppose the only due card is high-usefulness but was just presented, while a low-usefulness new card has never been presented. Cooldown removes the due card and preserves the fresh alternative; the new card wins with probability 1, regardless of the baseline mix.
 
 Now suppose the only eligible card is that recent due card, and every other card is a future review. The due card repeats. Future cards do not become eligible merely because the due card is on cooldown.
 
@@ -880,7 +890,7 @@ Only a positive score can win. The largest overlap wins; ties keep the first def
 
 For example, a `boating` tag can favor a definition containing “boating,” but does not automatically match “boat” or “sailing.” The separate saved `context` string is not an input to this overlap score. An explicit selected sense takes precedence over the heuristic.
 
-The latest **non-empty** review comment is returned separately. A newer review without a comment does not erase older useful feedback. `includeComments: true` requests the complete non-empty comment history; it does not change selection, content matching, or scheduling. The AI tutor decides how to use this content and should hide the target term while asking a production-recall question.
+The latest **non-empty** review comment is returned separately. A newer review without a comment does not erase older useful feedback. `includeComments: true` requests the complete non-empty comment history; it does not change selection, content matching, or scheduling. The AI tutor decides how to use this content and should hide the target term while asking a production-recall question. The [suggested tutor prompts](prompts.md) instruct it to use a different sentence or situation when a meaning returns with a new review token, without changing the saved meaning or rewriting stored examples.
 
 ## What affects what
 
@@ -898,7 +908,7 @@ The latest **non-empty** review comment is returned separately. A newer review w
 | Term spelling, bundled ranks, expression evidence | Indirectly through calculated usefulness; no separate raw-rank weight | No direct effect | Determine inference matches and votes |
 | Optional usefulness hint | Indirectly through effective category | No direct effect | Weight 2 in inference; not a forced override |
 | Consecutive failures and lapses | Bounded extra due-card weight; troublesome label | Not direct equation multipliers; rating/state update counters | No usefulness effect |
-| Latest presentation and recent event IDs | Hard cooldown and soft recency | Only indirectly via review time and unique-presentation timing promotion | Issuance is not proof of human visibility |
+| Latest presentation and recent event IDs | Adaptive cooldown, pool priority, and within-pool recency weight | Only indirectly via review time and unique-presentation timing promotion | Issuance is not proof of human visibility |
 | Repeated `learning_next` calls | Change future selection history, even without an answer | Do not reschedule; repeated token presentations disable timing promotion | New presentation event each time |
 | Rating | Indirectly through updated due/state/failures | Effective grade is a direct input | Server does not inspect answer text |
 | Answer latency | No separate speed-based selection score | Only the exact positive-only good-to-easy rule | Includes model/delivery time, not pure recall time |
@@ -922,13 +932,13 @@ The latest **non-empty** review comment is returned separately. A newer review w
 - **Skipping an answer is not a failed review.** Presentation affects selection history, but only a submitted review updates FSRS and failure counters.
 - **Waiting hours is not graded as hesitation.** Timing no longer supplies a boost; the answer-quality rating still controls scheduling.
 - **Completing all due cards does not make `learning_next` empty.** It can return new items or early reviews until the tutor/learner stops.
-- **The 20% mix is not personalized or backlog-adaptive.** The current policy has no daily quota, target session length, or guarantee that all due cards will be covered.
+- **The new/review mix responds to recent exposure, not a lesson quota.** The current policy has no daily quota, target session length, or guarantee that all due cards will be covered.
 
 ### Which parameters can a caller change?
 
 Tool callers can save/archive items, update usefulness hints and metadata, submit review ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
 
-The 20% pool probability, last-three/30-minute cooldown, 24-hour recency recovery, weight caps, usefulness thresholds, and one-minute timing window are source-level policy constants. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
+The 20:80 baseline pool priority, adaptive last-three/30-minute cooldown, 24-hour recency recovery, weight caps, usefulness thresholds, and one-minute timing window are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
 
 ## Implementation map
 

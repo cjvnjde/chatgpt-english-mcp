@@ -23,6 +23,12 @@ type selectionCard struct {
 	usefulness          domain.Usefulness
 }
 
+type selectionPool struct {
+	count      int
+	weight     float64
+	recencySum float64
+}
+
 func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey string) ([]selectionCard, int64, error) {
 	var recentSinceID int64
 	if err := transaction.QueryRowContext(ctx, `
@@ -94,23 +100,32 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 		return selectionCard{}, false
 	}
 
-	var dueWeight, newWeight float64
-	var oldestEligible, earliestFuture, oldestFuture *selectionCard
+	var duePool, newPool selectionPool
+	var hasEligible bool
+	var latestPresentationID int64
+	var onlyAvailable, oldestRecent, secondOldestRecent *selectionCard
+	var earliestFuture, oldestFuture *selectionCard
 	for index := range cards {
 		card := &cards[index]
-		recent := card.lastPresentationID > 0 && card.lastPresentationID >= recentSinceID &&
-			now.Sub(card.lastShownAt) < 30*time.Minute
+		// Future cards still identify which presentation would be an immediate repeat.
+		latestPresentationID = max(latestPresentationID, card.lastPresentationID)
+		recent := card.lastPresentationID >= recentSinceID && presentedRecently(card, now)
 		if card.fsrsState == 0 || !card.dueAt.After(now) {
-			if oldestEligible == nil || presentedBefore(card, oldestEligible) {
-				oldestEligible = card
-			}
+			hasEligible = true
 			if recent {
+				if oldestRecent == nil || presentedBefore(card, oldestRecent) {
+					secondOldestRecent = oldestRecent
+					oldestRecent = card
+				} else if secondOldestRecent == nil || presentedBefore(card, secondOldestRecent) {
+					secondOldestRecent = card
+				}
 				continue
 			}
+			onlyAvailable = card
 			if card.fsrsState == 0 {
-				newWeight += selectionWeight(card, now)
+				newPool.add(card, now)
 			} else {
-				dueWeight += selectionWeight(card, now)
+				duePool.add(card, now)
 			}
 			continue
 		}
@@ -123,20 +138,45 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 		}
 	}
 
-	if oldestEligible == nil {
+	if !hasEligible {
 		if earliestFuture != nil {
 			return *earliestFuture, true
 		}
 		return *oldestFuture, true
 	}
-	if dueWeight == 0 && newWeight == 0 {
-		return *oldestEligible, true
+	// A rigid three-card exclusion forces four-card pools into a cycle.
+	// Relax oldest exclusions only when fresh alternatives cannot break it.
+	var relaxed [2]*selectionCard
+	availableCount := duePool.count + newPool.count
+	if availableCount == 0 {
+		relaxed[0] = oldestRecent
+		if secondOldestRecent != nil && secondOldestRecent.lastPresentationID < latestPresentationID {
+			relaxed[1] = secondOldestRecent
+		}
+	} else if availableCount == 1 && presentedRecently(onlyAvailable, now) &&
+		oldestRecent != nil && oldestRecent.lastPresentationID < latestPresentationID {
+		relaxed[0] = oldestRecent
+	}
+	for _, card := range relaxed {
+		if card == nil {
+			continue
+		}
+		if card.fsrsState == 0 {
+			newPool.add(card, now)
+		} else {
+			duePool.add(card, now)
+		}
 	}
 
-	chooseNew := dueWeight == 0 || (newWeight > 0 && random() < 0.2)
-	totalWeight := dueWeight
+	chooseNew := duePool.count == 0
+	if newPool.count > 0 && duePool.count > 0 {
+		newPriority := newPool.recencySum / float64(newPool.count)
+		duePriority := 4 * duePool.recencySum / float64(duePool.count)
+		chooseNew = random() < newPriority/(newPriority+duePriority)
+	}
+	totalWeight := duePool.weight
 	if chooseNew {
-		totalWeight = newWeight
+		totalWeight = newPool.weight
 	}
 	remaining := random() * totalWeight
 	var last *selectionCard
@@ -145,12 +185,12 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 		if (card.fsrsState == 0) != chooseNew || (card.fsrsState != 0 && card.dueAt.After(now)) {
 			continue
 		}
-		if card.lastPresentationID > 0 && card.lastPresentationID >= recentSinceID &&
-			now.Sub(card.lastShownAt) < 30*time.Minute {
+		if card != relaxed[0] && card != relaxed[1] &&
+			card.lastPresentationID >= recentSinceID && presentedRecently(card, now) {
 			continue
 		}
 		last = card
-		remaining -= selectionWeight(card, now)
+		remaining -= selectionWeight(card, now, presentationRecency(card, now))
 		if remaining < 0 {
 			return *card, true
 		}
@@ -165,17 +205,31 @@ func presentedBefore(card, other *selectionCard) bool {
 		(card.lastPresentationID == other.lastPresentationID && card.cardID < other.cardID)
 }
 
-func selectionWeight(card *selectionCard, now time.Time) float64 {
+func presentedRecently(card *selectionCard, now time.Time) bool {
+	return card.lastPresentationID > 0 && now.Sub(card.lastShownAt) < 30*time.Minute
+}
+
+func presentationRecency(card *selectionCard, now time.Time) float64 {
+	if card.lastPresentationID > 0 {
+		return 0.25 + 0.75*max(0, min(now.Sub(card.lastShownAt).Hours()/24, 1))
+	}
+	return 1
+}
+
+func (pool *selectionPool) add(card *selectionCard, now time.Time) {
+	recency := presentationRecency(card, now)
+	pool.count++
+	pool.recencySum += recency
+	pool.weight += selectionWeight(card, now, recency)
+}
+
+func selectionWeight(card *selectionCard, now time.Time, recency float64) float64 {
 	usefulness := 1.0
 	switch card.usefulness {
 	case domain.UsefulnessLow:
 		usefulness = 0.5
 	case domain.UsefulnessHigh:
 		usefulness = 2
-	}
-	recency := 1.0
-	if card.lastPresentationID > 0 {
-		recency = 0.25 + 0.75*max(0, min(now.Sub(card.lastShownAt).Hours()/24, 1))
 	}
 	if card.fsrsState == 0 {
 		return recency * usefulness

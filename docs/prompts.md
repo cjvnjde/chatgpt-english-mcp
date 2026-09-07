@@ -157,6 +157,10 @@ likelihood, not whether an answer was correct.
 Use the returned definition, example, troublesome flag, and comments to prepare
 one meaning-to-word question. Keep the term hidden, including obvious derivatives
 or revealing parts in examples. Pass reviewToken back unchanged.
+When a word returns with a new reviewToken, use a different sentence or situation
+from its previous question in this chat, while testing the same saved meaning.
+Treat the returned example as a reference, not a script to repeat. Keep the
+answer hidden; do not rewrite saved vocabulary just to vary the exercise.
 
 For each item, ask the question, wait for an answer, guide with hints if needed,
 evaluate the completed attempt, and call learning_review once with reviewToken,
@@ -237,6 +241,9 @@ For each item:
 2. Keep the returned reviewToken unchanged for the corresponding review.
 3. Use the definition, example, troublesome flag, and previous comments to
    prepare one production-recall question.
+   When a previously practiced meaning returns with a new token, use a different
+   sentence or situation instead of repeating its previous clue. Preserve the
+   saved meaning; do not edit stored examples just to vary the exercise.
 4. Ask the question without revealing the term, and wait for my answer.
 5. Guide with hints when needed, then evaluate the completed attempt.
 6. Call learning_review with the same reviewToken, the appropriate rating,

@@ -106,6 +106,123 @@ func TestSelectLearningCardRecencyPenaltyRecoversByNextDay(t *testing.T) {
 	}
 }
 
+func TestSelectLearningCardSmallPoolsLeaveMultipleChoices(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	for _, size := range []int{3, 4, 5} {
+		t.Run(fmt.Sprintf("pool-%d", size), func(t *testing.T) {
+			cards := make([]selectionCard, size)
+			for index := range cards {
+				cards[index] = selectionCard{
+					cardID: fmt.Sprintf("card-%d", index), fsrsState: 1, dueAt: now,
+					lastPresentationID: int64(index + 1), lastShownAt: now,
+				}
+			}
+			var firstChoice string
+			for index, draw := range []float64{0, 0.999999} {
+				selected, ok := selectLearningCard(cards, int64(max(1, size-2)), now, func() float64 { return draw })
+				if !ok {
+					t.Fatal("eligible cards were not selectable")
+				}
+				if selected.lastPresentationID > 2 {
+					t.Fatalf("selected %q instead of preserving spacing from the most recent cards", selected.cardID)
+				}
+				if index == 0 {
+					firstChoice = selected.cardID
+				} else if selected.cardID == firstChoice {
+					t.Fatalf("both random draws forced %q, locking the pool into a fixed rotation", selected.cardID)
+				}
+			}
+		})
+	}
+}
+
+func TestSelectLearningCardRelaxesCooldownWhenLatestCardIsNotDue(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 2, 0, 0, time.UTC)
+	// Four failed words, asked 30 seconds apart and answered after 10 seconds.
+	// The two newest cards are not due yet; neither due card is an immediate repeat.
+	cards := []selectionCard{
+		{cardID: "first", fsrsState: 1, dueAt: now.Add(-50 * time.Second), lastPresentationID: 1, lastShownAt: now.Add(-2 * time.Minute)},
+		{cardID: "second", fsrsState: 1, dueAt: now.Add(-20 * time.Second), lastPresentationID: 2, lastShownAt: now.Add(-90 * time.Second)},
+		{cardID: "third", fsrsState: 1, dueAt: now.Add(10 * time.Second), lastPresentationID: 3, lastShownAt: now.Add(-time.Minute)},
+		{cardID: "latest", fsrsState: 1, dueAt: now.Add(40 * time.Second), lastPresentationID: 4, lastShownAt: now.Add(-30 * time.Second)},
+	}
+	for _, test := range []struct {
+		draw float64
+		want string
+	}{
+		{draw: 0, want: "first"},
+		{draw: 0.999999, want: "second"},
+	} {
+		selected, ok := selectLearningCard(cards, 2, now, func() float64 { return test.draw })
+		if !ok || selected.cardID != test.want {
+			t.Fatalf("draw %g selected %q, want due alternative %q", test.draw, selected.cardID, test.want)
+		}
+	}
+}
+
+func TestSelectLearningCardKeepsFreshAlternativeAheadOfCooldownRelaxation(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	for _, fresh := range []selectionCard{
+		{cardID: "unseen"},
+		{cardID: "cooldown-expired", fsrsState: 2, dueAt: now, lastPresentationID: 1, lastShownAt: now.Add(-30 * time.Minute)},
+	} {
+		t.Run(fresh.cardID, func(t *testing.T) {
+			cards := []selectionCard{
+				fresh,
+				{cardID: "recent", fsrsState: 1, dueAt: now, lastPresentationID: 2, lastShownAt: now},
+				{cardID: "latest", fsrsState: 1, dueAt: now, lastPresentationID: 3, lastShownAt: now},
+			}
+			for _, draw := range []float64{0, 0.999999} {
+				selected, ok := selectLearningCard(cards, 1, now, func() float64 { return draw })
+				if !ok || selected.cardID != fresh.cardID {
+					t.Fatalf("draw %g selected %q, want fresh alternative %q", draw, selected.cardID, fresh.cardID)
+				}
+			}
+		})
+	}
+}
+
+func TestSelectLearningCardMixAccountsForRecentExposureAndRecovers(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	cards := make([]selectionCard, 0, 104)
+	for index := range 4 {
+		cards = append(cards, selectionCard{
+			cardID: fmt.Sprintf("due-%d", index), fsrsState: 1, dueAt: now,
+			lastPresentationID: int64(index + 1), lastShownAt: now,
+		})
+	}
+	for index := range 100 {
+		cards = append(cards, selectionCard{cardID: fmt.Sprintf("new-%d", index)})
+	}
+	for _, test := range []struct {
+		name    string
+		elapsed time.Duration
+		wantNew int
+	}{
+		{name: "recent due pool yields room to unseen words", wantNew: 50},
+		{name: "next day restores baseline review priority", elapsed: 24 * time.Hour, wantNew: 20},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			newSelections := 0
+			for index := range 100 {
+				draw := (float64(index) + 0.5) / 100
+				// The four due cards have left the hard cooldown, but their
+				// recent exposure must still affect the pool choice.
+				selected, ok := selectLearningCard(cards, 5, now.Add(test.elapsed), func() float64 { return draw })
+				if !ok {
+					t.Fatal("eligible cards were not selectable")
+				}
+				if selected.fsrsState == 0 {
+					newSelections++
+				}
+			}
+			if newSelections != test.wantNew {
+				t.Fatalf("new selections = %d/100, want %d/100", newSelections, test.wantNew)
+			}
+		})
+	}
+}
+
 func TestSelectLearningCardCooldownExpiresAndSmallPoolsRotate(t *testing.T) {
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
 	cards := []selectionCard{
