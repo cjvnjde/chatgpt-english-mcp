@@ -262,7 +262,7 @@ func registerLearningNext(server *mcp.Server, service *learning.Service, logger 
 	return registerTool(server, &mcp.Tool{
 		Name:        "learning_next",
 		Title:       "Get the next vocabulary item",
-		Description: "Issue and record one presentation of an active vocabulary item for production recall. Due and new cards are selected with usefulness-weighted variety and a short repeat cooldown; future reviews are used only when neither is available. Every call records a fresh presentation and retries may select a different item. Pass the unchanged reviewToken to learning_review after an answer.",
+		Description: "Issue and record one active vocabulary presentation for production recall. After an adaptive last-three-events/30-minute cooldown, selectable due Learning/Relearning steps take priority; otherwise choose a fixed 20% new / 80% mature review mix when both remain. Usefulness weights only new cards. With no new or due cards, issue the least recently presented nonrecent future card, or least recently presented overall if all are recent; due time breaks exposure ties. On reason early, stop without an answer or review unless the learner explicitly wants early practice. NOT_FOUND means no active cards; there is no daily/session quota. Every call records a fresh presentation and retries may select a different item. Reissuing a pending token is not another scheduled review. Pass the unchanged reviewToken to learning_review after an answer.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: &destructive,

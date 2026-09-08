@@ -95,7 +95,7 @@ Saving is idempotent for the same normalized term and selected definition. A dif
 
 Learning status is learner-managed metadata. FSRS reviews do not automatically change `new` to `learning` or `learned`; all three active statuses remain eligible for selection. Only `archived` removes an item from the review queue.
 
-Usefulness estimates general English value, independently of personal interests, recall difficulty, and learning status. It combines bundled word-frequency and expression evidence with an optional API hint. Changing usefulness changes selection weight, not FSRS review dates. Different saved senses share term-level evidence but can have different hints.
+Usefulness estimates general English value, independently of personal interests, recall difficulty, and learning status. It combines bundled word-frequency and expression evidence with an optional API hint. Changing usefulness changes new-card selection weight, not due-review weight or FSRS review dates. Different saved senses share term-level evidence but can have different hints.
 
 ### Offline usefulness inference
 
@@ -254,7 +254,7 @@ Lookup and saving are independent. A term may be saved first, and a later succes
 ### Run one review
 
 1. Call `learning_next` with `{}`.
-2. Use its definition, example, and latest problem comment to create one production-recall question without revealing `term`.
+2. If `reason` is `early`, end normal scheduled practice without asking a question or recording a review, unless the learner explicitly wants optional early practice. Otherwise use its definition, example, and latest problem comment to create one production-recall question without revealing `term`.
 3. Let the learner answer.
 4. Rate the answer and call `learning_review` with the unchanged `reviewToken`.
 5. Explain the answer and use the returned schedule only as learner-facing context when helpful.
@@ -276,7 +276,7 @@ Anything longer—including a morning question answered hours later—has no tim
 
 ### Continue a lesson
 
-After feedback, call `learning_next` again only when the learner wants another item. The server deliberately has no session length or daily quota.
+After feedback, call `learning_next` again only when the learner wants another item. End normal practice on `reason: "early"` unless the learner explicitly opts into early practice, as described in the [reusable tutor prompts](prompts.md). The server deliberately has no session length or daily quota and still issues the early presentation; this stopping rule belongs to the tutor, not an API mode.
 
 ### Manage vocabulary
 
@@ -287,7 +287,7 @@ After feedback, call `learning_next` again only when the learner wants another i
 
 ## How the next item is selected
 
-`learning_next` returns one active item when any exists, including an early review if nothing is due. It is not a “get only today's due cards” endpoint. If there are no active cards, it returns `NOT_FOUND`.
+`learning_next` returns one active item when any exists, including an early review when no FSRS-new or due cards exist. It is not a “get only today's due cards” endpoint. If there are no active cards, it returns `NOT_FOUND`.
 
 ### Decision flow
 
@@ -297,24 +297,28 @@ flowchart TD
     Load --> Any{"Any active cards?"}
     Any -->|"No"| Empty["NOT_FOUND"]
     Any -->|"Yes"| Eligible{"Any FSRS-new or due cards?"}
-    Eligible -->|"Yes"| Filter["Temporarily remove recent cards from both eligible pools"]
+    Eligible -->|"Yes"| Filter["Apply global cooldown across all eligible cards"]
     Filter --> Adapt["Relax oldest exclusions when needed for variety"]
-    Adapt --> Both{"Both new and due pools remain?"}
-    Both -->|"Yes"| Mix["Weight the 20:80 baseline by each pool's mean recency"]
+    Adapt --> Steps{"Any selectable due Learning/Relearning cards?"}
+    Steps -->|"Yes"| Learning["Choose the learning/relearning pool"]
+    Steps -->|"No"| Both{"Both new and mature-review pools remain?"}
+    Both -->|"Yes"| Mix["Fixed 20% new / 80% mature review"]
     Both -->|"No"| Only["Choose the nonempty pool"]
-    Mix --> Lottery["Weighted random draw within that pool"]
+    Learning --> Lottery["Weighted random draw within that pool"]
+    Mix --> Lottery
     Only --> Lottery
     Eligible -->|"No"| Future{"Any nonrecent future cards?"}
-    Future -->|"Yes"| Nearest["Choose nearest due time among those cards"]
-    Future -->|"No"| Oldest["Choose least recently presented future card"]
+    Future -->|"Yes"| Restrict["Use only nonrecent future cards"]
+    Future -->|"No"| All["Use all future cards"]
+    Restrict --> Oldest["Least recent event ID, then due time, then card ID"]
+    All --> Oldest
     Commit["Read chosen content and commit a presentation event"]
     Lottery --> Commit
-    Nearest --> Commit
     Oldest --> Commit
     Commit --> Return["Return item, reason, presentation ID, time, and review token"]
 ```
 
-The ordering matters: **eligibility → adaptive cooldown → recency-adjusted pool choice → within-pool weight**. A large weight cannot bypass an earlier stage.
+The ordering matters: **eligibility → global adaptive cooldown → learning-step priority or fixed pool choice → within-pool weight**. A large weight cannot bypass an earlier stage.
 
 ### 1. Build the candidate pools
 
@@ -325,7 +329,8 @@ For current server time $t$:
 | Pool | Exact condition |
 |---|---|
 | New | `fsrs_state == 0`, regardless of the stored due date |
-| Due | `fsrs_state != 0` and `due_at <= t` |
+| Due learning/relearning | `fsrs_state` is Learning (1) or Relearning (3), and `due_at <= t` |
+| Due mature review | `fsrs_state` is Review (2), and `due_at <= t` |
 | Future | `fsrs_state != 0` and `due_at > t` |
 
 “New” here is an **FSRS state**, not the vocabulary `status`. A saved item marked `learned` can still have an unreviewed FSRS-new card; a repeatedly reviewed item can still have learner-managed status `new`. The three active vocabulary statuses receive no different selection weights.
@@ -339,9 +344,9 @@ A card is *recent* only when both conditions hold:
 1. Its latest presentation is among the owner's last **three presentation events**, ordered by event ID for production practice.
 2. The elapsed time since that presentation is **less than 30 minutes**.
 
-This is not “all words shown in the last 30 minutes,” and the three events need not represent three distinct cards. Once an event falls outside the last three, its card can compete again immediately, but still receives the softer recency penalty below. At exactly 30 minutes the hard cooldown has expired.
+This is not “all words shown in the last 30 minutes,” and the three events need not represent three distinct cards. Once an event falls outside the last three, its card can compete again immediately. New and mature-review cards still receive the softer recency penalty below; learning/relearning steps do not. At exactly 30 minutes the hard cooldown has expired.
 
-Start by removing recent cards from both new and due pools. Relax this exclusion only when it would prevent useful variety:
+Start by removing recent cards globally from the new and both due pools, before testing learning-step priority. Relax this exclusion only when it would prevent useful variety:
 
 - If two or more candidates remain, keep the exclusion unchanged.
 - If exactly one remains and it has never been presented or was last presented at least 30 minutes ago, keep that fresh alternative alone.
@@ -349,33 +354,28 @@ Start by removing recent cards from both new and due pools. Relax this exclusion
 - If none remain, admit the oldest eligible card and, unless it is the most recently presented active card, the second-oldest eligible card.
 - Never admit a future card through this relaxation. Future cards' presentation IDs still identify the latest presentation, so two due cards can both compete when the last-shown card is not due yet.
 
-This leaves a weighted choice between older candidates instead of forcing three- or four-card pools into a fixed rotation. With only two active cards, avoiding immediate repeats still means alternation. With only one eligible card, it may repeat immediately; future cards do not become due just to add variety. Random draws can still happen to repeat an order.
+When multiple surviving candidates belong to the chosen pool, this permits a weighted choice between older cards instead of forcing a fixed rotation. Pool priority can still leave only one selectable learning step, so a predictable sequence remains possible. With only two active cards, avoiding immediate repeats means alternation. With only one eligible card, it may repeat immediately; future cards do not become due just to add variety. Random draws can also happen to repeat an order.
 
 “Oldest” compares each card's latest **event ID**, not its timestamp; ties use ascending card ID. This preserves issuance order even when events share a timestamp. Archived/deleted items' retained events can still occupy positions in the owner's last-three-event window; the latest active presentation is the greatest event ID among the loaded cards.
 
 The implementation treats a negative elapsed interval after a backward clock change as recent when its ID is in the window. The recency weight clamps that interval to zero. This differs from review timing, where a negative interval supplies no boost.
 
-### 3. Choose new versus due
+### 3. Prioritize learning steps, otherwise choose new versus mature review
 
-After adaptive cooldown, let $N$ and $D$ be the remaining new and due pools, including any cards readmitted by relaxation. Each pool's priority uses its **mean** presentation recency multiplier, with $\rho_i$ defined below:
-
-$$
-\bar{\rho}_P = \frac{\sum_{i\in P}\rho_i}{|P|}
-\qquad
-p_N = \frac{\bar{\rho}_N}{\bar{\rho}_N + 4\bar{\rho}_D}
-$$
+After adaptive cooldown and any relaxation, let $L$, $N$, and $R$ be the remaining due Learning/Relearning, New, and due mature Review pools:
 
 | Nonempty eligible pools | Pool probability |
 |---|---|
-| New and due | New: $p_N$; due: $1-p_N$ |
+| Learning/relearning, with or without other pools | Learning/relearning: 1 |
+| No learning/relearning; new and mature review | New: 0.2; mature review: 0.8 |
 | New only | New: 1 |
-| Due only | Due: 1 |
+| Mature review only | Mature review: 1 |
 
-Equal mean recency preserves the **20% new / 80% due baseline**. Unseen new cards have mean recency 1; just-presented due candidates have mean recency near 0.25, producing approximately a **50/50** mix. Once those due cards have not been presented for 24 hours, their recency recovers to 1 and the baseline applies again.
+Selectable due learning steps pause both new introductions and mature reviews. This priority never bypasses cooldown: if all due learning/relearning cards remain excluded, other eligible cards supply spacing. A learning step that is not yet due does not pause either pool.
 
-Pool size does not directly buy more priority: one new card and 100 equally recent new cards have the same pool priority. Usefulness, urgency, and failures affect the within-pool lottery, not this mean. With both pools nonempty, the new-pool probability ranges from $1/17$ (about 5.88%) to 50%, depending on their relative recency.
+With no selectable learning steps and both other pools present, the **20% new / 80% mature review** split is fixed. Pool size, presentation recency, usefulness, urgency, and failures do not change it. Unseen new cards against just-presented mature reviews still receive 20% when both pools survive cooldown.
 
-This remains a random choice, not a quota or a per-word repetition limit. Each presentation changes the pool means, cooldown, and possibly the available pools, so a real session need not contain 20% or 50% new items.
+This is a random choice, not a quota or per-word repetition limit. Presentations change cooldown and within-pool recency; reviews change state and due dates. The available pools can therefore change from call to call, and a real session need not contain 20% new items.
 
 ### 4. Calculate each card's weight
 
@@ -392,7 +392,7 @@ U_i =
 \end{cases}
 $$
 
-These categories are the **calculated, persisted results** of usefulness inference, not necessarily the tutor's submitted hints.
+These categories are the **calculated, persisted results** of usefulness inference, not necessarily the tutor's submitted hints. They weight only FSRS-new cards, never due learning steps or mature reviews.
 
 **Presentation recency multiplier $\rho_i$:**
 
@@ -416,18 +416,21 @@ $$
 | 24 hours or more | 1 |
 | Never presented | 1 |
 
-The adaptive cooldown and this multiplier are separate mechanisms. A card leaving cooldown after 30 minutes has recovered eligibility, not full weight. The multiplier affects both its pool's mean priority and its own within-pool lottery weight.
+The adaptive cooldown and this multiplier are separate mechanisms. A new or mature-review card leaving cooldown after 30 minutes has recovered eligibility, not full weight. Recency affects only its within-pool weight, never the pool ratio. Learning/relearning cards have no soft recency multiplier, but still obey the hard cooldown.
 
 **Due urgency multiplier $A_i$:**
 
 $$
-A_i = 1 + \min\left(
-\frac{\max(t-\text{dueAt}_i,0)}
-{\max(\text{scheduledDays}_i,1)\times 1\text{ day}},
-4\right)
+H_i =
+\begin{cases}
+1/6 & \text{Learning or Relearning}\\
+\max(24\,\text{scheduledDays}_i,24) & \text{Review}
+\end{cases}
+\qquad
+A_i = 1 + \min\left(\frac{\max(\text{overdueHours}_i,0)}{H_i},4\right)
 $$
 
-An exactly due card has urgency 1. One full scheduled interval overdue gives 2; four or more intervals overdue gives the maximum 5. A seven-day card one day overdue gets $1+1/7$, not 2. Minute-scale learning steps use the minimum denominator of one day.
+Here $H_i$ is measured in hours. An exactly due card has urgency 1. For mature reviews, one full interval overdue gives 2; four or more intervals overdue gives the maximum 5, with a minimum interval of one day. A seven-day card one day overdue gets $1+1/7$, not 2. Learning/relearning uses a fixed **10-minute** denominator: 10 minutes overdue gives 2, and 40 minutes or more overdue gives 5, regardless of `scheduledDays`. This is a selector weight, not a change to FSRS's actual learning-step schedule.
 
 **Failure multiplier $F_i$:**
 
@@ -444,10 +447,12 @@ For example, one consecutive failure and one lapse give 1.75. Two consecutive fa
 $$
 W_i^{\text{new}} = \rho_i U_i
 \qquad
-W_i^{\text{due}} = A_i F_i \rho_i U_i
+W_i^{\text{review}} = A_i F_i \rho_i
+\qquad
+W_i^{\text{learning}} = A_i F_i
 $$
 
-The possible ranges are 0.125–2 for new-card weights and 0.125–27.5 for due-card weights, before considering cooldown exclusion. Weights are relative lottery mass, not percentages, mastery scores, or FSRS recall probabilities.
+The possible ranges are 0.125–2 for new-card weights, 0.25–13.75 for mature-review weights, and 1–13.75 for learning/relearning weights, before considering cooldown exclusion. Weights are relative lottery mass, not percentages, mastery scores, or FSRS recall probabilities.
 
 ### 5. Draw within the chosen pool
 
@@ -457,52 +462,61 @@ $$
 \Pr(i\mid P)=\frac{W_i}{\sum_{j\in P}W_j}
 $$
 
-When both pools survive cooldown:
+When no learning/relearning cards are selectable and both other pools survive cooldown:
 
 $$
 \Pr(i)=
 \begin{cases}
-p_N\,W_i/\sum_{j\in N}W_j & i\in N\\
-(1-p_N)\,W_i/\sum_{j\in D}W_j & i\in D
+0.2\,W_i/\sum_{j\in N}W_j & i\in N\\
+0.8\,W_i/\sum_{j\in R}W_j & i\in R
 \end{cases}
 $$
 
-Here $N$ and $D$ contain the new and due candidates after adaptive cooldown, and $p_N$ is the recency-adjusted pool probability above. An excluded card has probability zero for that call. In a single-pool lottery, the pool probability is 1.
+Here $N$ and $R$ contain candidates after adaptive cooldown. If $L$ is nonempty, its pool probability is 1 and all new/mature-review cards have probability zero for that call. An excluded card always has probability zero. A sole new or mature-review pool also has pool probability 1.
 
-The implementation draws a pseudorandom value in $[0,1)$, multiplies it by the pool's total weight, and walks cumulative card weights until that draw is covered. There is no persistent shuffled queue or per-word quota. Nonexcluded low-weight cards remain possible, but there is no guarantee that a particular card appears within a fixed number of calls.
+The implementation draws a pseudorandom value in $[0,1)$, multiplies it by the pool's total weight, and walks cumulative card weights until that draw is covered. There is no persistent shuffled queue or per-word quota. Every card in the chosen pool has positive weight, but the lottery does not guarantee that a particular card appears within a fixed number of calls.
 
 #### Worked example: weights are not global priorities
 
-Assume these due cards are outside the hard cooldown:
+Assume these mature Review-state cards are due and outside the hard cooldown, with no selectable learning/relearning steps:
 
 | Card | Overdue / scheduled interval | Failures / lapses | Last presented | Usefulness | Weight |
 |---|---|---|---|---|---|
-| A | 0 / 2 days | 0 / 0 | At least 24 hours ago | `normal` | $1\times1\times1\times1=1$ |
-| B | 1 day / 2 days | 1 / 1 | 12 hours ago | `high` | $1.5\times1.75\times0.625\times2=3.28125$ |
-| C | 0 / 2 days | 0 / 0 | At least 24 hours ago | `low` | $1\times1\times1\times0.5=0.5$ |
+| A | 0 / 2 days | 0 / 0 | At least 24 hours ago | `normal` | $1\times1\times1=1$ |
+| B | 1 day / 2 days | 1 / 1 | 12 hours ago | `high` | $1.5\times1.75\times0.625=1.640625$ |
+| C | 0 / 2 days | 0 / 0 | At least 24 hours ago | `low` | $1\times1\times1=1$ |
 
-Total due weight is 4.78125. If the due pool is selected, A/B/C have approximately **20.92% / 68.63% / 10.46%** chances. Their mean recency is $(1+0.625+1)/3=0.875$. If an unseen new pool also exists, it gets $1/(1+4\times0.875)=2/9$, or **22.22%**. The overall A/B/C probabilities are then approximately **16.27% / 53.38% / 8.13%**.
+Total mature-review weight is 3.640625. If that pool is selected, A/B/C have approximately **27.47% / 45.06% / 27.47%** chances. A and C are equally likely because usefulness does not weight reviews. If a new pool also remains, it gets exactly **20%**, and the overall A/B/C probabilities are approximately **21.97% / 36.05% / 21.97%**.
 
 For three otherwise equal new cards with low/normal/high usefulness, weights are 0.5/1/2 and within-pool probabilities are $1/7,2/7,4/7$. High is twice normal and four times low **within that pool**, not “a 200% chance.”
 
 #### Worked example: cooldown outranks usefulness and the mix
 
-Suppose the only due card is high-usefulness but was just presented, while a low-usefulness new card has never been presented. Cooldown removes the due card and preserves the fresh alternative; the new card wins with probability 1, regardless of the baseline mix.
+Suppose the only due mature-review card was just presented, while a low-usefulness new card has never been presented. Cooldown removes the review card and preserves the fresh alternative; the new card wins with probability 1, regardless of its low usefulness or the fixed mix.
 
 Now suppose the only eligible card is that recent due card, and every other card is a future review. The due card repeats. Future cards do not become eligible merely because the due card is on cooldown.
+
+#### Worked example: learning-step priority respects spacing
+
+Suppose a due Learning card is 10 minutes overdue with no failures or lapses, and a due Relearning card is 40 minutes overdue with one consecutive failure and one lapse. Both are selectable. Their weights are $2\times1=2$ and $5\times1.75=8.75$, so their probabilities are $8/43$ and $35/43$. Recent exposure outside the hard cooldown and differing usefulness do not change those weights. All new and mature-review cards have probability zero while either learning step is selectable.
+
+If both steps are instead excluded by the global cooldown and two other eligible cards remain, no relaxation is needed: those other cards supply spacing. With one new and one mature-review card remaining, their probabilities are 20% and 80%. Future learning steps do not gain priority before their due time.
 
 ### 6. Use the future fallback only when necessary
 
 When there are **no new or due cards at all**:
 
-1. If any future cards are nonrecent, choose the nearest due time among those cards. Equal due times use ascending card ID.
-2. Otherwise choose the least recently presented future card, using event ID and then card ID.
+1. Restrict to nonrecent future cards if any exist; otherwise use all future cards.
+2. Choose the least recently presented by latest event ID, treating never-presented cards as ID 0.
+3. Break equal exposure ties by earliest due time, then ascending card ID.
 
-There is no weighted lottery here. Usefulness, urgency, failure counts, and soft recency weights do not change this ordering. The hard cooldown can let a later nonrecent card precede a nearer recent card.
+There is no weighted lottery here. Usefulness, urgency, failure counts, and soft recency weights do not change this ordering. Due time is only a tie-breaker, not the primary priority.
 
-For example, with two nonrecent future cards due in one minute and one day, the one-minute card wins even if it is low-usefulness and the later card is high-usefulness and troublesome. If only the one-minute card is recent, the one-day card wins instead.
+For example, suppose two nonrecent future cards are due in one minute and one day, with latest presentation IDs 100 and 20 respectively. The one-day card wins because it was presented less recently, regardless of usefulness or failures. If neither was ever presented, both have ID 0 and the one-minute card wins the due-time tie-breaker. If all future cards are recent, the same event-ID/due-time/card-ID ordering applies across all of them.
 
-Requesting more practice therefore permits **early reviews**. The server does not wait until a due date, enforce a daily limit, or end the lesson automatically.
+Each issuance moves the selected card to the newest exposure position. A static future-only pool therefore rotates through every card rather than looping over a nearest-due subset. This guarantee assumes the pool stays future-only and unchanged as presentations accumulate; accepted reviews, new saves, or cards becoming due can change the path.
+
+The API therefore permits **early reviews** and still records an early presentation. It does not wait until a due date, enforce a daily/session quota, or end the lesson automatically. The normal tutor workflow ends on `reason: "early"` without asking or recording an answer unless the learner explicitly opts into early practice; there is no separate API mode.
 
 ### 7. Record the presentation and explain the result
 
@@ -901,14 +915,14 @@ The latest **non-empty** review comment is returned separately. A newer review w
 | Owner namespace | Determines whose cards/history are eligible | Scopes valid review tokens/history | Scopes saved vocabulary, not corpus scores |
 | Archive/delete | Removes eligibility | Blocks new reviews / removes the card | History remains; reactivation preserves an existing card |
 | Active status: `new`, `learning`, `learned` | No preference among these values | No different formula; not changed by reviews | Learner-managed metadata |
-| FSRS-new versus reviewed state | Chooses new/due/future pool | Chooses initialization/step/review behavior | No usefulness effect |
-| Due date and scheduled interval | Eligibility, urgency, future ordering | Outputs of scheduling; old values are not memory-equation multipliers | No usefulness effect |
+| FSRS state | Splits new, due learning/relearning, due mature review, and future pools; selectable due learning steps take priority | Chooses initialization/step/review behavior | No usefulness effect |
+| Due date and scheduled interval | Eligibility and urgency; due time breaks future exposure ties | Outputs of scheduling; old values are not memory-equation multipliers | No usefulness effect |
 | Stored stability, difficulty, last-review time | No direct lottery input; previous schedules affect eligibility/urgency | Core memory inputs | No usefulness effect |
-| Effective usefulness | Multiplies new/due weights by 0.5/1/2 | No direct effect | Derived from term evidence and hint |
+| Effective usefulness | Multiplies only new-card weights by 0.5/1/2 | No direct effect | Derived from term evidence and hint |
 | Term spelling, bundled ranks, expression evidence | Indirectly through calculated usefulness; no separate raw-rank weight | No direct effect | Determine inference matches and votes |
 | Optional usefulness hint | Indirectly through effective category | No direct effect | Weight 2 in inference; not a forced override |
 | Consecutive failures and lapses | Bounded extra due-card weight; troublesome label | Not direct equation multipliers; rating/state update counters | No usefulness effect |
-| Latest presentation and recent event IDs | Adaptive cooldown, pool priority, and within-pool recency weight | Only indirectly via review time and unique-presentation timing promotion | Issuance is not proof of human visibility |
+| Latest presentation and recent event IDs | Global adaptive cooldown; new/mature-review recency weight; future exposure ordering | Only indirectly via review time and unique-presentation timing promotion | Issuance is not proof of human visibility |
 | Repeated `learning_next` calls | Change future selection history, even without an answer | Do not reschedule; repeated token presentations disable timing promotion | New presentation event each time |
 | Rating | Indirectly through updated due/state/failures | Effective grade is a direct input | Server does not inspect answer text |
 | Answer latency | No separate speed-based selection score | Only the exact positive-only good-to-easy rule | Includes model/delivery time, not pure recall time |
@@ -926,19 +940,19 @@ The latest **non-empty** review comment is returned separately. A newer review w
 ### Practical consequences
 
 - **Marking a word `learned` does not stop reviews.** Archive it to remove it from practice.
-- **A high-usefulness word is not guaranteed to be next.** It can be future-due, on cooldown, in the unchosen pool, or lose the lottery.
+- **Usefulness only prioritizes new introductions within their pool.** Even a high-usefulness new card can be on cooldown, paused behind selectable learning steps, in the unchosen pool, or lose the lottery; usefulness does not weight reviews.
 - **A troublesome card does not always outrank everything.** Its due-card weight is larger but capped, and the usual pool/fallback rules still apply.
 - **Repeated spelling does not always mean a failed cooldown.** Different saved meanings have different cards; cooldown is card-based.
 - **Skipping an answer is not a failed review.** Presentation affects selection history, but only a submitted review updates FSRS and failure counters.
 - **Waiting hours is not graded as hesitation.** Timing no longer supplies a boost; the answer-quality rating still controls scheduling.
 - **Completing all due cards does not make `learning_next` empty.** It can return new items or early reviews until the tutor/learner stops.
-- **The new/review mix responds to recent exposure, not a lesson quota.** The current policy has no daily quota, target session length, or guarantee that all due cards will be covered.
+- **Learning-step priority and the fixed new/review mix are not lesson quotas.** Selectable due learning steps pause new introductions and mature reviews; otherwise both remaining pools get a 20/80 split independent of recency. There is no backend daily quota, target session length, or guarantee that all due cards will be covered.
 
 ### Which parameters can a caller change?
 
 Tool callers can save/archive items, update usefulness hints and metadata, submit review ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
 
-The 20:80 baseline pool priority, adaptive last-three/30-minute cooldown, 24-hour recency recovery, weight caps, usefulness thresholds, and one-minute timing window are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
+Learning-step priority, the fixed 20:80 new/mature-review mix, adaptive last-three/30-minute cooldown, 24-hour new/mature recency recovery, 10-minute learning urgency denominator, weight caps, usefulness thresholds, and one-minute timing window are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
 
 ## Implementation map
 

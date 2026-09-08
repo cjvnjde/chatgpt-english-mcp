@@ -182,44 +182,145 @@ func TestSelectLearningCardKeepsFreshAlternativeAheadOfCooldownRelaxation(t *tes
 	}
 }
 
-func TestSelectLearningCardMixAccountsForRecentExposureAndRecovers(t *testing.T) {
+func TestSelectLearningCardKeepsNewShareFixedAcrossMatureReviewExposure(t *testing.T) {
 	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
-	cards := make([]selectionCard, 0, 104)
-	for index := range 4 {
-		cards = append(cards, selectionCard{
-			cardID: fmt.Sprintf("due-%d", index), fsrsState: 1, dueAt: now,
-			lastPresentationID: int64(index + 1), lastShownAt: now,
+	for _, reviewCount := range []int{1, 4} {
+		for _, elapsed := range []time.Duration{0, 24 * time.Hour} {
+			t.Run(fmt.Sprintf("reviews-%d-after-%s", reviewCount, elapsed), func(t *testing.T) {
+				cards := make([]selectionCard, 0, reviewCount+100)
+				for index := range reviewCount {
+					cards = append(cards, selectionCard{
+						cardID: fmt.Sprintf("review-%d", index), fsrsState: 2, dueAt: now,
+						lastPresentationID: int64(index + 1), lastShownAt: now,
+					})
+				}
+				for index := range 100 {
+					cards = append(cards, selectionCard{cardID: fmt.Sprintf("new-%d", index)})
+				}
+				newSelections := 0
+				for index := range 100 {
+					draw := (float64(index) + 0.5) / 100
+					// Reviews have left the hard cooldown even when just shown.
+					selected, ok := selectLearningCard(cards, 5, now.Add(elapsed), func() float64 { return draw })
+					if !ok {
+						t.Fatal("eligible cards were not selectable")
+					}
+					if selected.fsrsState == 0 {
+						newSelections++
+					}
+				}
+				if newSelections != 20 {
+					t.Fatalf("new selections = %d/100, want 20/100", newSelections)
+				}
+			})
+		}
+	}
+}
+
+func TestSelectLearningCardPrioritizesDueLearningStepsAfterCooldown(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	dueAt := now.Add(time.Nanosecond)
+	for _, state := range []int{1, 3} {
+		for _, test := range []struct {
+			name       string
+			selectAt   time.Time
+			presented  bool
+			wantNew    int
+			wantReview int
+			wantStep   int
+		}{
+			{name: "future step does not compete", selectAt: now, wantNew: 20, wantReview: 80},
+			{name: "step takes priority exactly when due", selectAt: dueAt, wantStep: 100},
+			{name: "cooldown supplies other words first", selectAt: dueAt, presented: true, wantNew: 20, wantReview: 80},
+			{name: "expired cooldown restores priority", selectAt: now.Add(30 * time.Minute), presented: true, wantStep: 100},
+		} {
+			t.Run(fmt.Sprintf("state-%d/%s", state, test.name), func(t *testing.T) {
+				step := selectionCard{cardID: "step", fsrsState: state, dueAt: dueAt}
+				if test.presented {
+					step.lastPresentationID = 1
+					step.lastShownAt = now
+				}
+				cards := []selectionCard{step, {cardID: "review", fsrsState: 2, dueAt: now}}
+				for index := range 100 {
+					cards = append(cards, selectionCard{cardID: fmt.Sprintf("new-%d", index)})
+				}
+				counts := make(map[int]int)
+				for index := range 100 {
+					draw := (float64(index) + 0.5) / 100
+					selected, ok := selectLearningCard(cards, 1, test.selectAt, func() float64 { return draw })
+					if !ok {
+						t.Fatal("eligible cards were not selectable")
+					}
+					counts[selected.fsrsState]++
+				}
+				if counts[0] != test.wantNew || counts[2] != test.wantReview || counts[state] != test.wantStep {
+					t.Fatalf("selections by state = %v, want new %d, review %d, step %d",
+						counts, test.wantNew, test.wantReview, test.wantStep)
+				}
+			})
+		}
+	}
+}
+
+func TestSelectLearningCardLearningUrgencyRespondsToMinuteScaleOverdue(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	for _, state := range []int{1, 3} {
+		t.Run(fmt.Sprintf("state-%d", state), func(t *testing.T) {
+			cards := []selectionCard{
+				{cardID: "on-time", fsrsState: state, dueAt: now, scheduledDays: 30},
+				{cardID: "overdue", fsrsState: state, dueAt: now, scheduledDays: 30},
+			}
+			selected, ok := selectLearningCard(cards, 0, now, func() float64 { return 0.45 })
+			if !ok || selected.cardID != "on-time" {
+				t.Fatalf("equally due steps selected %q, want on-time", selected.cardID)
+			}
+			cards[1].dueAt = now.Add(-10 * time.Minute)
+			selected, ok = selectLearningCard(cards, 0, now, func() float64 { return 0.45 })
+			if !ok || selected.cardID != "overdue" {
+				t.Fatalf("ten-minute overdue step selected %q, want overdue", selected.cardID)
+			}
 		})
 	}
-	for index := range 100 {
-		cards = append(cards, selectionCard{cardID: fmt.Sprintf("new-%d", index)})
-	}
-	for _, test := range []struct {
-		name    string
-		elapsed time.Duration
-		wantNew int
-	}{
-		{name: "recent due pool yields room to unseen words", wantNew: 50},
-		{name: "next day restores baseline review priority", elapsed: 24 * time.Hour, wantNew: 20},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			newSelections := 0
-			for index := range 100 {
-				draw := (float64(index) + 0.5) / 100
-				// The four due cards have left the hard cooldown, but their
-				// recent exposure must still affect the pool choice.
-				selected, ok := selectLearningCard(cards, 5, now.Add(test.elapsed), func() float64 { return draw })
-				if !ok {
-					t.Fatal("eligible cards were not selectable")
+}
+
+func TestSelectLearningCardRecoveryIgnoresUsefulnessAndSoftRecency(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	for _, state := range []int{1, 3} {
+		for _, test := range []struct {
+			name  string
+			first selectionCard
+			other selectionCard
+		}{
+			{
+				name:  "usefulness does not suppress recovery",
+				first: selectionCard{usefulness: domain.UsefulnessLow},
+				other: selectionCard{usefulness: domain.UsefulnessHigh},
+			},
+			{
+				name:  "recent exposure outside hard cooldown does not suppress recovery",
+				first: selectionCard{lastPresentationID: 1, lastShownAt: now},
+				other: selectionCard{},
+			},
+		} {
+			t.Run(fmt.Sprintf("state-%d/%s", state, test.name), func(t *testing.T) {
+				cards := []selectionCard{test.first, test.other}
+				for index := range cards {
+					cards[index].cardID = fmt.Sprintf("step-%d", index)
+					cards[index].fsrsState = state
+					cards[index].dueAt = now
 				}
-				if selected.fsrsState == 0 {
-					newSelections++
+				for _, draw := range []float64{0.4, 0.6} {
+					want := "step-0"
+					if draw > 0.5 {
+						want = "step-1"
+					}
+					selected, ok := selectLearningCard(cards, 2, now, func() float64 { return draw })
+					if !ok || selected.cardID != want {
+						t.Fatalf("draw %g selected %q, want equally weighted %q", draw, selected.cardID, want)
+					}
 				}
-			}
-			if newSelections != test.wantNew {
-				t.Fatalf("new selections = %d/100, want %d/100", newSelections, test.wantNew)
-			}
-		})
+			})
+		}
 	}
 }
 
@@ -299,7 +400,7 @@ func TestSelectLearningCardFutureFallbackRespectsEligibilityAndCooldown(t *testi
 			want: "new",
 		},
 		{
-			name: "future failures never outrank earlier due time",
+			name: "equal future exposure breaks ties by due time not failures",
 			cards: []selectionCard{
 				{cardID: "failed", fsrsState: 1, dueAt: now.Add(24 * time.Hour), consecutiveFailures: 100, lapses: 100, usefulness: domain.UsefulnessHigh},
 				{cardID: "near", fsrsState: 2, dueAt: now.Add(time.Minute), usefulness: domain.UsefulnessLow},
@@ -322,6 +423,14 @@ func TestSelectLearningCardFutureFallbackRespectsEligibilityAndCooldown(t *testi
 			},
 			want: "far",
 		},
+		{
+			name: "outside cooldown older exposure precedes nearer due time",
+			cards: []selectionCard{
+				{cardID: "near", fsrsState: 2, dueAt: now.Add(time.Minute), lastPresentationID: 2, lastShownAt: now.Add(-30 * time.Minute)},
+				{cardID: "far", fsrsState: 2, dueAt: now.Add(time.Hour), lastPresentationID: 1, lastShownAt: now.Add(-30 * time.Minute)},
+			},
+			want: "far",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			selected, ok := selectLearningCard(test.cards, 1, now, func() float64 { return 0.99 })
@@ -332,8 +441,42 @@ func TestSelectLearningCardFutureFallbackRespectsEligibilityAndCooldown(t *testi
 	}
 }
 
+func TestNextLearningItemRotatesEntireFuturePoolBeforeRepeating(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	const poolSize = 7
+	for index := poolSize; index > 0; index-- {
+		term := fmt.Sprintf("future-%d", index)
+		item := savePresentationVocabulary(t, store, "owner", term, now)
+		if _, err := store.sql.ExecContext(ctx, `
+			UPDATE learning_cards SET fsrs_state = 2, due_at = ?
+			WHERE vocabulary_item_id = ?
+		`, TimeString(now.Add(time.Duration(index)*time.Hour)), item.ItemID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Keep scheduling and wall time fixed: only presentation order advances.
+	for turn := range 2 * poolSize {
+		selected, err := store.NextLearningItem(ctx, "owner", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("future-%d", turn%poolSize+1)
+		if selected.Vocabulary.Term != want {
+			t.Fatalf("future turn %d selected %q, want %q before repeating a more recently shown word",
+				turn, selected.Vocabulary.Term, want)
+		}
+	}
+}
+
 func TestLearningSelectionUsesCurrentPersistedUsefulness(t *testing.T) {
-	for _, state := range []int{0, 2} {
+	for _, state := range []int{0, 1, 2, 3} {
 		t.Run(fmt.Sprintf("fsrs-state-%d", state), func(t *testing.T) {
 			ctx := context.Background()
 			now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
@@ -377,8 +520,12 @@ func TestLearningSelectionUsesCurrentPersistedUsefulness(t *testing.T) {
 					t.Fatal(err)
 				}
 				counts := make(map[string]int)
-				for index := range 14 {
-					draw := (float64(index) + 0.5) / 14
+				samples := 0
+				for _, count := range want {
+					samples += count
+				}
+				for index := range samples {
+					draw := (float64(index) + 0.5) / float64(samples)
 					selected, ok := selectLearningCard(cards, recentSinceID, now, func() float64 { return draw })
 					if !ok {
 						t.Fatal("persisted vocabulary was not selectable")
@@ -392,7 +539,11 @@ func TestLearningSelectionUsesCurrentPersistedUsefulness(t *testing.T) {
 				}
 			}
 
-			assertSelectionCounts([]int{2, 4, 8})
+			before, after := []int{5, 5, 5}, []int{5, 5, 5}
+			if state == 0 {
+				before, after = []int{2, 4, 8}, []int{8, 4, 2}
+			}
+			assertSelectionCounts(before)
 			for index, level := range []domain.Usefulness{domain.UsefulnessHigh, domain.UsefulnessNormal, domain.UsefulnessLow} {
 				if _, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
 					OwnerKey: "owner", ItemID: items[index].ItemID, Usefulness: &level, Now: now,
@@ -400,7 +551,7 @@ func TestLearningSelectionUsesCurrentPersistedUsefulness(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			assertSelectionCounts([]int{8, 4, 2})
+			assertSelectionCounts(after)
 		})
 	}
 }
