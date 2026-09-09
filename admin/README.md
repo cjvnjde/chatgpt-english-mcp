@@ -29,7 +29,9 @@ docker compose up -d --build
 
 The admin container does not mount the database or receive the token. It forwards the token supplied by the browser. The Go API is available on the existing external listener (8081), never the unauthenticated tunnel listener (8080). An empty `ADMIN_BEARER_TOKEN` leaves the admin API disabled. The token grants database-wide read/export access; vocabulary mutations use the configured `MCP_OWNER_KEY` namespace. Do not use this single-administrator API for mutually untrusted users.
 
-The token is held only in browser memory. Reloading or signing out clears the session. All API responses use `Cache-Control: no-store`; no credentials are embedded in the static bundle, URLs, localStorage, or sessionStorage. HTTPS must be supplied by the reverse proxy for remote access.
+The sign-in form includes an optional **Remember me on this device** checkbox, unchecked by default. After a successful sign-in, checking it saves the admin token in localStorage under `english-mcp.admin.token`, so it survives reloads and browser restarts. The app verifies the saved token with `/admin/api/session` before opening the workspace. Signing out or receiving HTTP 401 clears the saved token. Temporary connection/server failures keep it available for a retry. With Remember me unchecked, the token is held only in memory and reloading signs you out. If browser storage is blocked, sign-in still works for the current tab and the UI reports that the preference could not be saved.
+
+The remembered token is readable by scripts on the same origin; use this option on your own trusted browser. All API responses use `Cache-Control: no-store`; no credentials are embedded in the static bundle, cookies, or URLs. HTTPS must be supplied by the reverse proxy for remote access.
 
 ## Build only static files
 
@@ -96,6 +98,6 @@ From the repository root:
 go test ./...
 ```
 
-The integration tests use temporary SQLite databases and exercise authorization, vocabulary CRUD and card lifecycle, query validation, read-only tables, and an exported file's signature, integrity, migration metadata, and committed data. Client tests cover credential handling, expired sessions, proxy misconfiguration, and binary downloads.
+The integration tests use temporary SQLite databases and exercise authorization, vocabulary CRUD and card lifecycle, query validation, read-only tables, and an exported file's signature, integrity, migration metadata, and committed data. Client tests cover credential handling, expired sessions, proxy misconfiguration, binary downloads, remembered sign-in restoration and validation, sign-out cleanup, temporary server failures, and blocked browser storage.
 
 Production build and automated tests were run. Docker image execution and browser interaction tests require their respective runtimes and have not been run here.

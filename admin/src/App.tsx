@@ -5,9 +5,11 @@ import {
   ErrorBoundary,
   For,
   onCleanup,
+  onMount,
   Show,
 } from "solid-js";
-import { createAPI } from "./api";
+import { APIError, createAPI } from "./api";
+import { createAuth } from "./auth";
 import type { Row, Session, Table } from "./types";
 import { label } from "./format";
 import Analytics from "./components/Analytics";
@@ -26,38 +28,70 @@ function readRoute(): Route {
 }
 
 export default function App() {
+  const auth = createAuth();
   const [session, setSession] = createSignal<Session>();
   const [token, setToken] = createSignal("");
   const [loginToken, setLoginToken] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [loginError, setLoginError] = createSignal("");
+  const [remember, setRemember] = createSignal(false);
+  const [authNotice, setAuthNotice] = createSignal("");
+  let generation = 0;
+  onCleanup(() => {
+    generation++;
+  });
   const signOut = () => {
+    generation++;
+    const forgotten = auth.forget();
     setSession(undefined);
     setToken("");
     setLoginToken("");
+    setRemember(false);
+    setBusy(false);
+    setAuthNotice("");
+    setLoginError(
+      forgotten
+        ? ""
+        : "Signed out. Your browser could not clear the saved token; clear this site's stored data to remove it.",
+    );
   };
-  const login = async (e: SubmitEvent) => {
-    e.preventDefault();
+  const signIn = async (candidate: string) => {
+    const attempt = ++generation;
     setBusy(true);
     setLoginError("");
-    const candidate = loginToken().trim();
     try {
-      const connected = await createAPI(candidate, () => {})<Session>(
-        "/session",
+      const connected = await auth.signIn(candidate, remember());
+      if (attempt !== generation) return;
+      setToken(connected.token);
+      setAuthNotice(
+        connected.storageAvailable
+          ? ""
+          : "Signed in for this tab. Your browser could not update the saved sign-in preference.",
       );
-      if (connected.version !== 1)
-        throw new Error(
-          "Unsupported admin API version. Update the UI and MCP service together.",
-        );
-      setToken(candidate);
-      setSession(connected);
+      setSession(connected.session);
       setLoginToken("");
     } catch (e) {
+      if (attempt !== generation) return;
+      if (e instanceof APIError && e.status === 401) {
+        setLoginToken("");
+        setRemember(false);
+      }
       setLoginError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (attempt === generation) setBusy(false);
     }
   };
+  const login = (e: SubmitEvent) => {
+    e.preventDefault();
+    if (!busy()) void signIn(loginToken());
+  };
+  onMount(() => {
+    const saved = auth.rememberedToken();
+    if (!saved) return;
+    setRemember(true);
+    setLoginToken(saved);
+    void signIn(saved);
+  });
   return (
     <Show
       when={session()}
@@ -76,10 +110,20 @@ export default function App() {
                   autocomplete="current-password"
                   autofocus
                   required
+                  disabled={busy()}
                   value={loginToken()}
                   onInput={(e) => setLoginToken(e.currentTarget.value)}
                   placeholder="Enter your admin token"
                 />
+              </label>
+              <label class="check">
+                <input
+                  type="checkbox"
+                  checked={remember()}
+                  disabled={busy()}
+                  onChange={(e) => setRemember(e.currentTarget.checked)}
+                />
+                Remember me on this device
               </label>
               <Show when={loginError()}>
                 <div class="alert error" role="alert">
@@ -91,25 +135,31 @@ export default function App() {
               </button>
             </form>
             <p class="footnote">
-              Use ADMIN_BEARER_TOKEN from your MCP service. The token stays in
-              memory; reloading signs you out.
+              Use ADMIN_BEARER_TOKEN from your MCP service. Remember me saves
+              the token in this browser until you sign out. Leave it unchecked
+              for this tab only.
             </p>
           </section>
         </main>
       }
     >
-      {(active) => (
-        <Workspace
-          session={active}
-          api={createAPI(token(), () => {
-            signOut();
-            setLoginError(
-              "Your session is no longer authorized. Sign in again.",
-            );
-          })}
-          signOut={signOut}
-        />
-      )}
+      {(active) => {
+        const activeToken = token();
+        return (
+          <Workspace
+            session={active}
+            authNotice={authNotice()}
+            api={createAPI(activeToken, () => {
+              if (token() !== activeToken) return;
+              signOut();
+              setLoginError(
+                "Your session is no longer authorized. Sign in again.",
+              );
+            })}
+            signOut={signOut}
+          />
+        );
+      }}
     </Show>
   );
 }
@@ -118,6 +168,7 @@ function Workspace(props: {
   session: Session;
   api: ReturnType<typeof createAPI>;
   signOut: () => void;
+  authNotice: string;
 }) {
   const [route, setRoute] = createSignal(readRoute());
   const onHash = () => setRoute(readRoute());
@@ -270,6 +321,11 @@ function Workspace(props: {
           <span class="badge">Private admin</span>
         </header>
         <div class="workspace">
+          <Show when={props.authNotice}>
+            <div class="alert" role="status">
+              {props.authNotice}
+            </div>
+          </Show>
           <Show when={exportError()}>
             <div class="alert error" role="alert">
               {exportError()}
