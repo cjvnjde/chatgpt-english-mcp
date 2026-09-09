@@ -152,9 +152,32 @@ func setValidEnvironment(t *testing.T) {
 	t.Setenv("MCP_TUNNEL_LISTEN_ADDRESS", defaultTunnelAddress)
 	t.Setenv("MCP_EXTERNAL_LISTEN_ADDRESS", defaultExternalAddress)
 	t.Setenv("MCP_BEARER_TOKEN", strings.Repeat("x", minimumBearerTokenBytes))
+	t.Setenv("ADMIN_BEARER_TOKEN", "")
 	t.Setenv("ANKI_SYNC_ENABLED", "false")
 	t.Setenv("ANKI_EXPORT_TOKEN", "")
 	t.Setenv("ANKI_EXPORT_TOKEN_FILE", "")
 	t.Setenv("ANKI_EXPORT_LISTEN_ADDRESS", defaultAnkiExportAddress)
 	t.Setenv("ANKI_SOURCE_NAMESPACE", "english-mcp")
+}
+
+func TestAdminTokenIsOptionalStrongAndSeparate(t *testing.T) {
+	for _, item := range []struct {
+		token string
+		valid bool
+	}{
+		{"", true}, {strings.Repeat("a", 32), true}, {"short", false},
+		{strings.Repeat("x", 32), false}, {strings.Repeat("a", 32) + " b", false},
+	} {
+		t.Run(item.token, func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv("ADMIN_BEARER_TOKEN", item.token)
+			configuration, err := Load()
+			if (err == nil) != item.valid {
+				t.Fatalf("valid=%v, error=%v", item.valid, err)
+			}
+			if err == nil && configuration.AdminBearerToken != item.token {
+				t.Fatal("admin token was not retained")
+			}
+		})
+	}
 }

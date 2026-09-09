@@ -22,6 +22,7 @@ The Compose stack includes [one-way AnkiWeb sync](docs/deployment.md#ankiweb-syn
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
 - [Development and architecture](docs/development.md)
+- [Static admin UI, analytics, and SQLite export](admin/README.md)
 
 ## Quick start
 
@@ -34,5 +35,7 @@ docker compose up -d --build
 The Streamable HTTP endpoint is `/mcp`. The Compose deployment exposes it to an OpenAI tunnel on internal port `8080` and to authenticated direct clients on internal port `8081`.
 
 For Dokploy, select `docker-compose.yml`, copy the variables from `.env.example` into Environment, fill in the required values, and deploy. No additional Compose file is needed.
+
+The same Compose file includes the static admin UI. Set `ADMIN_BEARER_TOKEN` and route `/admin` on your MCP domain to `english-admin:80`, preserving the path. Keep `/mcp` routed to `english-learning-mcp:8081`. See the [admin setup guide](admin/README.md) for the exact Dokploy domain settings.
 
 > This project retrieves data from Cambridge Dictionary and is not affiliated with or endorsed by Cambridge University Press & Assessment.

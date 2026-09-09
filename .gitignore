@@ -10,3 +10,5 @@ __pycache__/
 *.pyc
 *.anki2
 *.anki2-*
+admin/node_modules/
+admin/dist/
