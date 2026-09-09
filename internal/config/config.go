@@ -28,6 +28,7 @@ type Config struct {
 	MCPTunnelListenAddress   string
 	MCPExternalListenAddress string
 	MCPBearerToken           string
+	AdminBearerToken         string
 	AnkiSyncEnabled          bool
 	AnkiExportListenAddress  string
 	AnkiExportToken          string
@@ -117,12 +118,23 @@ func Load() (Config, error) {
 		}
 	}
 
+	adminToken := environment("ADMIN_BEARER_TOKEN", "")
+	if adminToken != "" {
+		if len(adminToken) < minimumBearerTokenBytes || strings.ContainsAny(adminToken, " \t\r\n") {
+			return Config{}, fmt.Errorf("ADMIN_BEARER_TOKEN must be at least 32 bytes without whitespace")
+		}
+		if adminToken == mcpBearerToken || adminToken == ankiToken {
+			return Config{}, fmt.Errorf("ADMIN_BEARER_TOKEN must be distinct from MCP and Anki tokens")
+		}
+	}
+
 	return Config{
 		SQLitePath:               sqlitePath,
 		OwnerKey:                 ownerKey,
 		MCPTunnelListenAddress:   tunnelAddress,
 		MCPExternalListenAddress: externalAddress,
 		MCPBearerToken:           mcpBearerToken,
+		AdminBearerToken:         adminToken,
 		AnkiSyncEnabled:          ankiEnabled,
 		AnkiExportListenAddress:  ankiAddress,
 		AnkiExportToken:          ankiToken,

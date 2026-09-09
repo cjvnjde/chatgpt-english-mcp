@@ -22,6 +22,7 @@ The Compose stack includes [one-way AnkiWeb sync](docs/deployment.md#ankiweb-syn
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
 - [Development and architecture](docs/development.md)
+- [Static admin UI, analytics, and SQLite export](admin/README.md)
 
 ## Quick start
 

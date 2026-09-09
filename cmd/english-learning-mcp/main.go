@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"english-learning-mcp/internal/adminapi"
 	"english-learning-mcp/internal/ankiexport"
 	"english-learning-mcp/internal/config"
 	"english-learning-mcp/internal/dictionary"
@@ -67,15 +68,21 @@ func run() (runErr error) {
 		ParserVersion:  provider.ParserVersion(),
 		DatasetVersion: provider.DatasetVersion(),
 	}
+	vocabularyService := vocabulary.NewService(store, configuration.OwnerKey, currentSource)
 	server, err := mcpserver.New(mcpserver.Services{
 		Dictionary: dictionary.NewService(store, provider, logger),
-		Vocabulary: vocabulary.NewService(store, configuration.OwnerKey, currentSource),
+		Vocabulary: vocabularyService,
 		Learning:   learning.NewService(store, configuration.OwnerKey),
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("create MCP server: %w", err)
 	}
 
+	externalHandler := http.NewServeMux()
+	externalHandler.Handle(mcpserver.EndpointPath, mcpserver.NewAuthenticatedHTTPHandler(server, configuration.MCPBearerToken, logger))
+	if configuration.AdminBearerToken != "" {
+		externalHandler.Handle(adminapi.EndpointPath, adminapi.NewHandler(store, vocabularyService, configuration.OwnerKey, configuration.AdminBearerToken, logger))
+	}
 	endpoints := []httpEndpoint{
 		{
 			name:    "tunnel",
@@ -87,7 +94,7 @@ func run() (runErr error) {
 			name:    "external",
 			address: configuration.MCPExternalListenAddress,
 			path:    mcpserver.EndpointPath,
-			handler: mcpserver.NewAuthenticatedHTTPHandler(server, configuration.MCPBearerToken, logger),
+			handler: externalHandler,
 		},
 	}
 	if configuration.AnkiSyncEnabled {

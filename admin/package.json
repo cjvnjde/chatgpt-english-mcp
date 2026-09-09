@@ -1,0 +1,20 @@
+{
+  "name": "english-mcp-admin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node --experimental-strip-types --test src/api.test.ts"
+  },
+  "dependencies": {
+    "solid-js": "latest"
+  },
+  "devDependencies": {
+    "typescript": "latest",
+    "vite": "latest",
+    "vite-plugin-solid": "latest",
+    "@types/node": "latest"
+  }
+}

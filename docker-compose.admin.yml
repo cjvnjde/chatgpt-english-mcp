@@ -1,0 +1,16 @@
+services:
+  english-learning-mcp:
+    environment:
+      ADMIN_BEARER_TOKEN: ${ADMIN_BEARER_TOKEN:?set a separate ADMIN_BEARER_TOKEN}
+
+  english-admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - english-learning-mcp
+    environment:
+      MCP_UPSTREAM: http://english-learning-mcp:8081
+    ports:
+      - "${ADMIN_BIND_ADDRESS:-127.0.0.1}:${ADMIN_PORT:-8090}:80"
