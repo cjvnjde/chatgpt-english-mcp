@@ -4,9 +4,11 @@ import {
   createSignal,
   ErrorBoundary,
   For,
+  Match,
   onCleanup,
   onMount,
   Show,
+  Switch,
 } from "solid-js";
 import { APIError, createAPI } from "./api";
 import { createAuth } from "./auth";
@@ -15,6 +17,7 @@ import { label } from "./format";
 import Analytics from "./components/Analytics";
 import Inspector from "./components/Inspector";
 import RecordTable from "./components/RecordTable";
+import Suggestions from "./components/Suggestions";
 import VocabularyEditor from "./components/VocabularyEditor";
 
 type Route = { view: string; column?: string; value?: string };
@@ -153,8 +156,9 @@ export default function App() {
             api={createAPI(activeToken, () => {
               if (generation !== activeGeneration) return;
               signOut();
-              setLoginError((error) =>
-                `Your session is no longer authorized. Sign in again.${error ? ` ${error}` : ""}`,
+              setLoginError(
+                (error) =>
+                  `Your session is no longer authorized. Sign in again.${error ? ` ${error}` : ""}`,
               );
             })}
             signOut={signOut}
@@ -263,6 +267,7 @@ function Workspace(props: {
   };
   const nav = [
     { name: "Vocabulary", view: "vocabulary_items", icon: "Aa" },
+    { name: "Next suggestions", view: "suggestions", icon: "→" },
     { name: "Reviews", view: "review_attempts", icon: "↺" },
     { name: "Comments", view: "comments", icon: "“" },
     { name: "Presentations", view: "learning_presentations", icon: "▤" },
@@ -342,7 +347,8 @@ function Workspace(props: {
           <span>
             English learning /{" "}
             <strong>
-              {route().view === "analytics" ? "Analytics" : label(tableName())}
+              {nav.find((n) => n.view === route().view)?.name ||
+                label(tableName())}
             </strong>
           </span>
           <span class="badge">Private admin</span>
@@ -392,8 +398,7 @@ function Workspace(props: {
               </div>
             )}
           >
-            <Show
-              when={route().view === "analytics"}
+            <Switch
               fallback={
                 <Show when={JSON.stringify(route())} keyed>
                   {(_route) => (
@@ -434,12 +439,21 @@ function Workspace(props: {
                 </Show>
               }
             >
-              <Analytics
-                api={props.api}
-                revision={revision()}
-                open={(id) => setEditor({ id })}
-              />
-            </Show>
+              <Match when={route().view === "suggestions"}>
+                <Suggestions
+                  api={props.api}
+                  revision={revision()}
+                  open={(id) => setEditor({ id })}
+                />
+              </Match>
+              <Match when={route().view === "analytics"}>
+                <Analytics
+                  api={props.api}
+                  revision={revision()}
+                  open={(id) => setEditor({ id })}
+                />
+              </Match>
+            </Switch>
           </ErrorBoundary>
         </div>
       </main>

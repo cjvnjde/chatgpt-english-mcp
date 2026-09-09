@@ -22,7 +22,7 @@ import (
 
 func TestAdminAuthorizationAndVocabularyLifecycle(t *testing.T) {
 	_, handler := testHandler(t)
-	for _, path := range []string{"/session", "/tables", "/analytics", "/database", "/tables/vocabulary_items", "/vocabulary/missing"} {
+	for _, path := range []string{"/session", "/tables", "/analytics", "/suggestions", "/database", "/tables/vocabulary_items", "/vocabulary/missing"} {
 		for _, token := range []string{"", "wrong-token"} {
 			r := adminRequest(handler, "GET", path, "", token)
 			if r.Code != http.StatusUnauthorized {
@@ -82,6 +82,8 @@ func TestAdminQueriesAndReadOnlyHistory(t *testing.T) {
 		"/tables/vocabulary_items?from=2026-09-10&to=2026-09-09",
 		"/tables/review_attempts?comments=tru",
 		"/tables/vocabulary_items?column=term&value=%ZZ",
+		"/suggestions?limit=0", "/suggestions?limit=201", "/suggestions?limit=no",
+		"/suggestions?offset=-1", "/suggestions?offset=no", "/suggestions?limit=%ZZ",
 	} {
 		if r := adminRequest(handler, "GET", path, "", testToken); r.Code != 400 {
 			t.Fatalf("%s: got %d %s", path, r.Code, r.Body.String())
@@ -168,6 +170,38 @@ func TestAdminRequestDeadlineInterruptsStalledBody(t *testing.T) {
 	case <-finished:
 	case <-time.After(2 * time.Second):
 		t.Fatal("admin deadline did not release a handler blocked reading an incomplete JSON body")
+	}
+}
+
+func TestAdminSuggestionsPage(t *testing.T) {
+	_, handler := testHandler(t)
+	empty := adminRequest(handler, "GET", "/suggestions", "", testToken)
+	var page storage.AdminSuggestionsPage
+	if err := json.Unmarshal(empty.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if empty.Code != 200 || page.Rows == nil || len(page.Rows) != 0 || page.Total != 0 {
+		t.Fatalf("empty suggestions: %d %s", empty.Code, empty.Body.String())
+	}
+	created := adminRequest(handler, "POST", "/vocabulary", `{"term":"wringer","customDescription":"a difficult experience"}`, testToken)
+	if created.Code != 200 {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	response := adminRequest(handler, "GET", "/suggestions?limit=1&offset=0&owner=someone-else", "", testToken)
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 200 || page.Owner != "default" || page.Total != 1 || page.Selectable != 1 ||
+		len(page.Rows) != 1 || page.Rows[0].Term != "wringer" || page.Rows[0].Probability != 1 {
+		t.Fatalf("suggestions: %d %s", response.Code, response.Body.String())
+	}
+	if _, err := time.Parse(time.RFC3339Nano, page.GeneratedAt); err != nil {
+		t.Fatalf("snapshot timestamp: %v", err)
+	}
+	for _, method := range []string{"POST", "PATCH", "DELETE"} {
+		if result := adminRequest(handler, method, "/suggestions", `{}`, testToken); result.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("mutable suggestions: %s returned %d", method, result.Code)
+		}
 	}
 }
 

@@ -49,8 +49,9 @@ The build contains only HTML, CSS, and JavaScript. Client navigation uses URL ha
 
 | View | Capabilities |
 | --- | --- |
-| Vocabulary | Create words and meanings, inspect/edit status, description, notes, examples, tags, source, and usefulness hints; archive or delete with typed confirmation. |
-| Reviews / Comments | Search by word, ID, comment, or any stored field; exact-column filters, ratings, dates, pagination; full before/after FSRS state and submitted/effective ratings. |
+| Vocabulary | Create words and meanings, inspect/edit status, description, notes, examples, tags, source, and usefulness hints; archive items or delete with typed confirmation. |
+| Next suggestions | Preview words ranked by current next-draw probability, with selection reasons, learning groups, usefulness, due dates, and last-shown times; open words in the editor. |
+| Reviews / Comments | Search by word, ID, comment, or any stored field; exact-column filters, ratings, dates, pagination; full before/after FSRS state and submitted/effective ratings. Comments stays restricted to commented reviews when optional filters are cleared. |
 | Presentations | Inspect when a card was shown, selection kind, due date, and review token; follow links to cards and reviews. |
 | Database | Every SQLite table, including dictionary snapshots, cards, migrations, usefulness state, and SQLite sequences; choose columns, inspect raw JSON/schema, and export a page or record. |
 | Analytics | Status counts, due cards, submitted/effective rating distribution, 30-day activity, and difficult words for the configured owner. |
@@ -60,7 +61,17 @@ Review and presentation tables remain immutable, as required by the existing dat
 
 Notes, examples, and tags are edited as separate entries; notes and examples preserve multiline values, and commas within a tag are kept literally. An empty array clears a list. Usefulness is inferred from offline evidence and the optional hint, so the result can differ from the selected hint. For existing items, an empty hint selector preserves the current hint; the existing service has no operation to clear it to automatic.
 
-Search covers stored columns, plus the linked vocabulary term for history/cards. Exact filters match one selected column; date boundaries use UTC and the end day is inclusive. Table timestamps display in the browser's time zone. Database lists cover all owners; analytics and vocabulary mutations use the configured owner.
+Search covers stored columns, plus the linked vocabulary term for history/cards. Exact filters match one selected column; date boundaries use UTC and the end day is inclusive. Table timestamps display in the browser's time zone. Learning cards initially sort by earliest due date. Database lists cover all owners; suggestions, analytics, and vocabulary mutations use the configured owner.
+
+## Next suggestions
+
+The scheduler uses weighted random selection, not a fixed future queue. **Next suggestions** ranks active production cards by their probability of being chosen on the next `learning_next` call. It shares the actual scheduler's eligibility and weighting logic: cooldown and small-pool relaxation, due learning/relearning precedence, the 20% new / 80% mature-review mix when both pools remain available, and deterministic early-review fallback.
+
+Ranks are likelihood ranks, not future turn numbers. Equal probabilities are displayed by due date and then card ID. Cards with no chance in the current snapshot appear after selectable cards with a reason such as cooling down, not due yet, or waiting for due learning steps. Archived items and other owners' cards are excluded.
+
+Opening, refreshing, or paging through the preview does not record a presentation or review, rotate review tokens, or change scheduling state. The view refreshes after an editor save; use **Refresh** after external MCP activity or as time passes. Every request takes a fresh snapshot, so independently loaded pages can shift as learning state changes.
+
+The authenticated `GET /admin/api/suggestions` endpoint accepts `limit` (1–200, default 50) and `offset` (nonnegative, default 0). Its response contains `owner`, `generatedAt`, `total` active cards, `selectable` cards with a positive next-draw chance, `limit`, `offset`, and `rows`. Each row includes `vocabularyItemId`, `cardId`, `term`, optional `context`, `status`, `usefulness`, `dueAt`, optional `lastShownAt`, `pool`, `probability` (0–1), and `reason`. An empty or past-end page returns `rows: []`.
 
 ## SQLite export
 
@@ -98,6 +109,6 @@ From the repository root:
 go test ./...
 ```
 
-The integration tests use temporary SQLite databases and exercise authorization, vocabulary CRUD and card lifecycle, query validation, read-only tables, and an exported file's signature, integrity, migration metadata, and committed data. Client tests cover credential handling, expired sessions, proxy misconfiguration, binary downloads, remembered sign-in restoration and validation, sign-out cleanup, temporary server failures, and blocked browser storage.
+The integration tests use temporary SQLite databases and exercise authorization, vocabulary CRUD and card lifecycle, query validation, read-only tables, and an exported file's signature, integrity, migration metadata, and committed data. Suggestion tests cover probability and random-selection boundaries, cooldown and learning precedence, early fallback, pagination, owner isolation, and unchanged learning state after preview reads. Client tests cover credential handling, expired sessions, proxy misconfiguration, binary downloads, remembered sign-in restoration and validation, sign-out cleanup, temporary server failures, and blocked browser storage.
 
-Production build and automated tests were run. Docker image execution and browser interaction tests require their respective runtimes and have not been run here.
+For browser smoke checks of the built app, run `ADMIN_DEV_UPSTREAM=http://localhost:8081 npm run preview` and open `/admin/` on the printed URL. Exercise suggestion pagination, word editing, refresh, empty/error states, Comments filtering, and narrow-screen table scrolling. Browser interactions and Docker image execution are separate from `npm test`.

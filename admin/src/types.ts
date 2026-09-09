@@ -45,3 +45,32 @@ export type AnalyticsData = {
   comments: { count: number }[];
   difficult: Row[];
 };
+export type Suggestion = {
+  vocabularyItemId: string;
+  cardId: string;
+  term: string;
+  context?: string;
+  status: string;
+  usefulness: string;
+  dueAt: string;
+  lastShownAt?: string;
+  pool: "new" | "learning" | "review";
+  probability: number;
+  reason:
+    | "new"
+    | "due"
+    | "early"
+    | "cooldown"
+    | "learning_first"
+    | "not_due"
+    | "waiting";
+};
+export type SuggestionsPage = {
+  owner: string;
+  generatedAt: string;
+  total: number;
+  selectable: number;
+  limit: number;
+  offset: number;
+  rows: Suggestion[];
+};

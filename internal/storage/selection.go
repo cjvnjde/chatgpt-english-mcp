@@ -100,12 +100,19 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 	return cards, recentSinceID, nil
 }
 
-func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Time, random func() float64) (selectionCard, bool) {
-	if len(cards) == 0 {
-		return selectionCard{}, false
-	}
+// A plan borrows the input cards. Building it never draws randomness or mutates
+// scheduling state, so selection and admin likelihoods share the same policy.
+type selectionPlan struct {
+	pools         [3]selectionPool
+	shares        [3]float64
+	relaxed       [2]*selectionCard
+	future        *selectionCard
+	recentSinceID int64
+	now           time.Time
+}
 
-	var pools [3]selectionPool
+func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.Time) selectionPlan {
+	plan := selectionPlan{recentSinceID: recentSinceID, now: now}
 	var hasEligible bool
 	var latestPresentationID int64
 	var onlyAvailable, oldestRecent, secondOldestRecent *selectionCard
@@ -114,7 +121,7 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 		card := &cards[index]
 		// Future cards still identify which presentation would be an immediate repeat.
 		latestPresentationID = max(latestPresentationID, card.lastPresentationID)
-		recent := card.lastPresentationID >= recentSinceID && presentedRecently(card, now)
+		recent := plan.inCooldown(card)
 		if card.fsrsState == 0 || !card.dueAt.After(now) {
 			hasEligible = true
 			if recent {
@@ -127,7 +134,7 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 				continue
 			}
 			onlyAvailable = card
-			pools[card.poolIndex()].add(card, now)
+			plan.pools[card.poolIndex()].add(card, now)
 			continue
 		}
 		if oldestFuture == nil || futureBefore(card, oldestFuture) {
@@ -140,47 +147,73 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 
 	if !hasEligible {
 		if availableFuture != nil {
-			return *availableFuture, true
+			plan.future = availableFuture
+		} else {
+			plan.future = oldestFuture
 		}
-		return *oldestFuture, true
+		return plan
 	}
 	// A rigid three-card exclusion forces four-card pools into a cycle.
 	// Relax oldest exclusions only when fresh alternatives cannot break it.
-	var relaxed [2]*selectionCard
-	availableCount := pools[newSelectionPool].count + pools[stepSelectionPool].count + pools[reviewSelectionPool].count
+	availableCount := plan.pools[newSelectionPool].count + plan.pools[stepSelectionPool].count + plan.pools[reviewSelectionPool].count
 	if availableCount == 0 {
-		relaxed[0] = oldestRecent
+		plan.relaxed[0] = oldestRecent
 		if secondOldestRecent != nil && secondOldestRecent.lastPresentationID < latestPresentationID {
-			relaxed[1] = secondOldestRecent
+			plan.relaxed[1] = secondOldestRecent
 		}
 	} else if availableCount == 1 && presentedRecently(onlyAvailable, now) &&
 		oldestRecent != nil && oldestRecent.lastPresentationID < latestPresentationID {
-		relaxed[0] = oldestRecent
+		plan.relaxed[0] = oldestRecent
 	}
-	for _, card := range relaxed {
+	for _, card := range plan.relaxed {
 		if card == nil {
 			continue
 		}
-		pools[card.poolIndex()].add(card, now)
+		plan.pools[card.poolIndex()].add(card, now)
 	}
 
 	// Complete selectable learning steps before introducing more material.
+	if plan.pools[stepSelectionPool].count > 0 {
+		plan.shares[stepSelectionPool] = 1
+	} else if plan.pools[newSelectionPool].count == 0 {
+		plan.shares[reviewSelectionPool] = 1
+	} else if plan.pools[reviewSelectionPool].count == 0 {
+		plan.shares[newSelectionPool] = 1
+	} else {
+		plan.shares[newSelectionPool] = 0.2
+		plan.shares[reviewSelectionPool] = 0.8
+	}
+	return plan
+}
+
+func (plan *selectionPlan) inCooldown(card *selectionCard) bool {
+	return card.lastPresentationID >= plan.recentSinceID && presentedRecently(card, plan.now)
+}
+
+func (plan *selectionPlan) eligible(card *selectionCard) bool {
+	return (card.fsrsState == 0 || !card.dueAt.After(plan.now)) &&
+		(card == plan.relaxed[0] || card == plan.relaxed[1] || !plan.inCooldown(card))
+}
+
+func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Time, random func() float64) (selectionCard, bool) {
+	if len(cards) == 0 {
+		return selectionCard{}, false
+	}
+	plan := planLearningSelection(cards, recentSinceID, now)
+	if plan.future != nil {
+		return *plan.future, true
+	}
 	selectedPool := reviewSelectionPool
-	if pools[stepSelectionPool].count > 0 {
+	if plan.shares[stepSelectionPool] > 0 {
 		selectedPool = stepSelectionPool
-	} else if pools[newSelectionPool].count > 0 &&
-		(pools[reviewSelectionPool].count == 0 || random() < 0.2) {
+	} else if share := plan.shares[newSelectionPool]; share > 0 && (share == 1 || random() < share) {
 		selectedPool = newSelectionPool
 	}
-	remaining := random() * pools[selectedPool].weight
+	remaining := random() * plan.pools[selectedPool].weight
 	var last *selectionCard
 	for index := range cards {
 		card := &cards[index]
-		if card.poolIndex() != selectedPool || (card.fsrsState != 0 && card.dueAt.After(now)) {
-			continue
-		}
-		if card != relaxed[0] && card != relaxed[1] &&
-			card.lastPresentationID >= recentSinceID && presentedRecently(card, now) {
+		if card.poolIndex() != selectedPool || !plan.eligible(card) {
 			continue
 		}
 		last = card

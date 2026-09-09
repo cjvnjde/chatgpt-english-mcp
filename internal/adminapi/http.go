@@ -94,6 +94,26 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 	handle("GET /admin/api/analytics", func(w http.ResponseWriter, r *http.Request) (any, error) {
 		return store.AdminAnalytics(r.Context(), owner)
 	})
+	handle("GET /admin/api/suggestions", func(w http.ResponseWriter, r *http.Request) (any, error) {
+		q, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			return nil, storage.ErrAdminQuery
+		}
+		limit, offset := 50, 0
+		if q.Has("limit") {
+			limit, err = strconv.Atoi(q.Get("limit"))
+			if err != nil {
+				return nil, storage.ErrAdminQuery
+			}
+		}
+		if q.Has("offset") {
+			offset, err = strconv.Atoi(q.Get("offset"))
+			if err != nil {
+				return nil, storage.ErrAdminQuery
+			}
+		}
+		return store.AdminSuggestions(r.Context(), owner, limit, offset)
+	})
 	handle("GET /admin/api/vocabulary/{id}", func(w http.ResponseWriter, r *http.Request) (any, error) {
 		return service.Get(r.Context(), r.PathValue("id"), "")
 	})

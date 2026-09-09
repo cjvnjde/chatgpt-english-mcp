@@ -83,11 +83,13 @@ export default function RecordTable(props: {
   const [query, setQuery] = createSignal("");
   const [column, setColumn] = createSignal(props.initialFilter?.column || "");
   const [value, setValue] = createSignal(props.initialFilter?.value || "");
-  const [comments, setComments] = createSignal(props.commentsOnly || false);
+  const [comments, setComments] = createSignal(false);
   const [sort, setSort] = createSignal(
     defaultSort[props.table.name] || props.table.columns[0].name,
   );
-  const [direction, setDirection] = createSignal("desc");
+  const [direction, setDirection] = createSignal(
+    props.table.name === "learning_cards" ? "asc" : "desc",
+  );
   const [from, setFrom] = createSignal("");
   const [to, setTo] = createSignal("");
   const [limit, setLimit] = createSignal(50);
@@ -102,7 +104,7 @@ export default function RecordTable(props: {
       direction: direction(),
       from: from(),
       to: to(),
-      comments: String(comments()),
+      comments: String(props.commentsOnly || comments()),
       limit: String(limit()),
       offset: String(offset()),
     });
@@ -156,13 +158,15 @@ export default function RecordTable(props: {
     <>
       <div class="page-heading">
         <div>
-          <h1>{label(props.table.name)}</h1>
+          <h1>{props.commentsOnly ? "Comments" : label(props.table.name)}</h1>
           <p>
-            {props.table.name === "vocabulary_items"
-              ? "Manage words, meanings, notes, examples, and tags."
-              : props.table.name === "review_attempts"
-                ? "Ratings and tutor comments for every recorded review. Answer text is not stored."
-                : "Browse records and open a row to inspect every stored field."}
+            {props.commentsOnly
+              ? "Tutor comments and ratings for reviews with comments. Answer text is not stored."
+              : props.table.name === "vocabulary_items"
+                ? "Manage words, meanings, notes, examples, and tags."
+                : props.table.name === "review_attempts"
+                  ? "Ratings and tutor comments for every recorded review. Answer text is not stored."
+                  : "Browse records and open a row to inspect every stored field."}
           </p>
         </div>
         <div class="toolbar">
@@ -220,7 +224,9 @@ export default function RecordTable(props: {
               />
             </label>
           </Show>
-          <Show when={props.table.name === "review_attempts"}>
+          <Show
+            when={props.table.name === "review_attempts" && !props.commentsOnly}
+          >
             <label class="check">
               <input
                 type="checkbox"
