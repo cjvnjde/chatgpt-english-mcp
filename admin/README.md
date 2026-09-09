@@ -2,21 +2,30 @@
 
 A static SolidJS + TypeScript admin app. Vite produces `dist/`; nginx serves it and forwards `/admin/api/` to the existing Go service. There is no frontend server runtime, separate backend process, or direct browser connection to SQLite.
 
-## Run with Docker Compose
+## Deploy with Dokploy
 
-Use the repository version containing the admin API and this frontend. Add a separate secret to your existing `.env`:
+Use `docker-compose.yml` from the repository version containing the admin API and frontend. This single file includes the MCP, tunnel, Anki worker, and nginx admin service. Generate a separate admin secret:
 
 ```sh
 openssl rand -base64 32
 ```
 
-Copy the result into `ADMIN_BEARER_TOKEN`. Keep `MCP_BEARER_TOKEN` and `ANKI_EXPORT_TOKEN` distinct. Then run:
+Copy the result into `ADMIN_BEARER_TOKEN` in Dokploy Environment. Keep `MCP_BEARER_TOKEN` and `ANKI_EXPORT_TOKEN` distinct. In Dokploy Domains, use the same host, `english-mcp.cjvnjde.tech`, for these routes:
+
+| Path | Service | Container port | Strip Path | Internal Path |
+| --- | --- | --- | --- | --- |
+| `/mcp` | `english-learning-mcp` | `8081` | Off | Empty |
+| `/admin` | `english-admin` | `80` | Off | Empty |
+
+Enable HTTPS for the domain and deploy. Open `https://english-mcp.cjvnjde.tech/admin` and enter `ADMIN_BEARER_TOKEN`. nginx redirects `/admin` to `/admin/` using a relative redirect, so the HTTPS scheme and host are preserved. The admin route also covers its assets and `/admin/api/`; no separate API domain rule is required.
+
+Keep the incoming paths intact: nginx serves the UI at `/admin/` and forwards `/admin/api/` unchanged to the MCP. Dokploy handles domain routing and TLS; the Compose file publishes no host ports or manual Traefik labels. All four containers share an explicit Compose network for internal communication, alongside the proxy networks Dokploy adds for Domains. See [Dokploy Domains](https://docs.dokploy.com/docs/core/domains) for path settings.
+
+For an ordinary Compose deployment with your own reverse proxy, use the same file and routes:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d --build
+docker compose up -d --build
 ```
-
-Open `http://localhost:8090` and enter `ADMIN_BEARER_TOKEN`. The default binding is localhost; for remote use, put the nginx service behind your existing HTTPS reverse proxy. Route your admin domain to `english-admin:80` on the shared Docker network. In a deployment platform that accepts only one Compose file, merge the two service definitions from `docker-compose.admin.yml` into your existing stack.
 
 The admin container does not mount the database or receive the token. It forwards the token supplied by the browser. The Go API is available on the existing external listener (8081), never the unauthenticated tunnel listener (8080). An empty `ADMIN_BEARER_TOKEN` leaves the admin API disabled. The token grants database-wide read/export access; vocabulary mutations use the configured `MCP_OWNER_KEY` namespace. Do not use this single-administrator API for mutually untrusted users.
 
@@ -30,7 +39,7 @@ npm ci
 npm run build
 ```
 
-Host the contents of `admin/dist/` at your admin site's root. Configure your host to forward `/admin/api/` to `http://english-learning-mcp:8081/admin/api/`, preserving the `Authorization` header. The provided `nginx/default.conf.template` does this. `MCP_UPSTREAM` is nginx runtime configuration, so changing the upstream does not require rebuilding JavaScript.
+Host the contents of `admin/dist/` under the public `/admin/` path. The included Dockerfile copies them into `/usr/share/nginx/html/admin`, matching the `/admin/` asset URLs emitted by Vite. Configure your host to forward `/admin/api/` to `http://english-learning-mcp:8081/admin/api/`, preserving the path and `Authorization` header. The provided `nginx/default.conf.template` does this. `MCP_UPSTREAM` is nginx runtime configuration, so changing the upstream does not require rebuilding JavaScript.
 
 The build contains only HTML, CSS, and JavaScript. Client navigation uses URL hashes, so static hosting needs no server-side page routes. API requests always use the same origin; no CORS changes are needed. The old MCP version cannot supply the admin endpoints: rebuild the Go service from this version too.
 
@@ -78,6 +87,8 @@ ADMIN_DEV_UPSTREAM=http://localhost:8081 npm run dev
 npm run build
 npm test
 ```
+
+Open the Vite development URL with `/admin/` appended (normally `http://localhost:5173/admin/`).
 
 From the repository root:
 
