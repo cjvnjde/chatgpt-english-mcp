@@ -90,6 +90,23 @@ func TestExpressionAttestedVariantsAndExplicitTemplates(t *testing.T) {
 	}
 }
 
+func TestExpressionLengthBoundAllowsEveryPossessiveSlotExpansion(t *testing.T) {
+	for _, test := range []struct {
+		template string
+		term     string
+	}{
+		{"one's word", "somebody's word"},
+		{"one's word on one's honor", "somebody's word on somebody's honor"},
+	} {
+		t.Run(test.template, func(t *testing.T) {
+			matcher := newExpressionMatcher(expressionDataset{Entries: []expressionEntry{
+				{Term: test.template, IdiomaticDocuments: 10},
+			}})
+			assertExpressionVotes(t, matcher, test.term, noExpressionRanks, 1, 1)
+		})
+	}
+}
+
 func TestExpressionInflectionsRequireVerbalSourcePOS(t *testing.T) {
 	matcher := newExpressionMatcher(expressionDataset{
 		Entries: []expressionEntry{

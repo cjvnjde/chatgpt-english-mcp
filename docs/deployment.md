@@ -164,6 +164,8 @@ Vocabulary tags are encoded as `vocab::u` followed by lowercase UTF-8 hex. This 
 
 Rendered Anki fields use NFC Unicode and omit Anki-unsupported ASCII controls so unchanged content converges instead of triggering repeated repairs. Application text, source identity, and encoded tag identity remain unchanged. NUL-containing snapshots are still rejected before collection mutation.
 
+Snapshots with mismatched item digests are rejected before opening or changing the collection; a malformed empty snapshot cannot authorize deletion using a previous snapshot's digest.
+
 ### Version upgrades and live verification
 
 The worker image pins Python `3.14.7` and `anki==26.8.1`. The package was selected from [official PyPI metadata](https://pypi.org/project/anki/26.8.1/) and Python from the [official image manifest](https://github.com/docker-library/official-images/blob/master/library/python). Version-specific synchronization operations are isolated in the adapter.
@@ -173,6 +175,8 @@ Before upgrading, stop and back up the worker, verify the new stable package/run
 Export schema version `2` includes usefulness metadata; deployments upgrading from schema `1` must rebuild and redeploy both the Go service and worker together. Offline frequency inference keeps schema `2` unchanged. Migration `009` preserves old usefulness values as hints and recalculates effective values from the bundled datasets without resetting learning state or existing timestamps. New dataset or scoring-policy revisions trigger the same startup recalculation. No frequency download or external API access is needed at runtime. Usefulness affects MCP selection only, not Anki fields, tags, or scheduling.
 
 Expression inference also keeps the existing database and export schemas. Redeploying the Go service loads the bundled expression index and advances the scoring revision, recalculating saved terms from their original hints. No expression download or Anki worker change is required. Conservative variant and typo matching affects usefulness only, not vocabulary identity or Anki content.
+
+The optional top-level vocabulary `context` now preserves context-only meanings and is rendered into the Anki Context field. Deploy the updated Go exporter and Python worker together: older strict-schema workers do not recognize this field. Existing source identities, mappings, and schedules are preserved.
 
 For live integration, use a separate deployment environment containing only disposable-account credentials. Stop its polling worker before the test. The command requires an explicit acknowledgement and matching account email:
 

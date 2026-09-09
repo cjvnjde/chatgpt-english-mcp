@@ -110,6 +110,9 @@ func (service *Service) Save(ctx context.Context, term string, initial InitialVa
 	if err != nil {
 		return SaveResult{}, err
 	}
+	if !utf8.ValidString(initial.Context) || !utf8.ValidString(initial.Definition) {
+		return SaveResult{}, apperr.New(apperr.InvalidArgument, "context and definition must contain valid UTF-8")
+	}
 	snapshot, err := service.store.ActiveDictionarySnapshot(
 		ctx,
 		service.currentSource.Provider,
@@ -140,7 +143,7 @@ func (service *Service) Save(ctx context.Context, term string, initial InitialVa
 		selectedDefinitionIndex = &definitionIndex
 		selectedDefinition = &definition
 	}
-	senseKey := vocabularySenseKey(definitionValue, contextValue, metadata.CustomDescription)
+	senseKey := vocabularySenseKey(definitionValue, contextValue)
 	created, item, err := service.store.SaveVocabulary(ctx, storage.VocabularyCreate{
 		OwnerKey:                service.ownerKey,
 		Term:                    displayTerm,
@@ -208,7 +211,7 @@ func findDefinition(entries []domain.DictionaryEntry, wanted string) (int, int, 
 	return 0, 0, domain.DictionaryDefinition{}, false
 }
 
-func vocabularySenseKey(definition, contextValue, customDescription string) string {
+func vocabularySenseKey(definition, contextValue string) string {
 	identity := definition
 	if identity == "" {
 		identity = contextValue
@@ -270,6 +273,9 @@ func (service *Service) List(ctx context.Context, options ListOptions) (ListResu
 		return ListResult{}, apperr.New(apperr.InvalidArgument, "limit must be between 1 and 100")
 	}
 
+	if !utf8.ValidString(options.Query) {
+		return ListResult{}, apperr.New(apperr.InvalidArgument, "query must contain valid UTF-8")
+	}
 	filter := listFilter{
 		Query:                domain.NormalizeTerm(options.Query),
 		HasLookup:            options.HasLookup,
@@ -487,6 +493,9 @@ func normalizeDescription(value *string) (string, error) {
 	if value == nil {
 		return "", nil
 	}
+	if !utf8.ValidString(*value) {
+		return "", apperr.New(apperr.InvalidArgument, "customDescription must contain valid UTF-8")
+	}
 	description := strings.TrimSpace(*value)
 	if utf8.RuneCountInString(description) > 5000 {
 		return "", apperr.New(
@@ -500,6 +509,9 @@ func normalizeDescription(value *string) (string, error) {
 func normalizeDescriptionSource(value *domain.DescriptionSource) (*domain.DescriptionSource, error) {
 	if value == nil {
 		return nil, nil
+	}
+	if !utf8.ValidString(value.Title) || !utf8.ValidString(value.URL) {
+		return nil, apperr.New(apperr.InvalidArgument, "descriptionSource must contain valid UTF-8")
 	}
 	title := strings.TrimSpace(value.Title)
 	sourceURL := strings.TrimSpace(value.URL)
@@ -527,6 +539,9 @@ func normalizeTags(values []string) ([]string, error) {
 	}
 	unique := make(map[string]struct{}, len(values))
 	for _, value := range values {
+		if !utf8.ValidString(value) {
+			return nil, apperr.New(apperr.InvalidArgument, "tags must contain valid UTF-8")
+		}
 		tag := strings.ToLower(domain.DisplayTerm(value))
 		if tag == "" || utf8.RuneCountInString(tag) > 50 {
 			return nil, apperr.New(apperr.InvalidArgument, "each tag must contain 1 to 50 Unicode characters")
@@ -570,6 +585,9 @@ func normalizeTextList(name string, values []string, maximumItems, maximumLength
 	}
 	result := make([]string, 0, len(values))
 	for _, value := range values {
+		if !utf8.ValidString(value) {
+			return nil, apperr.New(apperr.InvalidArgument, name+" must contain valid UTF-8")
+		}
 		text := strings.TrimSpace(value)
 		if text == "" || utf8.RuneCountInString(text) > maximumLength {
 			return nil, apperr.New(

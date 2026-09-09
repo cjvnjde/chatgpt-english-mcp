@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"english-learning-mcp/internal/storage"
 	"english-learning-mcp/internal/vocabulary"
@@ -77,6 +79,9 @@ func TestAdminQueriesAndReadOnlyHistory(t *testing.T) {
 		"/tables/vocabulary_items?column=unknown", "/tables/vocabulary_items?limit=101",
 		"/tables/vocabulary_items?limit=no", "/tables/vocabulary_items?offset=-1",
 		"/tables/vocabulary_items?from=bad-date", "/tables/vocabulary_items?comments=true",
+		"/tables/vocabulary_items?from=2026-09-10&to=2026-09-09",
+		"/tables/review_attempts?comments=tru",
+		"/tables/vocabulary_items?column=term&value=%ZZ",
 	} {
 		if r := adminRequest(handler, "GET", path, "", testToken); r.Code != 400 {
 			t.Fatalf("%s: got %d %s", path, r.Code, r.Body.String())
@@ -138,6 +143,31 @@ func TestEmptyAdminTokenDisablesHandler(t *testing.T) {
 	handler := NewHandler(store, vocabulary.NewService(store, "default", storage.SourceVersion{}), "default", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if r := adminRequest(handler, "GET", "/database", "", testToken); r.Code != 404 {
 		t.Fatalf("empty-token handler enabled: %d", r.Code)
+	}
+}
+
+func TestAdminRequestDeadlineInterruptsStalledBody(t *testing.T) {
+	_, handler := testHandler(t)
+	finished := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+		defer cancel()
+		defer close(finished)
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	}))
+	defer server.Close()
+	connection, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err := io.WriteString(connection, "POST /admin/api/vocabulary HTTP/1.1\r\nHost: example.test\r\nAuthorization: Bearer "+testToken+"\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("admin deadline did not release a handler blocked reading an incomplete JSON body")
 	}
 }
 

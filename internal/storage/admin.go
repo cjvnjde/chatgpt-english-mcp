@@ -167,17 +167,21 @@ func (db *DB) AdminRows(ctx context.Context, name string, query AdminQuery) (Adm
 		if value == "" {
 			continue
 		}
-		date, err := time.Parse("2006-01-02", value)
+		_, err := time.Parse("2006-01-02", value)
 		if err != nil || dateColumn == "" {
 			return page, ErrAdminQuery
 		}
 		operator := ">="
 		if i == 1 {
-			operator = "<"
-			date = date.AddDate(0, 0, 1)
+			operator = "<="
 		}
-		where = append(where, "julianday(t."+adminIdentifier(dateColumn)+") "+operator+" julianday(?)")
-		args = append(args, TimeString(date))
+		// Stored timestamps are UTC. Compare their dates without SQLite's
+		// millisecond rounding, which can move the last nanoseconds into tomorrow.
+		where = append(where, "substr(t."+adminIdentifier(dateColumn)+", 1, 10) "+operator+" ?")
+		args = append(args, value)
+	}
+	if query.From != "" && query.To != "" && query.From > query.To {
+		return page, ErrAdminQuery
 	}
 	from := " FROM " + adminIdentifier(name) + " t WHERE " + strings.Join(where, " AND ")
 	// Keep the count and page in one snapshot while MCP writes continue.
@@ -244,6 +248,7 @@ func adminScan(rows *sql.Rows) ([]map[string]any, error) {
 
 func (db *DB) AdminAnalytics(ctx context.Context, owner string) (map[string]any, error) {
 	result := map[string]any{"owner": owner}
+	now := time.Now().UTC()
 	queries := []struct {
 		name, sql string
 		args      []any
@@ -251,8 +256,8 @@ func (db *DB) AdminAnalytics(ctx context.Context, owner string) (map[string]any,
 		{"statuses", `SELECT learning_status AS label, COUNT(*) AS count FROM vocabulary_items WHERE owner_key = ? GROUP BY learning_status`, []any{owner}},
 		{"ratings", `SELECT rating AS label, COUNT(*) AS count FROM review_attempts WHERE owner_key = ? GROUP BY rating`, []any{owner}},
 		{"effectiveRatings", `SELECT COALESCE(effective_rating, rating) AS label, COUNT(*) AS count FROM review_attempts WHERE owner_key = ? GROUP BY COALESCE(effective_rating, rating)`, []any{owner}},
-		{"activity", `SELECT substr(reviewed_at, 1, 10) AS day, COUNT(*) AS reviews, SUM(CASE WHEN rating IN ('good', 'easy') THEN 1 ELSE 0 END) AS recalled FROM review_attempts WHERE owner_key = ? AND julianday(reviewed_at) >= julianday('now', 'start of day', '-29 days') GROUP BY day ORDER BY day`, []any{owner}},
-		{"due", `SELECT COUNT(*) AS count FROM learning_cards c JOIN vocabulary_items v ON v.id = c.vocabulary_item_id WHERE v.owner_key = ? AND v.learning_status <> 'archived' AND julianday(c.due_at) <= julianday('now')`, []any{owner}},
+		{"activity", `SELECT substr(reviewed_at, 1, 10) AS day, COUNT(*) AS reviews, SUM(CASE WHEN rating IN ('good', 'easy') THEN 1 ELSE 0 END) AS recalled FROM review_attempts WHERE owner_key = ? AND substr(reviewed_at, 1, 10) >= ? AND substr(reviewed_at, 1, 10) <= ? GROUP BY day ORDER BY day`, []any{owner, now.AddDate(0, 0, -29).Format("2006-01-02"), now.Format("2006-01-02")}},
+		{"due", `SELECT COUNT(*) AS count FROM learning_cards c JOIN vocabulary_items v ON v.id = c.vocabulary_item_id WHERE v.owner_key = ? AND v.learning_status <> 'archived' AND rtrim(c.due_at, 'Z') <= ?`, []any{owner, strings.TrimSuffix(TimeString(now), "Z")}},
 		{"comments", `SELECT COUNT(*) AS count FROM review_attempts WHERE owner_key = ? AND trim(comment) <> ''`, []any{owner}},
 		{"difficult", `SELECT v.id, v.term, c.lapses, c.consecutive_failures, c.difficulty, c.due_at FROM learning_cards c JOIN vocabulary_items v ON v.id = c.vocabulary_item_id WHERE v.owner_key = ? AND v.learning_status <> 'archived' ORDER BY c.lapses DESC, c.consecutive_failures DESC, c.difficulty DESC, v.id LIMIT 10`, []any{owner}},
 	}

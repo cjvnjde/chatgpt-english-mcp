@@ -151,6 +151,7 @@ func runHTTPServer(ctx context.Context, endpoint httpEndpoint, logger *slog.Logg
 		Addr:              endpoint.address,
 		Handler:           endpoint.handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    16 << 10,
 	}

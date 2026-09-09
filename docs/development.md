@@ -22,6 +22,8 @@ go run ./cmd/english-learning-mcp
 
 The unauthenticated local endpoint is `http://127.0.0.1:8080/mcp`; the endpoint on port `8081` requires the configured bearer token. Do not bind the unauthenticated listener to a public interface.
 
+Both MCP handlers reject foreign browser origins while allowing same-origin and originless native requests. Each HTTP server bounds complete request reads to 30 seconds, including partially delivered bodies; the admin API also sets per-request read/write deadlines.
+
 ## Test and build
 
 ```sh
@@ -92,7 +94,7 @@ Unexpected internal causes are logged server-side and replaced with a safe `INTE
 
 ## Storage behavior
 
-SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchronous=NORMAL`, and one open connection. Important invariants include:
+SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchronous=NORMAL`, and one open connection. Connection-local pragmas are reapplied by the driver whenever a connection is replaced. Filesystem names are URI-escaped; explicit local `file:` URIs retain their parameters. Vocabulary writes hydrate their return values inside the write transaction, so corrupt stored JSON cannot produce a committed write followed by an error. Important invariants include:
 
 - one vocabulary item per owner, normalized term, and sense key;
 - one active dictionary snapshot per provider, term, dataset version, and parser version;
@@ -140,11 +142,13 @@ All new errors exposed to callers should use a stable `apperr` code and avoid le
 
 ## Anki integration
 
-The optional private endpoint returns a complete owner-scoped snapshot from one SQLite read transaction. Its metadata includes schema version, stable namespace and owner, item count, explicit completeness, and a SHA-256 snapshot digest. The worker validates the entire snapshot before opening or changing Anki state. It never uses the paginated MCP list as a deletion authority.
+The optional private endpoint returns a complete owner-scoped snapshot from one SQLite read transaction. Its metadata includes schema version, stable namespace and owner, item count, explicit completeness, and a SHA-256 snapshot digest. The worker validates the entire snapshot and verifies the digest against its items before opening or changing Anki state. Digest verification matches Go's compact JSON encoding, including HTML-sensitive characters and Unicode line separators; it detects content mismatch, not the authenticity of an untrusted server. The worker never uses the paginated MCP list as a deletion authority.
 
 Source identity combines integration namespace, encoded owner, and saved item ID. The worker keeps independent ownership mappings so a remote edit to the visible fields or deck cannot evade reconciliation. Every poll downloads remote state into the private worker collection, compares actual fields/tags with the source, and publishes corrections. The application database is never a sync destination.
 
 Snapshot schema version `2` includes required usefulness metadata. The Python worker validates it but does not render it into Anki fields/tags or use it for Anki scheduling. Deploy the Go exporter and Python worker together; older snapshots are rejected instead of silently weakening validation. Existing source IDs, note mappings, and Anki cards remain unchanged.
+
+Vocabulary and learning responses expose optional top-level `context` for meanings without a dictionary-selected sense. The Anki worker accepts this field and renders it in Context, falling back to `sense.context` for older exports. Deploy the updated exporter and strict-schema worker together.
 
 Install the pinned library into an isolated environment:
 

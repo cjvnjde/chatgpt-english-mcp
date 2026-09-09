@@ -16,6 +16,9 @@ func TestLoadRequiresStrongBearerToken(t *testing.T) {
 		{name: "missing", token: "", wantError: true},
 		{name: "too short", token: strings.Repeat("x", minimumBearerTokenBytes-1), wantError: true},
 		{name: "minimum length", token: strings.Repeat("x", minimumBearerTokenBytes)},
+		{name: "embedded newline", token: strings.Repeat("x", minimumBearerTokenBytes) + "\ny", wantError: true},
+		{name: "embedded space", token: strings.Repeat("x", minimumBearerTokenBytes) + " y", wantError: true},
+		{name: "non bearer characters", token: strings.Repeat("x", minimumBearerTokenBytes) + ",y", wantError: true},
 	}
 
 	for _, test := range tests {
@@ -167,6 +170,8 @@ func TestAdminTokenIsOptionalStrongAndSeparate(t *testing.T) {
 	}{
 		{"", true}, {strings.Repeat("a", 32), true}, {"short", false},
 		{strings.Repeat("x", 32), false}, {strings.Repeat("a", 32) + " b", false},
+		{strings.Repeat("a", 32) + "\vb", false},
+		{strings.Repeat("a", 32) + ",b", false},
 	} {
 		t.Run(item.token, func(t *testing.T) {
 			setValidEnvironment(t)
@@ -177,6 +182,50 @@ func TestAdminTokenIsOptionalStrongAndSeparate(t *testing.T) {
 			}
 			if err == nil && configuration.AdminBearerToken != item.token {
 				t.Fatal("admin token was not retained")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsOverflowingCambridgeTimeout(t *testing.T) {
+	setValidEnvironment(t)
+	t.Setenv("CAMBRIDGE_TIMEOUT_SECONDS", "9223372037")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted a timeout that overflows time.Duration and disables the HTTP client deadline")
+	}
+}
+
+func TestLoadRejectsNonPersistentSQLitePaths(t *testing.T) {
+	for _, path := range []string{
+		"",
+		":memory:",
+		":memory:?cache=shared",
+		"file::memory:?cache=shared",
+		"file:%3Amemory%3A?cache=shared",
+		"file:learning?mode=memory&cache=shared",
+		"file:",
+		"file:?cache=shared",
+	} {
+		t.Run(path, func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv("SQLITE_PATH", path)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load accepted a SQLite path that loses saved vocabulary on shutdown")
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsPersistentSQLiteURIs(t *testing.T) {
+	for _, path := range []string{
+		"file:learning.sqlite?mode=rwc",
+		"file:/tmp/learning.sqlite?mode=rw",
+	} {
+		t.Run(path, func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv("SQLITE_PATH", path)
+			if _, err := Load(); err != nil {
+				t.Fatalf("Load rejected a persistent SQLite URI: %v", err)
 			}
 		})
 	}

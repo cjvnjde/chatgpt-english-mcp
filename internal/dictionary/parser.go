@@ -478,7 +478,11 @@ func absoluteURL(pathOrURL string, baseURL *url.URL) string {
 	if err != nil {
 		return ""
 	}
-	return baseURL.ResolveReference(parsed).String()
+	resolved := baseURL.ResolveReference(parsed)
+	if (resolved.Scheme != "http" && resolved.Scheme != "https") || resolved.Host == "" || resolved.User != nil {
+		return ""
+	}
+	return resolved.String()
 }
 
 func emptyDictionaryData(sourceURL string, status int) domain.DictionarySnapshotData {

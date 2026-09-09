@@ -24,7 +24,7 @@ type Usefulness = "low" | "normal" | "high";
 type ReviewRating = "again" | "hard" | "good" | "easy";
 ```
 
-A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, an optional complete dictionary lookup, and creation/update timestamps. Returned usefulness is the effective general-usefulness classification calculated from offline word/expression evidence and any saved API hint, not personal relevance, difficulty, or recall quality.
+A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, optional saved `context` and selected `sense`, an optional complete dictionary lookup, and creation/update timestamps. Context is returned even without a dictionary-selected sense. Returned usefulness is the effective general-usefulness classification calculated from offline word/expression evidence and any saved API hint, not personal relevance, difficulty, or recall quality.
 
 ## `dictionary_lookup`
 
@@ -86,6 +86,8 @@ Definition `labels` may include Cambridge CEFR levels such as `B1`, alongside us
 The operation is idempotent by normalized term and selected meaning. `definition` must exactly match a definition returned by `dictionary_lookup`. Saving another definition for the same spelling creates another vocabulary item and independent learning card while reusing the same cached lookup. `context` is a short learner-facing distinction such as `"boating"`.
 
 For terms with dictionary data, callers should always pass `definition`. Omitting it preserves the legacy one-item-per-term behavior unless different non-empty contexts are supplied. Initial metadata is applied only when creating the same meaning; an existing item is never overwritten.
+
+Dictionary-selected meanings retain the immutable lookup snapshot used when they were saved, preserving definition indices, part of speech, and pronunciation across refreshes. Legacy/context-only items can follow newer successful lookups. Re-saving a legacy item with an explicit definition can create a separate card; use metadata updates when preserving its existing identity and history.
 
 Tags are trimmed, lowercased, deduplicated, and sorted. `descriptionSource.url`, when present, must be an absolute HTTP(S) URL and requires a non-empty custom description.
 
@@ -178,6 +180,7 @@ This removes the vocabulary item and its learning card. It does not remove cache
   term: string;
   usefulness: Usefulness;
   definition?: string;
+  context?: string; // saved sense distinction, including context-only meanings
   example?: string;
   reason: "troublesome" | "failed" | "overdue" | "due" | "new" | "early";
   troublesome: boolean;
@@ -194,7 +197,7 @@ This removes the vocabulary item and its learning card. It does not remove cache
 }
 ```
 
-The tool returns exactly one non-archived item. `latestComment` is included when available. `comments` is included only when `includeComments` is true. Pass `reviewToken` unchanged to `learning_review` after the learner answers.
+The tool returns exactly one non-archived item. Non-empty saved `context` is returned independently of dictionary coverage. `latestComment` is the latest non-empty comment, so it can predate a newer uncommented review; use its timestamp rather than assuming it describes the latest attempt. `comments` is included only when `includeComments` is true. Pass `reviewToken` unchanged to `learning_review` after the learner answers.
 
 Selection starts with all FSRS-new and due cards, applying a global adaptive cooldown for the owner's last three presentation events less than 30 minutes old. When too few candidates remain, it readmits older eligible cards for variety without reintroducing the latest active presentation when alternatives exist. A sole unshown candidate or one last shown at least 30 minutes ago keeps priority over cooldown relaxation. With only one eligible card, it may repeat.
 

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -39,12 +40,12 @@ def vocabulary(item_id="one", **changes):
     return item
 
 
-def envelope(config, items, digest="a" * 64):
-    return {
+def envelope(config, items):
+    payload = {
         "schemaVersion": 2,
         "namespace": config.namespace,
         "owner": config.owner,
-        "digest": digest,
+        "digest": "",
         "itemCount": len(items),
         "complete": True,
         "items": [
@@ -55,6 +56,12 @@ def envelope(config, items, digest="a" * 64):
             for item in items
         ],
     }
+    encoded = json.dumps(payload["items"], ensure_ascii=False, separators=(",", ":"))
+    encoded = encoded.translate(
+        {ord(char): f"\\u{ord(char):04x}" for char in "&<>\u2028\u2029"}
+    )
+    payload["digest"] = hashlib.sha256(encoded.encode()).hexdigest()
+    return payload
 
 
 def add_basic(collection, deck_id, *, shared=False):
@@ -367,6 +374,15 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkerError, "duplicate object"):
             json.loads('{"items":[],"items":[]}', object_pairs_hook=unique_object)
 
+    def test_context_only_sense_is_exported_to_anki(self):
+        item = vocabulary(context="The river <bank>")
+        snapshot = validate_snapshot(envelope(self.config, [item]), self.config)
+        fields, _ = render(
+            source_id(self.config.namespace, self.config.owner, "one"),
+            next(iter(snapshot.items.values())),
+        )
+        self.assertEqual(fields[4], "The river &lt;bank&gt;")
+
     def test_rendering_escapes_links_deduplicates_examples_and_encodes_tags(self):
         item = vocabulary(
             term='<script>alert("word")</script>',
@@ -529,7 +545,6 @@ class WorkerCycleTests(unittest.TestCase):
         )
         self.script = {"sync": []}
         self.items = [vocabulary()]
-        self.digest = "a" * 64
         self.sleeps = []
         self.worker = Worker(
             self.config,
@@ -537,7 +552,7 @@ class WorkerCycleTests(unittest.TestCase):
                 config, store, self.script
             ),
             fetch=lambda config: validate_snapshot(
-                envelope(config, self.items, self.digest), config
+                envelope(config, self.items), config
             ),
             sleep=self.sleeps.append,
             jitter=lambda: 0,
@@ -636,6 +651,18 @@ class WorkerCycleTests(unittest.TestCase):
         self.assertEqual(self.config.collection_path.read_bytes(), before)
         self.assertFalse(load_json(self.worker.store.status_path)["healthy"])
 
+    def test_snapshot_digest_mismatch_never_deletes_existing_notes(self):
+        self.items = [vocabulary(notes=["<&>\u2028\u2029 café"])]
+        self.worker.once()
+        before = self.config.collection_path.read_bytes()
+        payload = envelope(self.config, self.items)
+        payload["items"] = []
+        payload["itemCount"] = 0
+        self.worker.fetch = lambda config: validate_snapshot(payload, config)
+        with self.assertRaisesRegex(WorkerError, "digest"):
+            self.worker.once()
+        self.assertEqual(self.config.collection_path.read_bytes(), before)
+
     def test_initial_existing_account_download_preserves_unrelated_content(self):
         self.script["sync"] = ["download", "accepted"]
 
@@ -722,12 +749,11 @@ class WorkerCycleTests(unittest.TestCase):
             note["Meaning"] = "concurrent remote edit"
             adapter.collection.update_note(note)
             self.items = [vocabulary(customDescription="latest source")]
-            self.digest = "b" * 64
             return "accepted"
 
         self.script["sync"] = ["accepted", mutate]
         result = self.worker.once()
-        self.assertEqual(result["digest"], "b" * 64)
+        self.assertEqual(result["digest"], envelope(self.config, self.items)["digest"])
         with closing(Collection(str(self.config.collection_path))) as collection:
             note = collection.get_note(
                 next(iter(load_json(self.worker.store.state_path)["notes"].values()))

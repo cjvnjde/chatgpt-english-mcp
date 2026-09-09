@@ -6,6 +6,7 @@ import Modal from "./Modal";
 export default function Inspector(props: {
   row: Row;
   table: string;
+  owner: string;
   close: () => void;
   related: (table: string, column: string, value: string) => void;
   edit: (id: string) => void;
@@ -23,9 +24,11 @@ export default function Inspector(props: {
       <div class="dialog-body">
         <div class="toolbar">
           <Show when={itemID()}>
-            <button onClick={() => props.edit(String(itemID()))}>
-              Open vocabulary item
-            </button>
+            <Show when={props.row.owner_key === props.owner}>
+              <button onClick={() => props.edit(String(itemID()))}>
+                Open vocabulary item
+              </button>
+            </Show>
             <button
               onClick={() =>
                 props.related(

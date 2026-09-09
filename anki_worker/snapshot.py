@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ VOCABULARY = {
     "descriptionSource?": {"title?": str, "url?": str},
     "notes": [str],
     "examples": [str],
+    "context?": str,
     "createdAt": str,
     "updatedAt": str,
     "sense?": {
@@ -193,6 +195,20 @@ def validate_snapshot(payload, config):
         if row["sourceId"] != expected or expected in items:
             raise WorkerError("Snapshot contains a duplicate or mismatched source ID")
         items[expected] = item
+    # The exporter hashes compact encoding/json output. Preserve object order
+    # from the wire and match Go's HTML-safe escaping before accepting deletion
+    # authority; a well-shaped but altered items array is not a full snapshot.
+    encoded = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+    for literal, escaped in (
+        ("&", "\\u0026"),
+        ("<", "\\u003c"),
+        (">", "\\u003e"),
+        ("\u2028", "\\u2028"),
+        ("\u2029", "\\u2029"),
+    ):
+        encoded = encoded.replace(literal, escaped)
+    if hashlib.sha256(encoded.encode("utf-8")).hexdigest() != payload["digest"]:
+        raise WorkerError("Snapshot digest does not match its vocabulary items")
     return Snapshot(
         payload["digest"],
         dict(sorted(items.items(), key=lambda pair: pair[1]["itemId"])),

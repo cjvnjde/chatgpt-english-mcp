@@ -365,3 +365,88 @@ func TestUsefulnessMigrationsPreserveVocabularyAndLearningState(t *testing.T) {
 		assertPreserved(table, projections[table])
 	}
 }
+
+func TestDuplicateVocabularySaveOnlyLinksRequestedSense(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	snapshot, err := store.InsertDictionarySnapshot(ctx, DictionarySnapshotInsert{
+		Provider: "cambridge", NormalizedTerm: "bank", ParserVersion: 1, FetchedAt: now, ExpiresAt: now,
+		Data: domain.DictionarySnapshotData{Status: 200, Entries: []domain.DictionaryEntry{{Headword: "bank"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := VocabularyCreate{OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", SenseKey: "finance", Status: domain.LearningStatusNew, Now: now}
+	_, finance, err := store.SaveVocabulary(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SenseKey = "river"
+	_, river, err := store.SaveVocabulary(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SenseKey = "finance"
+	input.LookupID = snapshot.ID
+	created, duplicate, err := store.SaveVocabulary(ctx, input)
+	if err != nil || created || duplicate.ItemID != finance.ItemID || duplicate.Lookup == nil || duplicate.Lookup.LookupID != snapshot.ID {
+		t.Fatalf("retry = %#v, created %t, error %v", duplicate, created, err)
+	}
+	other, err := store.VocabularyByID(ctx, "owner", river.ItemID)
+	if err != nil || other.Lookup != nil {
+		t.Fatalf("retry modified another sense: %#v, error %v", other, err)
+	}
+}
+
+func TestVocabularyWritesRollBackWhenStoredDataCannotBeRead(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	snapshot, err := store.InsertDictionarySnapshot(ctx, DictionarySnapshotInsert{
+		Provider: "cambridge", NormalizedTerm: "bank", ParserVersion: 1, FetchedAt: now, ExpiresAt: now,
+		Data: domain.DictionarySnapshotData{Status: 200},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.sql.ExecContext(ctx, "UPDATE dictionary_snapshots SET data_json = '[]' WHERE id = ?", snapshot.ID); err != nil {
+		t.Fatal(err)
+	}
+	input := VocabularyCreate{OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", SenseKey: "legacy", Status: domain.LearningStatusNew, LookupID: snapshot.ID, Now: now}
+	if _, _, err := store.SaveVocabulary(ctx, input); !errors.Is(err, ErrCorruptData) {
+		t.Fatalf("save with corrupt lookup error = %v", err)
+	}
+	var count int
+	if err := store.sql.QueryRowContext(ctx, "SELECT count(*) FROM vocabulary_items").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed save left %d vocabulary rows, error %v", count, err)
+	}
+	input.LookupID = ""
+	_, saved, err := store.SaveVocabulary(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.sql.ExecContext(ctx, "UPDATE vocabulary_items SET tags_json = '[1]' WHERE id = ?", saved.ItemID); err != nil {
+		t.Fatal(err)
+	}
+	status := domain.LearningStatusArchived
+	if _, err := store.UpdateVocabulary(ctx, VocabularyUpdate{OwnerKey: "owner", ItemID: saved.ItemID, Status: &status, Now: now.Add(time.Hour)}); !errors.Is(err, ErrCorruptData) {
+		t.Fatalf("update with corrupt metadata error = %v", err)
+	}
+	var storedStatus domain.LearningStatus
+	var updatedAt string
+	if err := store.sql.QueryRowContext(ctx, "SELECT learning_status, updated_at FROM vocabulary_items WHERE id = ?", saved.ItemID).Scan(&storedStatus, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if storedStatus != domain.LearningStatusNew || updatedAt != saved.UpdatedAt {
+		t.Fatalf("failed update persisted status %q at %q", storedStatus, updatedAt)
+	}
+}

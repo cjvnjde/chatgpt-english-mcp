@@ -22,6 +22,7 @@ export type Vocabulary = {
   itemId: string;
   term: string;
   normalizedTerm: string;
+  context?: string;
   status: string;
   usefulness: string;
   tags: string[];

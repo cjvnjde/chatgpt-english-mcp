@@ -145,15 +145,16 @@ export default function App() {
     >
       {(active) => {
         const activeToken = token();
+        const activeGeneration = generation;
         return (
           <Workspace
             session={active}
             authNotice={authNotice()}
             api={createAPI(activeToken, () => {
-              if (token() !== activeToken) return;
+              if (generation !== activeGeneration) return;
               signOut();
-              setLoginError(
-                "Your session is no longer authorized. Sign in again.",
+              setLoginError((error) =>
+                `Your session is no longer authorized. Sign in again.${error ? ` ${error}` : ""}`,
               );
             })}
             signOut={signOut}
@@ -171,7 +172,11 @@ function Workspace(props: {
   authNotice: string;
 }) {
   const [route, setRoute] = createSignal(readRoute());
-  const onHash = () => setRoute(readRoute());
+  const onHash = () => {
+    setEditor(undefined);
+    setInspected(undefined);
+    setRoute(readRoute());
+  };
   window.addEventListener("hashchange", onHash);
   onCleanup(() => window.removeEventListener("hashchange", onHash));
   const [revision, setRevision] = createSignal(0);
@@ -183,25 +188,40 @@ function Workspace(props: {
   const [notice, setNotice] = createSignal("");
   const [exporting, setExporting] = createSignal(false);
   const [exportError, setExportError] = createSignal("");
+  let active = true;
+  const exportController = new AbortController();
+  onCleanup(() => {
+    active = false;
+    exportController.abort();
+  });
   const exportDatabase = async () => {
+    if (exporting()) return;
     setExporting(true);
     setExportError("");
     try {
       const blob = await props.api<Blob>(
         "/database",
-        { signal: AbortSignal.timeout(120000) },
+        {
+          signal: AbortSignal.any([
+            exportController.signal,
+            AbortSignal.timeout(120000),
+          ]),
+        },
         "blob",
       );
+      if (!active) return;
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = `english-mcp-${new Date().toISOString().slice(0, 10)}.sqlite`;
+      document.body.append(anchor);
       anchor.click();
+      anchor.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      setExportError(e instanceof Error ? e.message : String(e));
+      if (active) setExportError(e instanceof Error ? e.message : String(e));
     } finally {
-      setExporting(false);
+      if (active) setExporting(false);
     }
   };
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -235,7 +255,7 @@ function Workspace(props: {
     else setInspected({ row, table: tableName() });
   };
   const saved = (message: string) => {
-    setEditor(undefined);
+    if (!active) return;
     setRevision((x) => x + 1);
     setNotice(message);
     clearTimeout(noticeTimer);
@@ -250,7 +270,14 @@ function Workspace(props: {
   ];
   return (
     <div class="app-shell">
-      <a class="skip-link" href="#main">
+      <a
+        class="skip-link"
+        href="#main"
+        onClick={(e) => {
+          e.preventDefault();
+          document.getElementById("main")?.focus();
+        }}
+      >
         Skip to content
       </a>
       <aside class="sidebar">
@@ -310,7 +337,7 @@ function Workspace(props: {
           <button onClick={props.signOut}>Sign out</button>
         </div>
       </aside>
-      <main id="main" class="main-content">
+      <main id="main" class="main-content" tabIndex={-1}>
         <header class="topbar">
           <span>
             English learning /{" "}
@@ -372,7 +399,6 @@ function Workspace(props: {
                   {(_route) => (
                     <Show
                       when={activeTable()}
-                      keyed
                       fallback={
                         <Show when={!tables.loading && !tables.error}>
                           <div class="empty">
@@ -384,7 +410,7 @@ function Workspace(props: {
                       {(table) => (
                         <RecordTable
                           api={props.api}
-                          table={table}
+                          table={table()}
                           revision={revision()}
                           owner={props.session.owner}
                           initialFilter={
@@ -424,7 +450,10 @@ function Workspace(props: {
             id={value.id}
             hint={value.hint}
             close={() => setEditor(undefined)}
-            saved={saved}
+            saved={(message) => {
+              if (editor() === value) setEditor(undefined);
+              saved(message);
+            }}
             history={(id) =>
               navigate("review_attempts", "vocabulary_item_id", id)
             }
@@ -436,6 +465,7 @@ function Workspace(props: {
           <Inspector
             row={value.row}
             table={value.table}
+            owner={props.session.owner}
             close={() => setInspected(undefined)}
             related={navigate}
             edit={(id) => {

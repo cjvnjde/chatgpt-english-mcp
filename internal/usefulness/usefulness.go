@@ -12,7 +12,7 @@ import (
 
 // Revision changes when either dataset or the matching/scoring policy changes.
 // Increment the policy version whenever rank thresholds, matching or votes change.
-const Revision = "rank-v1-weighted-1-1-2-thirds-v1-expressions-v1:" + datasetRevision + ":" + expressionDatasetRevision
+const Revision = "rank-v1-weighted-1-1-2-thirds-v1-expressions-v2:" + datasetRevision + ":" + expressionDatasetRevision
 
 //go:embed assets/ranks.bin.gz
 var compressedRanks string

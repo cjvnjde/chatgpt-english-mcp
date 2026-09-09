@@ -61,6 +61,7 @@ type VocabularyItem struct {
 	DescriptionSource *DescriptionSource      `json:"descriptionSource,omitempty"`
 	Notes             []string                `json:"notes"`
 	Examples          []string                `json:"examples"`
+	Context           string                  `json:"context,omitempty"`
 	Sense             *VocabularySense        `json:"sense,omitempty"`
 	Lookup            *DictionaryLookupResult `json:"lookup,omitempty"`
 	CreatedAt         string                  `json:"createdAt"`

@@ -5,9 +5,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/domain"
 	"english-learning-mcp/internal/storage"
 )
@@ -110,5 +115,65 @@ func TestServiceUsesImmutableSnapshotsAndStaleFallback(t *testing.T) {
 	}
 	if fallback.Cache.State != domain.CacheStaleFallback || fallback.LookupID != refreshed.LookupID || provider.calls != 3 {
 		t.Fatalf("refresh fallback = %#v, provider calls = %d", fallback, provider.calls)
+	}
+}
+
+func TestUnrecognizedProviderResponsePreservesSuccessfulCachedLookup(t *testing.T) {
+	var malformed atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/dictionary/english/bank" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if malformed.Load() {
+			_, _ = io.WriteString(writer, "<html><body>Verify you are human</body></html>")
+			return
+		}
+		_, _ = io.WriteString(writer, `<div class="entry-body__el"><span class="hw dhw">bank</span><div class="def ddef_d">an institution</div></div>`)
+	}))
+	t.Cleanup(server.Close)
+	baseURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service := NewService(store, NewCambridgeProvider(baseURL, time.Second, logger), logger)
+	ctx := context.Background()
+	first, err := service.Lookup(ctx, "bank", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed.Store(true)
+	fallback, err := service.Lookup(ctx, "bank", true)
+	if err != nil || fallback.Cache.State != domain.CacheStaleFallback || fallback.LookupID != first.LookupID ||
+		len(fallback.Entries) != 1 || fallback.Entries[0].Definitions[0].Definition != "an institution" {
+		t.Fatalf("malformed refresh replaced valid lookup: %#v, error %v", fallback, err)
+	}
+	cached, err := service.Lookup(ctx, "bank", false)
+	if err != nil || cached.Cache.State != domain.CacheHit || cached.LookupID != first.LookupID {
+		t.Fatalf("malformed refresh changed active snapshot: %#v, error %v", cached, err)
+	}
+	missing, err := service.Lookup(ctx, "absent", false)
+	if err != nil || missing.Status != http.StatusNotFound || len(missing.Entries) != 0 {
+		t.Fatalf("genuine missing term = %#v, error %v", missing, err)
+	}
+}
+
+func TestDictionaryRejectsMalformedUTF8BeforeFetching(t *testing.T) {
+	store, err := storage.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	provider := &fakeProvider{}
+	service := NewService(store, provider, nil)
+	_, err = service.Lookup(context.Background(), string([]byte{0xff}), false)
+	if err == nil || apperr.From(err).Code != apperr.InvalidArgument || provider.calls != 0 {
+		t.Fatalf("invalid UTF-8 lookup error = %v, provider calls = %d", err, provider.calls)
 	}
 }

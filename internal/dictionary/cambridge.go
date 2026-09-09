@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	cambridgeParserVersion    = 12
+	cambridgeParserVersion    = 13
 	maxCambridgeResponseBytes = 8 << 20
 	maxCambridgeDefinitions   = 20
 )
@@ -71,13 +71,14 @@ func (provider *CambridgeProvider) Lookup(ctx context.Context, term string) (dom
 	spellcheckHTML, spellcheckStatus, _, spellcheckErr := provider.fetch(ctx, provider.spellcheckURL(term))
 	if spellcheckErr != nil {
 		provider.logger.Warn("Cambridge spellcheck request failed")
-		return data, nil
-	}
-	if !cacheableCambridgeStatus(spellcheckStatus) {
+	} else if !cacheableCambridgeStatus(spellcheckStatus) {
 		provider.logger.Warn("Cambridge spellcheck returned an unusable response", "status", spellcheckStatus)
-		return data, nil
+	} else {
+		data.Suggestions = parseCambridgeSuggestions(spellcheckHTML, provider.baseURL)
 	}
-	data.Suggestions = parseCambridgeSuggestions(spellcheckHTML, provider.baseURL)
+	if status != http.StatusNotFound && len(data.Suggestions) == 0 {
+		return domain.DictionarySnapshotData{}, fmt.Errorf("Cambridge response contains no dictionary entries or suggestions")
+	}
 	return data, nil
 }
 

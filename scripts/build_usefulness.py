@@ -56,19 +56,27 @@ def normalize(term):
 def wordfreq_ranks(wheel):
     stored = wheel.read("wordfreq/data/large_en.msgpack.gz")
     bins = msgpack.unpackb(gzip.decompress(stored), raw=False)
+    if not isinstance(bins, list) or not bins:
+        raise ValueError("Expected wordfreq frequency bins")
     if bins[0] != {"format": "cB", "version": 1}:
         raise ValueError(f"Unexpected wordfreq header: {bins[0]!r}")
     ranks = {}
     count = 0
     for words in bins[1:]:
+        if not isinstance(words, list):
+            raise TypeError("Expected a wordfreq word list")
         # Preserve stored ordering within tied frequency bins, just as
         # wordfreq.iter_wordlist does. Never invoke multiword frequency APIs.
         for word in words:
+            if not isinstance(word, str):
+                raise TypeError(f"Expected wordfreq text, got {word!r}")
             count += 1
             term = normalize(word)
             if not term:
                 raise ValueError("Empty normalized wordfreq term")
             ranks.setdefault(term, count)
+    if not count:
+        raise ValueError("Wordfreq source supplied no terms")
     return ranks, count, hashlib.sha256(stored).hexdigest()
 
 
@@ -76,7 +84,9 @@ def frequencywords_ranks(content):
     ranks = {}
     previous_count = None
     count = 0
-    for count, line in enumerate(content.decode("utf-8").splitlines(), 1):
+    # Only actual line endings delimit records. Other Unicode whitespace can
+    # occur inside a term and must reach normalize rather than split a row.
+    for count, line in enumerate(io.StringIO(content.decode("utf-8"), newline=None), 1):
         word, occurrences_text = line.rsplit(" ", 1)
         occurrences = int(occurrences_text)
         if occurrences <= 0 or (
@@ -89,6 +99,8 @@ def frequencywords_ranks(content):
             raise ValueError(f"Empty normalized FrequencyWords term at row {count}")
         # Equal counts retain upstream row order; normalization keeps best rank.
         ranks.setdefault(term, count)
+    if not count:
+        raise ValueError("FrequencyWords source supplied no terms")
     return ranks, count
 
 

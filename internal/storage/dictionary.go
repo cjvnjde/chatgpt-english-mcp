@@ -108,6 +108,7 @@ func (db *DB) InsertDictionarySnapshot(ctx context.Context, input DictionarySnap
 			UPDATE vocabulary_items
 			SET lookup_id = ?
 			WHERE normalized_term = ?
+			  AND selected_definition_json IS NULL
 			  AND (
 				lookup_id IS NULL
 				OR lookup_id IN (

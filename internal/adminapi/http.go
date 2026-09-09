@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -68,9 +69,11 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 	})
 	handle("GET /admin/api/tables", func(w http.ResponseWriter, r *http.Request) (any, error) { return store.AdminTables(r.Context()) })
 	handle("GET /admin/api/tables/{table}", func(w http.ResponseWriter, r *http.Request) (any, error) {
-		q := r.URL.Query()
+		q, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil || (q.Has("comments") && q.Get("comments") != "true" && q.Get("comments") != "false") {
+			return nil, storage.ErrAdminQuery
+		}
 		limit, offset := 50, 0
-		var err error
 		if q.Has("limit") {
 			limit, err = strconv.Atoi(q.Get("limit"))
 			if err != nil {
@@ -139,6 +142,16 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
+		// Context cancellation alone does not interrupt a blocked request-body
+		// read or response write. Bound both socket operations as well.
+		controller := http.NewResponseController(w)
+		deadline, _ := ctx.Deadline()
+		if err := controller.SetReadDeadline(deadline); err == nil {
+			defer controller.SetReadDeadline(time.Time{})
+		}
+		if err := controller.SetWriteDeadline(deadline); err == nil {
+			defer controller.SetWriteDeadline(time.Time{})
+		}
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

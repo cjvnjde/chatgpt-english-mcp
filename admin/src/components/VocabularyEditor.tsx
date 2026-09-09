@@ -13,6 +13,7 @@ export default function VocabularyEditor(props: {
   saved: (message: string) => void;
   history: (id: string) => void;
 }) {
+  const [busy, setBusy] = createSignal(false);
   const [item, { refetch }] = createResource(
     () => props.id,
     (id) => props.api<Vocabulary>(`/vocabulary/${encodeURIComponent(id)}`),
@@ -34,6 +35,7 @@ export default function VocabularyEditor(props: {
       title={props.id ? "Vocabulary item" : "Add vocabulary"}
       close={props.close}
       wide
+      busy={busy()}
     >
       <Show when={item.error}>
         <div class="dialog-body alert error" role="alert">
@@ -55,6 +57,8 @@ export default function VocabularyEditor(props: {
             item={loaded}
             hint={props.hint}
             api={props.api}
+            busy={busy()}
+            setBusy={setBusy}
             close={props.close}
             saved={props.saved}
             history={props.history}
@@ -69,6 +73,8 @@ function Editor(props: {
   item: Vocabulary;
   hint?: string;
   api: API;
+  busy: boolean;
+  setBusy: (value: boolean) => void;
   close: () => void;
   saved: (message: string) => void;
   history: (id: string) => void;
@@ -84,14 +90,15 @@ function Editor(props: {
   const [hint, setHint] = createSignal(props.hint || "");
   const [notes, setNotes] = createSignal(initial.notes);
   const [examples, setExamples] = createSignal(initial.examples);
-  const [tags, setTags] = createSignal(initial.tags.join(", "));
+  const [tags, setTags] = createSignal(initial.tags);
   const [sourceTitle, setSourceTitle] = createSignal(
     initial.descriptionSource?.title || "",
   );
   const [sourceURL, setSourceURL] = createSignal(
     initial.descriptionSource?.url || "",
   );
-  const [busy, setBusy] = createSignal(false);
+  const busy = () => props.busy;
+  const setBusy = props.setBusy;
   const [error, setError] = createSignal("");
   const [confirm, setConfirm] = createSignal(false);
   const [deletion, setDeletion] = createSignal("");
@@ -100,21 +107,37 @@ function Editor(props: {
   };
   const save = async (e: SubmitEvent) => {
     e.preventDefault();
-    setBusy(true);
-    setError("");
+    if (busy()) return;
     const body = {
-      status: status(),
-      customDescription: description(),
-      tags: tags()
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean),
-      notes: notes().filter((x) => x.trim()),
-      examples: examples().filter((x) => x.trim()),
-      descriptionSource: { title: sourceTitle(), url: sourceURL() },
-      ...(hint() ? { usefulness: hint() } : {}),
+      ...(isNew || status() !== initial.status ? { status: status() } : {}),
+      ...(isNew || description() !== (initial.customDescription || "")
+        ? { customDescription: description() }
+        : {}),
+      ...(isNew || tags() !== initial.tags
+        ? { tags: tags().filter((x) => x.trim()) }
+        : {}),
+      ...(isNew || notes() !== initial.notes
+        ? { notes: notes().filter((x) => x.trim()) }
+        : {}),
+      ...(isNew || examples() !== initial.examples
+        ? { examples: examples().filter((x) => x.trim()) }
+        : {}),
+      ...(isNew ||
+      sourceTitle() !== (initial.descriptionSource?.title || "") ||
+      sourceURL() !== (initial.descriptionSource?.url || "")
+        ? { descriptionSource: { title: sourceTitle(), url: sourceURL() } }
+        : {}),
+      ...(hint() && (isNew || hint() !== (props.hint || ""))
+        ? { usefulness: hint() }
+        : {}),
       ...(isNew ? { term: term(), context: context() } : {}),
     };
+    if (!isNew && Object.keys(body).length === 0) {
+      props.close();
+      return;
+    }
+    setBusy(true);
+    setError("");
     try {
       const result = await props.api<Vocabulary & { created?: boolean }>(
         `/vocabulary${isNew ? "" : `/${encodeURIComponent(initial.itemId)}`}`,
@@ -134,7 +157,7 @@ function Editor(props: {
     }
   };
   const remove = async () => {
-    if (deletion() !== initial.term) return;
+    if (busy() || deletion() !== initial.term) return;
     setBusy(true);
     setError("");
     try {
@@ -156,6 +179,9 @@ function Editor(props: {
             <div>
               <h3>{initial.term}</h3>
               <code>{initial.itemId}</code>
+              <Show when={initial.context}>
+                <p class="muted">Context / meaning: {initial.context}</p>
+              </Show>
             </div>
             <button type="button" onClick={() => props.history(initial.itemId)}>
               Review history
@@ -230,14 +256,7 @@ function Editor(props: {
         </label>
         <TextList label="Notes" values={notes()} change={setNotes} />
         <TextList label="Examples" values={examples()} change={setExamples} />
-        <label>
-          Tags <small>Separated by commas</small>
-          <input
-            value={tags()}
-            onInput={(e) => setTags(e.currentTarget.value)}
-            placeholder="idiom, daily-life"
-          />
-        </label>
+        <TextList label="Tags" values={tags()} change={setTags} />
         <details>
           <summary>Description source</summary>
           <div class="form-grid">

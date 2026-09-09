@@ -2,6 +2,7 @@ package learning
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -345,6 +346,112 @@ func TestTutoringContentInfersLegacySenseFromLearnerMetadata(t *testing.T) {
 	definition, example := tutoringContent(item)
 	if definition != "to move a boat through water using oars" || example != "Row for your life!" {
 		t.Fatalf("tutoringContent() = %q, %q", definition, example)
+	}
+}
+
+func TestNextPreservesContextOnlyMeanings(t *testing.T) {
+	for _, withLookup := range []bool{false, true} {
+		name := "without dictionary"
+		if withLookup {
+			name = "with dictionary"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store, service := newTestService(t)
+			now := time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC)
+			service.now = func() time.Time { return now }
+			lookupID := ""
+			if withLookup {
+				snapshot, err := store.InsertDictionarySnapshot(ctx, storage.DictionarySnapshotInsert{
+					Provider: "cambridge", NormalizedTerm: "row", ParserVersion: 12,
+					Data: domain.DictionarySnapshotData{Status: 200, Entries: []domain.DictionaryEntry{
+						{Definitions: []domain.DictionaryDefinition{
+							{Definition: "a line of things", Examples: []string{"a row of houses"}},
+							{Definition: "to move a boat using oars", Examples: []string{"She rowed across the lake."}},
+						}},
+					}}, FetchedAt: now, ExpiresAt: now.Add(24 * time.Hour),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				lookupID = snapshot.ID
+			}
+			_, _, err := store.SaveVocabulary(ctx, storage.VocabularyCreate{
+				OwnerKey: "owner", Term: "row", NormalizedTerm: "row",
+				Status: domain.LearningStatusNew, LookupID: lookupID,
+				SenseKey: "context:boat", Context: "boat", Now: now,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			next := nextWord(t, service, false)
+			encoded, err := json.Marshal(next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response map[string]any
+			if err := json.Unmarshal(encoded, &response); err != nil {
+				t.Fatal(err)
+			}
+			if response["context"] != "boat" {
+				t.Fatalf("learning response lost the saved meaning context: %s", encoded)
+			}
+			if withLookup && (next.Definition != "to move a boat using oars" || next.Example != "She rowed across the lake.") {
+				t.Fatalf("learning response chose another meaning: %#v", next)
+			}
+		})
+	}
+}
+
+func TestTutoringContentDoesNotBorrowExamplesFromAnotherMeaning(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		description string
+		definitions []domain.DictionaryDefinition
+		want        string
+	}{
+		{
+			name: "first sense has no example",
+			definitions: []domain.DictionaryDefinition{
+				{Definition: "a line of things"},
+				{Definition: "to move a boat using oars", Examples: []string{"She rowed across the lake."}},
+			},
+			want: "a line of things",
+		},
+		{
+			name:        "custom meaning has no selected dictionary sense",
+			description: "A heated argument.",
+			definitions: []domain.DictionaryDefinition{
+				{Definition: "to move a boat using oars", Examples: []string{"She rowed across the lake."}},
+			},
+			want: "A heated argument.",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := domain.VocabularyItem{
+				CustomDescription: test.description,
+				Lookup: &domain.DictionaryLookupResult{Entries: []domain.DictionaryEntry{
+					{Definitions: test.definitions},
+				}},
+			}
+			definition, example := tutoringContent(item)
+			if definition != test.want || example != "" {
+				t.Fatalf("tutoring content = %q, %q; want %q without an unrelated example", definition, example, test.want)
+			}
+		})
+	}
+}
+
+func TestTutoringContentRetainsSelectedSenseWithoutLookup(t *testing.T) {
+	item := domain.VocabularyItem{
+		Sense: &domain.VocabularySense{Definition: domain.DictionaryDefinition{
+			Definition: "to move a boat using oars",
+			Examples:   []string{"She rowed across the lake."},
+		}},
+	}
+	definition, example := tutoringContent(item)
+	if definition != item.Sense.Definition.Definition || example != item.Sense.Definition.Examples[0] {
+		t.Fatalf("tutoring content dropped the independently saved sense: %q, %q", definition, example)
 	}
 }
 

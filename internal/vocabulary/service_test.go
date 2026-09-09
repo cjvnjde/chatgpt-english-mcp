@@ -2,6 +2,7 @@ package vocabulary
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -357,6 +358,133 @@ func TestSaveCreatesSeparateItemsForDictionarySenses(t *testing.T) {
 	loadedBoat, err := service.Get(ctx, boat.ItemID, "")
 	if err != nil || loadedBoat.Sense.Definition.Definition != "to move a boat using oars" {
 		t.Fatalf("Get(boat) = %#v, %v", loadedBoat, err)
+	}
+}
+
+func TestContextOnlySensesRemainDistinctAndReadable(t *testing.T) {
+	service := newTestService(t, "owner")
+	ctx := context.Background()
+	publicContext := func(item domain.VocabularyItem) string {
+		t.Helper()
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Context string `json:"context"`
+		}
+		if err := json.Unmarshal(encoded, &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload.Context
+	}
+	finance, err := service.Save(ctx, "bank", InitialValues{Context: "  a financial institution  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	river, err := service.Save(ctx, "bank", InitialValues{Context: "land beside a river"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !finance.Created || !river.Created || finance.ItemID == river.ItemID {
+		t.Fatalf("context senses were merged: %#v, %#v", finance, river)
+	}
+	duplicate, err := service.Save(ctx, "BANK", InitialValues{Context: "A  financial institution"})
+	if err != nil || duplicate.Created || duplicate.ItemID != finance.ItemID {
+		t.Fatalf("context retry = %#v, error %v", duplicate, err)
+	}
+	loaded, err := service.Get(ctx, finance.ItemID, "")
+	if err != nil || publicContext(loaded) != "a financial institution" || loaded.Sense != nil {
+		t.Fatalf("context-only item = %#v, error %v", loaded, err)
+	}
+	items, err := service.List(ctx, ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contexts := map[string]string{finance.ItemID: "a financial institution", river.ItemID: "land beside a river"}
+	for _, item := range items.Items {
+		if publicContext(item) != contexts[item.ItemID] {
+			t.Fatalf("listed meaning was lost: %#v", item)
+		}
+		delete(contexts, item.ItemID)
+	}
+	if len(contexts) != 0 {
+		t.Fatalf("missing saved senses: %v", contexts)
+	}
+}
+
+func TestSelectedSenseKeepsOriginalEntryAcrossDictionaryRefresh(t *testing.T) {
+	service := newTestService(t, "owner")
+	store := service.store.(*storage.DB)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	input := storage.DictionarySnapshotInsert{
+		Provider: "cambridge", NormalizedTerm: "bank", ParserVersion: 12,
+		FetchedAt: now, ExpiresAt: now,
+		Data: domain.DictionarySnapshotData{Status: 200, Entries: []domain.DictionaryEntry{
+			{Headword: "bank", PartOfSpeech: "noun", Pronunciations: domain.DictionaryPronunciations{UK: "original"}, Definitions: []domain.DictionaryDefinition{{Definition: "an institution"}}},
+			{Headword: "bank", PartOfSpeech: "verb", Definitions: []domain.DictionaryDefinition{{Definition: "an institution"}}},
+		}},
+	}
+	original, err := store.InsertDictionarySnapshot(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := service.Save(ctx, "bank", InitialValues{Definition: "an institution"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Sense == nil || saved.Sense.PartOfSpeech != "noun" || saved.Sense.Pronunciations.UK != "original" {
+		t.Fatalf("saved sense used another entry: %#v", saved.Sense)
+	}
+	input.Data.Entries = []domain.DictionaryEntry{{Headword: "bank", PartOfSpeech: "verb", Definitions: []domain.DictionaryDefinition{{Definition: "to deposit money"}}}}
+	input.FetchedAt = now.Add(time.Hour)
+	if _, err := store.InsertDictionarySnapshot(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := service.Get(ctx, saved.ItemID, "")
+	if err != nil || loaded.Lookup == nil || loaded.Lookup.LookupID != original.ID ||
+		loaded.Sense == nil || loaded.Sense.PartOfSpeech != "noun" || loaded.Sense.Pronunciations.UK != "original" ||
+		loaded.Lookup.Entries[loaded.Sense.EntryIndex].Definitions[loaded.Sense.DefinitionIndex].Definition != "an institution" {
+		t.Fatalf("refresh changed selected meaning: %#v, error %v", loaded, err)
+	}
+}
+
+func TestMalformedUTF8DoesNotCreateOrMutateVocabulary(t *testing.T) {
+	service := newTestService(t, "owner")
+	ctx := context.Background()
+	invalid := string([]byte{0xff})
+	description := "A valid description."
+	_, err := service.Save(ctx, invalid, InitialValues{})
+	assertApplicationError(t, err, apperr.InvalidArgument)
+	for name, initial := range map[string]InitialValues{
+		"tag":         {Tags: []string{invalid}},
+		"description": {CustomDescription: &invalid},
+		"source":      {CustomDescription: &description, DescriptionSource: &domain.DescriptionSource{Title: invalid}},
+		"note":        {Notes: []string{invalid}},
+		"example":     {Examples: []string{invalid}},
+		"context":     {Context: invalid},
+		"definition":  {Definition: invalid},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := service.Save(ctx, "bank", initial)
+			assertApplicationError(t, err, apperr.InvalidArgument)
+		})
+	}
+	items, err := service.List(ctx, ListOptions{})
+	if err != nil || len(items.Items) != 0 {
+		t.Fatalf("invalid saves persisted: %#v, error %v", items, err)
+	}
+	saved, err := service.Save(ctx, "bank", InitialValues{Notes: []string{"Keep this note."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := []string{invalid}
+	_, err = service.Update(ctx, saved.ItemID, "", UpdateChanges{Notes: &notes})
+	assertApplicationError(t, err, apperr.InvalidArgument)
+	loaded, err := service.Get(ctx, saved.ItemID, "")
+	if err != nil || !equalValues(loaded.Notes, []string{"Keep this note."}) {
+		t.Fatalf("invalid update changed notes: %#v, error %v", loaded, err)
 	}
 }
 

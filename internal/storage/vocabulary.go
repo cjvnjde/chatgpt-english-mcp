@@ -99,8 +99,14 @@ func (db *DB) SaveVocabulary(
 		return false, domain.VocabularyItem{}, err
 	}
 
+	transaction, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return false, domain.VocabularyItem{}, fmt.Errorf("begin vocabulary save: %w", err)
+	}
+	defer transaction.Rollback()
+
 	timestamp := TimeString(input.Now)
-	result, err := db.sql.ExecContext(ctx, `
+	result, err := transaction.ExecContext(ctx, `
 		INSERT INTO vocabulary_items(
 			id, owner_key, term, normalized_term, created_at, updated_at,
 			lookup_id, custom_description, learning_status, usefulness, usefulness_hint,
@@ -139,17 +145,24 @@ func (db *DB) SaveVocabulary(
 	}
 	created = rowsAffected == 1
 	if !created && input.LookupID != "" {
-		if _, err := db.sql.ExecContext(ctx, `
+		if _, err := transaction.ExecContext(ctx, `
 			UPDATE vocabulary_items
 			SET lookup_id = ?
-			WHERE owner_key = ? AND normalized_term = ? AND lookup_id IS NULL
-		`, input.LookupID, input.OwnerKey, input.NormalizedTerm); err != nil {
+			WHERE owner_key = ? AND normalized_term = ? AND sense_key = ? AND lookup_id IS NULL
+		`, input.LookupID, input.OwnerKey, input.NormalizedTerm, input.SenseKey); err != nil {
 			return false, domain.VocabularyItem{}, fmt.Errorf("link existing vocabulary lookup: %w", err)
 		}
 	}
 
-	item, err = db.VocabularyBySense(ctx, input.OwnerKey, input.NormalizedTerm, input.SenseKey)
-	return created, item, err
+	query := vocabularySelect + " WHERE v.owner_key = ? AND v.normalized_term = ? AND v.sense_key = ?"
+	item, err = scanVocabularyItem(transaction.QueryRowContext(ctx, query, input.OwnerKey, input.NormalizedTerm, input.SenseKey))
+	if err != nil {
+		return false, domain.VocabularyItem{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return false, domain.VocabularyItem{}, fmt.Errorf("commit vocabulary save: %w", err)
+	}
+	return created, item, nil
 }
 
 func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (domain.VocabularyItem, error) {
@@ -217,9 +230,15 @@ func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (dom
 		return domain.VocabularyItem{}, fmt.Errorf("vocabulary update has no changes")
 	}
 
+	transaction, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.VocabularyItem{}, fmt.Errorf("begin vocabulary update: %w", err)
+	}
+	defer transaction.Rollback()
+
 	assignments = append(assignments, "updated_at = ?")
 	arguments = append(arguments, TimeString(input.Now), input.OwnerKey, input.ItemID)
-	result, err := db.sql.ExecContext(ctx, `
+	result, err := transaction.ExecContext(ctx, `
 		UPDATE vocabulary_items
 		SET `+strings.Join(assignments, ", ")+`
 		WHERE owner_key = ? AND id = ?
@@ -235,7 +254,15 @@ func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (dom
 		return domain.VocabularyItem{}, ErrNotFound
 	}
 
-	return db.VocabularyByID(ctx, input.OwnerKey, input.ItemID)
+	query := vocabularySelect + " WHERE v.owner_key = ? AND v.id = ?"
+	item, err := scanVocabularyItem(transaction.QueryRowContext(ctx, query, input.OwnerKey, input.ItemID))
+	if err != nil {
+		return domain.VocabularyItem{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return domain.VocabularyItem{}, fmt.Errorf("commit vocabulary update: %w", err)
+	}
+	return item, nil
 }
 
 func (db *DB) VocabularyByID(ctx context.Context, ownerKey, itemID string) (domain.VocabularyItem, error) {
@@ -244,18 +271,26 @@ func (db *DB) VocabularyByID(ctx context.Context, ownerKey, itemID string) (doma
 }
 
 func (db *DB) VocabularyByTerm(ctx context.Context, ownerKey, normalizedTerm string) (domain.VocabularyItem, error) {
-	var count int
-	if err := db.sql.QueryRowContext(ctx, "SELECT count(*) FROM vocabulary_items WHERE owner_key = ? AND normalized_term = ?", ownerKey, normalizedTerm).Scan(&count); err != nil {
-		return domain.VocabularyItem{}, fmt.Errorf("count vocabulary senses: %w", err)
+	query := vocabularySelect + " WHERE v.owner_key = ? AND v.normalized_term = ? LIMIT 2"
+	rows, err := db.sql.QueryContext(ctx, query, ownerKey, normalizedTerm)
+	if err != nil {
+		return domain.VocabularyItem{}, fmt.Errorf("read vocabulary senses: %w", err)
 	}
-	if count == 0 {
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return domain.VocabularyItem{}, fmt.Errorf("read vocabulary senses: %w", err)
+		}
 		return domain.VocabularyItem{}, ErrNotFound
 	}
-	if count > 1 {
+	item, scanErr := scanVocabularyItem(rows)
+	if rows.Next() {
 		return domain.VocabularyItem{}, ErrAmbiguous
 	}
-	query := vocabularySelect + " WHERE v.owner_key = ? AND v.normalized_term = ?"
-	return scanVocabularyItem(db.sql.QueryRowContext(ctx, query, ownerKey, normalizedTerm))
+	if err := rows.Err(); err != nil {
+		return domain.VocabularyItem{}, fmt.Errorf("read vocabulary senses: %w", err)
+	}
+	return item, scanErr
 }
 
 func (db *DB) VocabularyBySense(ctx context.Context, ownerKey, normalizedTerm, senseKey string) (domain.VocabularyItem, error) {
@@ -378,7 +413,6 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 	var descriptionSourceJSON sql.NullString
 	var notesJSON string
 	var examplesJSON string
-	var contextValue string
 	var entryIndex sql.NullInt64
 	var definitionIndex sql.NullInt64
 	var selectedDefinitionJSON sql.NullString
@@ -406,7 +440,7 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		&descriptionSourceJSON,
 		&notesJSON,
 		&examplesJSON,
-		&contextValue,
+		&item.Context,
 		&entryIndex,
 		&definitionIndex,
 		&selectedDefinitionJSON,
@@ -460,7 +494,7 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		if err := decodeJSON(selectedDefinitionJSON.String, &definition, item.ItemID, "selected definition"); err != nil {
 			return domain.VocabularyItem{}, err
 		}
-		item.Sense = &domain.VocabularySense{Context: contextValue, EntryIndex: int(entryIndex.Int64), DefinitionIndex: int(definitionIndex.Int64), Definition: definition}
+		item.Sense = &domain.VocabularySense{Context: item.Context, EntryIndex: int(entryIndex.Int64), DefinitionIndex: int(definitionIndex.Int64), Definition: definition}
 	}
 	if snapshotID.Valid {
 		snapshot := DictionarySnapshot{
@@ -486,12 +520,28 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		lookup := lookupFromSnapshot(&snapshot, item.Term)
 		item.Lookup = &lookup
 		if item.Sense != nil {
-			for _, entry := range lookup.Entries {
-				for _, definition := range entry.Definitions {
-					if definition.Definition == item.Sense.Definition.Definition {
-						item.Sense.Headword = entry.Headword
-						item.Sense.PartOfSpeech = entry.PartOfSpeech
-						item.Sense.Pronunciations = entry.Pronunciations
+			entryIndex := item.Sense.EntryIndex
+			definitionIndex := item.Sense.DefinitionIndex
+			if entryIndex >= 0 && entryIndex < len(lookup.Entries) &&
+				definitionIndex >= 0 && definitionIndex < len(lookup.Entries[entryIndex].Definitions) &&
+				lookup.Entries[entryIndex].Definitions[definitionIndex].Definition == item.Sense.Definition.Definition {
+				entry := lookup.Entries[entryIndex]
+				item.Sense.Headword = entry.Headword
+				item.Sense.PartOfSpeech = entry.PartOfSpeech
+				item.Sense.Pronunciations = entry.Pronunciations
+			} else {
+				// Older versions refreshed selected lookups without updating their indices.
+			findSelectedDefinition:
+				for entryIndex, entry := range lookup.Entries {
+					for definitionIndex, definition := range entry.Definitions {
+						if definition.Definition == item.Sense.Definition.Definition {
+							item.Sense.EntryIndex = entryIndex
+							item.Sense.DefinitionIndex = definitionIndex
+							item.Sense.Headword = entry.Headword
+							item.Sense.PartOfSpeech = entry.PartOfSpeech
+							item.Sense.Pronunciations = entry.Pronunciations
+							break findSelectedDefinition
+						}
 					}
 				}
 			}

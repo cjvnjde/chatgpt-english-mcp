@@ -36,7 +36,7 @@ func newHTTPHandler(
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle(EndpointPath, middleware(streamableHandler))
+	mux.Handle(EndpointPath, middleware(http.NewCrossOriginProtection().Handler(streamableHandler)))
 	return mux
 }
 
@@ -44,7 +44,7 @@ func requireBearerToken(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		scheme, suppliedToken, found := strings.Cut(request.Header.Get("Authorization"), " ")
 		tokenMatches := subtle.ConstantTimeCompare([]byte(suppliedToken), []byte(token)) == 1
-		if !found || !strings.EqualFold(scheme, "Bearer") || !tokenMatches {
+		if token == "" || !found || !strings.EqualFold(scheme, "Bearer") || !tokenMatches {
 			response.Header().Set("Cache-Control", "no-store")
 			response.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(response, "Unauthorized", http.StatusUnauthorized)

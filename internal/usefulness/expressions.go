@@ -142,8 +142,14 @@ func newExpressionMatcher(dataset expressionDataset) *expressionMatcher {
 		tokens := strings.Split(surface, " ")
 		anchor := expressionAnchor{position: -1, count: len(tokens)}
 		hasSlot := false
+		maxBytes := len(surface)
 		for position, token := range tokens {
-			if expressionSlot(token) != 0 {
+			if slot := expressionSlot(token); slot != 0 {
+				if slot == 1 {
+					maxBytes += len("somebody's") - len(token)
+				} else {
+					maxBytes += len("somebody") - len(token)
+				}
 				hasSlot = true
 			} else if anchor.position < 0 {
 				anchor.position = position
@@ -151,6 +157,11 @@ func newExpressionMatcher(dataset expressionDataset) *expressionMatcher {
 			}
 		}
 		if hasSlot {
+			// The length bound must include accepted slot expansions, not just
+			// stored surfaces, regardless of other entries in the dataset.
+			if maxBytes > matcher.maxBytes {
+				matcher.maxBytes = maxBytes
+			}
 			matcher.templates[anchor] = append(matcher.templates[anchor], expressionTemplate{tokens, target})
 			continue
 		}

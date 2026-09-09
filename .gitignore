@@ -2,6 +2,7 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*-local.*
 data/
 /english-learning-mcp
 .secrets/

@@ -137,7 +137,7 @@ def render(source, item):
         text(item["term"]),
         meaning,
         paragraphs(examples),
-        text(sense.get("context", "")),
+        text(item.get("context") or sense.get("context", "")),
         text(sense.get("partOfSpeech", "")),
         text(pronunciation_text),
         paragraphs(item["notes"] or []),

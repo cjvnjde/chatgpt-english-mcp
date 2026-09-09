@@ -48,6 +48,7 @@ type NextResult struct {
 	ShownAt        string            `json:"shownAt"`
 	ReviewToken    string            `json:"reviewToken"`
 	Term           string            `json:"term"`
+	Context        string            `json:"context,omitempty"`
 	Usefulness     domain.Usefulness `json:"usefulness"`
 	Definition     string            `json:"definition,omitempty"`
 	Example        string            `json:"example,omitempty"`
@@ -106,6 +107,7 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 		ShownAt:        storage.TimeString(candidate.ShownAt),
 		ReviewToken:    candidate.Card.ReviewToken,
 		Term:           candidate.Vocabulary.Term,
+		Context:        candidate.Vocabulary.Context,
 		Usefulness:     candidate.Vocabulary.Usefulness,
 		Definition:     definition,
 		Example:        example,
@@ -216,9 +218,6 @@ func tutoringContent(item domain.VocabularyItem) (definition string, example str
 	if len(item.Examples) > 0 {
 		example = item.Examples[0]
 	}
-	if item.Lookup == nil {
-		return definition, example
-	}
 	if item.Sense != nil {
 		if definition == "" {
 			definition = item.Sense.Definition.Definition
@@ -228,33 +227,34 @@ func tutoringContent(item domain.VocabularyItem) (definition string, example str
 		}
 		return definition, example
 	}
-	if definition == "" {
-		if matched := contextualDefinition(item); matched != nil {
-			definition = matched.Definition
-			if example == "" && len(matched.Examples) > 0 {
-				example = matched.Examples[0]
-			}
-			return definition, example
+	if item.Lookup == nil || definition != "" {
+		return definition, example
+	}
+	if matched := contextualDefinition(item); matched != nil {
+		definition = matched.Definition
+		if example == "" && len(matched.Examples) > 0 {
+			example = matched.Examples[0]
 		}
+		return definition, example
 	}
 	for _, entry := range item.Lookup.Entries {
 		for _, candidate := range entry.Definitions {
-			if definition == "" {
-				definition = candidate.Definition
+			if strings.TrimSpace(candidate.Definition) == "" {
+				continue
 			}
+			definition = candidate.Definition
 			if example == "" && len(candidate.Examples) > 0 {
 				example = candidate.Examples[0]
 			}
-			if definition != "" && example != "" {
-				return definition, example
-			}
+			return definition, example
 		}
 	}
 	return definition, example
 }
 
 func contextualDefinition(item domain.VocabularyItem) *domain.DictionaryDefinition {
-	contextParts := make([]string, 0, len(item.Tags)+len(item.Notes)+len(item.Examples))
+	contextParts := make([]string, 0, 1+len(item.Tags)+len(item.Notes)+len(item.Examples))
+	contextParts = append(contextParts, item.Context)
 	contextParts = append(contextParts, item.Tags...)
 	contextParts = append(contextParts, item.Notes...)
 	contextParts = append(contextParts, item.Examples...)

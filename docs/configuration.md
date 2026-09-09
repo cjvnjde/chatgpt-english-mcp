@@ -6,17 +6,20 @@ Configuration is read from environment variables at startup. The process exits w
 
 | Variable | Default | Description |
 |---|---|---|
-| `SQLITE_PATH` | `/app/data/english-mcp.sqlite` | SQLite database path. `:memory:` is rejected outside tests. |
+| `SQLITE_PATH` | `/app/data/english-mcp.sqlite` | Persistent filesystem path or local `file:` URI. Empty paths, temporary databases, and in-memory DSN variants are rejected outside tests. |
 | `MCP_OWNER_KEY` | `default` | Vocabulary namespace for this deployment. It is supplied by the server, never by a tool caller. |
 | `MCP_TUNNEL_LISTEN_ADDRESS` | `0.0.0.0:8080` | Listener intended only for the private OpenAI tunnel network. |
 | `MCP_EXTERNAL_LISTEN_ADDRESS` | `0.0.0.0:8081` | Bearer-authenticated listener for direct clients. |
 | `MCP_BEARER_TOKEN` | none | Required direct-client secret; at least 32 bytes. |
+| `ADMIN_BEARER_TOKEN` | empty | Optional admin API secret; at least 32 bytes and distinct from MCP/Anki tokens. Empty disables the admin API. |
 | `CAMBRIDGE_BASE_URL` | `https://dictionary.cambridge.org` | Absolute HTTP(S) provider base URL. Primarily useful for testing. |
-| `CAMBRIDGE_TIMEOUT_SECONDS` | `20` | Positive upstream request timeout in seconds. |
+| `CAMBRIDGE_TIMEOUT_SECONDS` | `20` | Positive upstream request timeout in seconds, within Go's representable duration range. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
 | `LOG_FORMAT` | `json` | `json` or `text`. |
 
 All enabled listen addresses must be different. The Anki export must never share an MCP listener or its bearer token.
+
+All bearer tokens must use HTTP bearer-token characters; embedded whitespace and controls are rejected. MCP POST requests reject foreign browser origins; same-origin and originless native clients remain supported. HTTP headers have a 10-second read deadline; complete MCP request reads, including bodies, are bounded to 30 seconds.
 
 ## OpenAI tunnel container
 

@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -28,14 +30,50 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("SQLite path must not be empty")
 	}
-	if path != ":memory:" {
-		parent := filepath.Dir(path)
-		if err := os.MkdirAll(parent, 0o750); err != nil {
-			return nil, fmt.Errorf("create SQLite directory: %w", err)
+	filename := path
+	query := make(url.Values)
+	if strings.HasPrefix(path, "file:") {
+		location, err := url.Parse(path)
+		if err != nil {
+			return nil, fmt.Errorf("parse SQLite URI: %w", err)
+		}
+		if location.User != nil || (location.Host != "" && location.Host != "localhost") {
+			return nil, fmt.Errorf("SQLite URI must identify a local file")
+		}
+		query, err = url.ParseQuery(location.RawQuery)
+		if err != nil {
+			return nil, fmt.Errorf("parse SQLite URI parameters: %w", err)
+		}
+		filename = location.Path
+		if location.Opaque != "" {
+			filename, err = url.PathUnescape(location.Opaque)
+			if err != nil {
+				return nil, fmt.Errorf("decode SQLite filename: %w", err)
+			}
+		}
+		if filename == "" {
+			return nil, fmt.Errorf("SQLite URI must contain a filename")
 		}
 	}
-
-	database, err := sql.Open("sqlite", path)
+	location := &url.URL{Scheme: "file", Opaque: filename}
+	if filename != ":memory:" && query.Get("mode") != "memory" {
+		absolutePath, err := filepath.Abs(filename)
+		if err != nil {
+			return nil, fmt.Errorf("resolve SQLite path: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(absolutePath), 0o750); err != nil {
+			return nil, fmt.Errorf("create SQLite directory: %w", err)
+		}
+		location = &url.URL{Scheme: "file", Path: absolutePath}
+	}
+	// Reapply connection-local settings after replacement connections, including
+	// those discarded when a transaction's context is canceled.
+	for _, pragma := range []string{"foreign_keys(ON)", "busy_timeout(5000)", "synchronous(NORMAL)"} {
+		query.Add("_pragma", pragma)
+	}
+	location.RawQuery = query.Encode()
+	dsn := location.String()
+	database, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open SQLite database: %w", err)
 	}

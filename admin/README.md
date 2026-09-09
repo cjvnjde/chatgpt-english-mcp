@@ -58,7 +58,7 @@ The build contains only HTML, CSS, and JavaScript. Client navigation uses URL ha
 
 Review and presentation tables remain immutable, as required by the existing database triggers. Cache, scheduler, and system tables are inspectable but not directly writable. Vocabulary writes use the existing service so validation, sense identity, usefulness inference, and card creation/deletion stay consistent. Term/sense identity is fixed after creation; create a new meaning when needed. The database stores review comments and ratings, not answer transcripts. Deleting a word removes its cards; historical records are retained and may no longer have a resolvable word label.
 
-Notes and examples are edited separately to preserve multiline values. An empty array clears a list. Usefulness is inferred from offline evidence and the optional hint, so the result can differ from the selected hint. For existing items, an empty hint selector preserves the current hint; the existing service has no operation to clear it to automatic.
+Notes, examples, and tags are edited as separate entries; notes and examples preserve multiline values, and commas within a tag are kept literally. An empty array clears a list. Usefulness is inferred from offline evidence and the optional hint, so the result can differ from the selected hint. For existing items, an empty hint selector preserves the current hint; the existing service has no operation to clear it to automatic.
 
 Search covers stored columns, plus the linked vocabulary term for history/cards. Exact filters match one selected column; date boundaries use UTC and the end day is inclusive. Table timestamps display in the browser's time zone. Database lists cover all owners; analytics and vocabulary mutations use the configured owner.
 
@@ -68,7 +68,7 @@ The Export database button makes an authenticated request to `GET /admin/api/dat
 
 The service uses [SQLite `VACUUM INTO`](https://sqlite.org/lang_vacuum.html#vacuuminto) to create a consistent, compact snapshot including committed WAL data. It writes into a private temporary directory, streams the resulting file, then removes the temporary snapshot. The original database is not modified. Only one export runs at a time. Export uses the service's existing SQLite connection, so other MCP database operations can briefly queue while the snapshot is generated. This is intended for the small development/admin databases described in this project.
 
-The API allows 90 seconds to create an export; nginx and the client allow 120 seconds. The browser buffers the download as a Blob. Do not copy only the live `.sqlite` file while WAL mode is active. Keep downloads private: they contain the complete learning database, including cached source data and review tokens, but not environment-based MCP/admin/Anki secrets.
+The API allows 90 seconds for an export request, including snapshot creation and streaming; nginx and the client allow 120 seconds. The browser buffers the download as a Blob. Do not copy only the live `.sqlite` file while WAL mode is active. Keep downloads private: they contain the complete learning database, including cached source data and review tokens, but not environment-based MCP/admin/Anki secrets.
 
 To inspect a downloaded file:
 

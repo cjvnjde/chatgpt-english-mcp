@@ -75,21 +75,21 @@ The server cannot initiate a lesson or send a reminder. MCP is request/response:
 
 `dictionary_lookup` normalizes the requested term and checks SQLite first. A successful cached lookup is permanent for the current provider/parser version unless the caller explicitly requests a refresh.
 
-On a cache miss, the server fetches and parses Cambridge Dictionary. A successful refresh creates a new immutable snapshot and makes it active. Saved vocabulary with the same normalized term is linked to the current successful snapshot automatically.
+On a cache miss, the server fetches and parses Cambridge Dictionary. A successful refresh creates a new immutable snapshot and makes it active. Legacy/context-only vocabulary with the same normalized term follows the current successful snapshot automatically. Dictionary-selected meanings retain their original snapshot so definition indices, part of speech, and pronunciation remain consistent.
 
-Empty lookup results are saved, but an ordinary future lookup retries them. If an explicit refresh fails and an older snapshot exists, the server returns that snapshot with `cache.state` set to `stale_fallback`.
+Genuine not-found results can be cached, but an ordinary future lookup retries empty results. An HTTP 200 page without usable entries or suggestions is treated as an upstream failure rather than replacing good cached content. If an explicit refresh fails and an older snapshot exists for the current parser, the server returns it with `cache.state` set to `stale_fallback`. Parsed resource links allow only HTTP(S) URLs without embedded credentials.
 
 ### Vocabulary items
 
-A vocabulary item belongs to the namespace configured by `MCP_OWNER_KEY` and represents one learnable meaning. Multiple items may have the same normalized term. They share a cached dictionary lookup but have independent metadata, cards, and review histories. An item can exist without dictionary data and can contain:
+A vocabulary item belongs to the namespace configured by `MCP_OWNER_KEY` and represents one learnable meaning. Multiple items may have the same normalized term and can share a cached dictionary lookup, but have independent metadata, cards, and review histories. An item can exist without dictionary data and can contain:
 
 - `new`, `learning`, `learned`, or `archived` status;
 - `low`, `normal`, or `high` usefulness;
 - normalized tags;
 - a custom description with optional source attribution;
 - ordered personal notes and examples;
-- a selected dictionary definition and context;
-- a link to the current dictionary snapshot, which still contains all definitions.
+- a saved context, whether or not a dictionary sense was selected;
+- an optional selected dictionary definition and its immutable lookup snapshot, which contains all definitions.
 
 Saving is idempotent for the same normalized term and selected definition. A different selected definition creates a separate item. Intentional edits go through `vocabulary_update`. Archived items stay stored but are excluded from practice.
 
@@ -879,16 +879,18 @@ Card selection finishes before question content is chosen. Content quality, defi
 
 The server first takes a trimmed custom description, if present, and the first personal example, if present. It then follows this precedence:
 
-1. **No linked lookup:** return that personal content, potentially without a definition or example. A dictionary lookup is not required for selection.
-2. **Explicit saved sense:** fill any missing definition/example from that sense, then stop. It does not borrow an example from a different sense if the selected sense has none.
-3. **No explicit sense and no custom definition:** try lexical context matching against the linked definitions. If a match is found, use that definition and, if needed, its first example, then stop.
-4. **Fallback:** traverse dictionary entries/definitions in stored order, taking the first definition if needed and the first available example if needed. In this fallback, the example need not belong to the definition chosen earlier.
+1. **Explicit saved sense:** fill any missing definition/example from that sense, even without a linked lookup, then stop. Never borrow an example from a different sense.
+2. **No linked lookup, or a custom definition without an explicit sense:** return the personal content. A custom meaning does not borrow arbitrary dictionary examples.
+3. **No explicit sense or custom definition:** try lexical context matching against the linked definitions. If a match is found, use that definition and, if needed, its first example, then stop.
+4. **Fallback:** take the first dictionary definition in stored order and, if needed, its own first example. If that sense has no example, leave it absent instead of searching other senses.
+
+Non-empty saved `context` is returned separately, including for context-only items with no dictionary content. It distinguishes the intended meaning but need not be a complete definition.
 
 ### The context-matching formula
 
 This is word overlap, not an embedding or language-model similarity score:
 
-- Context words come from **tags + notes + personal examples**.
+- Context words come from **saved context + tags + notes + personal examples**.
 - Candidate words come from **definition text + guideword**.
 - Both sides are lowercased, split on non-ASCII-letter characters, reduced to unique words, and discard words of two letters or fewer.
 
@@ -896,13 +898,13 @@ For dictionary definition $d$:
 
 $$
 \operatorname{contextScore}(d)
-= \left|\operatorname{words}(\text{tags, notes, examples})
+:= \left|\operatorname{words}(\text{context, tags, notes, examples})
 \cap \operatorname{words}(d.\text{definition},d.\text{guideword})\right|
 $$
 
 Only a positive score can win. The largest overlap wins; ties keep the first definition in dictionary order. There is no stemming, semantic matching, or stop-word list beyond the length cutoff.
 
-For example, a `boating` tag can favor a definition containing “boating,” but does not automatically match “boat” or “sailing.” The separate saved `context` string is not an input to this overlap score. An explicit selected sense takes precedence over the heuristic.
+For example, a `boating` context or tag can favor a definition containing “boating,” but does not automatically match “boat” or “sailing.” An explicit selected sense takes precedence over the heuristic.
 
 The latest **non-empty** review comment is returned separately. A newer review without a comment does not erase older useful feedback. `includeComments: true` requests the complete non-empty comment history; it does not change selection, content matching, or scheduling. The AI tutor decides how to use this content and should hide the target term while asking a production-recall question. The [suggested tutor prompts](prompts.md) instruct it to use a different sentence or situation when a meaning returns with a new review token, without changing the saved meaning or rewriting stored examples.
 

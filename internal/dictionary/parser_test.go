@@ -86,3 +86,29 @@ func TestParseCambridgeHTMLReturnsSourceBackedFields(t *testing.T) {
 		t.Fatalf("collocations = %#v", lookup.Collocations)
 	}
 }
+
+func TestParserRejectsUnsafeExternalResourceURLs(t *testing.T) {
+	baseURL, err := url.Parse("https://dictionary.cambridge.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := `<div class="entry-body__el">
+		<span class="hw dhw">bank</span>
+		<div class="uk"><audio><source src="javascript:alert(1)"></audio></div>
+		<div class="us"><audio><source src="https://user:password@example.test/audio.mp3"></audio></div>
+		<div class="def ddef_d">an institution</div>
+		<div class="dimg"><img src="data:image/svg+xml,unsafe"></div>
+		<div class="dimg"><img src="file:///etc/passwd"></div>
+		<div class="dimg"><img src="javascript:alert(1)" on="tap:viewer.open(src: '/safe.jpg')"></div>
+	</div>`
+	data, err := parseCambridgeHTML(html, "bank", baseURL.String(), 200, baseURL, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Entries) != 1 || data.Entries[0].Audio != nil {
+		t.Fatalf("unsafe audio survived parsing: %#v", data.Entries)
+	}
+	if len(data.Images) != 1 || data.Images[0].ImageURL != "https://dictionary.cambridge.org/safe.jpg" || data.Images[0].ThumbnailURL != "" {
+		t.Fatalf("unsafe image URL survived parsing: %#v", data.Images)
+	}
+}

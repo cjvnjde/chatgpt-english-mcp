@@ -30,7 +30,7 @@ func NormalizeContext(value string) string {
 
 func ValidTerm(value string) bool {
 	length := utf8.RuneCountInString(value)
-	return length >= 1 && length <= 200
+	return utf8.ValidString(value) && length >= 1 && length <= 200
 }
 
 func Preview(value string, limit int) string {

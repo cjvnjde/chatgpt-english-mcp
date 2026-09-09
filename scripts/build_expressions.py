@@ -28,13 +28,22 @@ def cached_input(cache, name, metadata, offline):
         if offline:
             raise FileNotFoundError(f"Missing offline input: {path}")
         temporary = path.with_name(path.name + ".part")
-        with (
-            urllib.request.urlopen(metadata["url"], timeout=180) as response,
-            temporary.open("wb") as destination,
-        ):
-            while chunk := response.read(1024 * 1024):
-                destination.write(chunk)
-        temporary.replace(path)
+        try:
+            with (
+                urllib.request.urlopen(metadata["url"], timeout=180) as response,
+                temporary.open("wb") as destination,
+            ):
+                while chunk := response.read(1024 * 1024):
+                    destination.write(chunk)
+            digest = digest_file(temporary)
+            if digest != metadata["sha256"]:
+                raise ValueError(
+                    f"SHA-256 mismatch for {path}: {digest}; restore the pinned snapshot"
+                )
+            temporary.replace(path)
+            return path
+        finally:
+            temporary.unlink(missing_ok=True)
     digest = digest_file(path)
     if digest != metadata["sha256"]:
         raise ValueError(
@@ -192,7 +201,7 @@ def magpie_entries(path, entries):
             continue
         types.add(term)
         confidence = row["confidence"]
-        if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+        if type(confidence) not in (int, float) or not 0 <= confidence <= 1:
             raise ValueError(f"Invalid MAGPIE confidence: {identifier}")
         label = row["label"]
         if label not in {"i", "l", "f", "o", "?"}:

@@ -85,9 +85,7 @@ def exercise(config, root):
             "schemaVersion": 2,
             "namespace": current_config.namespace,
             "owner": current_config.owner,
-            "digest": hashlib.sha256(
-                json.dumps(items, sort_keys=True).encode()
-            ).hexdigest(),
+            "digest": "",
             "itemCount": len(items),
             "complete": True,
             "items": [
@@ -100,6 +98,10 @@ def exercise(config, root):
                 for value in items
             ],
         }
+        encoded = json.dumps(
+            payload["items"], ensure_ascii=False, separators=(",", ":")
+        ).translate({ord(char): f"\\u{ord(char):04x}" for char in "&<>\u2028\u2029"})
+        payload["digest"] = hashlib.sha256(encoded.encode()).hexdigest()
         return validate_snapshot(payload, current_config)
 
     worker = Worker(worker_config, fetch=fetch)

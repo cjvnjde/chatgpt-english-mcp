@@ -5,6 +5,7 @@ export default function Modal(props: {
   close: () => void;
   children: JSX.Element;
   wide?: boolean;
+  busy?: boolean;
 }) {
   let dialog!: HTMLDialogElement;
   const previous = document.activeElement as HTMLElement | null;
@@ -20,7 +21,7 @@ export default function Modal(props: {
       aria-label={props.title}
       onCancel={(e) => {
         e.preventDefault();
-        props.close();
+        if (!props.busy) props.close();
       }}
     >
       <div class="dialog-heading">
@@ -28,6 +29,7 @@ export default function Modal(props: {
         <button
           class="icon-button"
           aria-label="Close dialog"
+          disabled={props.busy}
           onClick={props.close}
         >
           ×

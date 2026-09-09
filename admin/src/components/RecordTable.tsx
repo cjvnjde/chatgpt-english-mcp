@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createResource,
@@ -13,6 +14,7 @@ import { date, display, download, label } from "../format";
 const preferred: Record<string, string[]> = {
   vocabulary_items: [
     "term",
+    "context",
     "learning_status",
     "usefulness",
     "custom_description",
@@ -69,11 +71,10 @@ export default function RecordTable(props: {
   inspect: (row: Row) => void;
   create: () => void;
 }) {
+  const tableColumns = createMemo(() => props.table.columns.map((c) => c.name));
   const allColumns = createMemo(() => [
-    ...(props.table.columns.some((c) => c.name === "vocabulary_item_id")
-      ? ["_term"]
-      : []),
-    ...props.table.columns.map((c) => c.name),
+    ...(tableColumns().includes("vocabulary_item_id") ? ["_term"] : []),
+    ...tableColumns(),
   ]);
   const [columns, setColumns] = createSignal(
     preferred[props.table.name] || allColumns().slice(0, 6),
@@ -111,8 +112,10 @@ export default function RecordTable(props: {
     props.api<Page>(`/tables/${encodeURIComponent(props.table.name)}?${p}`),
   );
   const change = (fn: () => void) => {
-    setOffset(0);
-    fn();
+    batch(() => {
+      setOffset(0);
+      fn();
+    });
   };
   const dateFilter = () =>
     props.table.columns.some((c) =>
@@ -202,8 +205,8 @@ export default function RecordTable(props: {
               }
             >
               <option value="">All records</option>
-              <For each={props.table.columns}>
-                {(c) => <option value={c.name}>{label(c.name)}</option>}
+              <For each={tableColumns()}>
+                {(c) => <option value={c}>{label(c)}</option>}
               </For>
             </select>
           </label>
@@ -256,8 +259,8 @@ export default function RecordTable(props: {
               value={sort()}
               onChange={(e) => change(() => setSort(e.currentTarget.value))}
             >
-              <For each={props.table.columns}>
-                {(c) => <option value={c.name}>{label(c.name)}</option>}
+              <For each={tableColumns()}>
+                {(c) => <option value={c}>{label(c)}</option>}
               </For>
             </select>
           </label>
@@ -282,6 +285,7 @@ export default function RecordTable(props: {
                     <input
                       type="checkbox"
                       checked={columns().includes(c)}
+                      disabled={columns().length === 1 && columns().includes(c)}
                       onChange={(e) =>
                         setColumns((previous) =>
                           e.currentTarget.checked
@@ -435,8 +439,8 @@ export default function RecordTable(props: {
         </Show>
         <div class="pagination">
           <span>
-            {!page.error && page()
-              ? `${page()!.total ? offset() + 1 : 0}–${Math.min(offset() + limit(), page()!.total)} of ${page()!.total.toLocaleString()} records`
+            {!page.error && page() && !page.loading
+              ? `${page()!.total ? page()!.offset + 1 : 0}–${page()!.offset + page()!.rows.length} of ${page()!.total.toLocaleString()} records`
               : "Records"}
             <small>
               Times shown in {Intl.DateTimeFormat().resolvedOptions().timeZone}

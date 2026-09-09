@@ -3,7 +3,10 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"net/url"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -87,6 +90,82 @@ func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
 	if len(loaded.Tags) != 1 || len(loaded.Notes) != 1 || len(loaded.Examples) != 1 || loaded.Lookup != nil {
 		t.Fatalf("persisted vocabulary = %#v", loaded)
 	}
+}
+
+func TestSQLitePathsPreservePersistentIdentity(t *testing.T) {
+	for _, uri := range []bool{false, true} {
+		name := "literal filename"
+		if uri {
+			name = "file URI"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "nested", "learning ?#λ.sqlite")
+			input := path
+			if uri {
+				input = (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=rwc"}).String()
+			}
+			store, err := Open(ctx, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, item, err := store.SaveVocabulary(ctx, VocabularyCreate{
+				OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank",
+				Status: domain.LearningStatusNew, Now: time.Now(),
+			})
+			closeErr := store.Close()
+			if err != nil || closeErr != nil {
+				t.Fatalf("persist vocabulary: save=%v close=%v", err, closeErr)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("database was not written at the requested filename: %v", err)
+			}
+			reopened, err := Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			if _, err := reopened.VocabularyByID(ctx, "owner", item.ItemID); err != nil {
+				t.Fatalf("reopening the database lost the saved item: %v", err)
+			}
+		})
+	}
+}
+
+func TestReplacementSQLiteConnectionPreservesDeleteCascades(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "replacement.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	_, item, err := store.SaveVocabulary(ctx, VocabularyCreate{
+		OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", SenseKey: "legacy",
+		Status: domain.LearningStatusNew, Now: time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := store.sql.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Raw(func(any) error { return driver.ErrBadConn }); !errors.Is(err, driver.ErrBadConn) {
+		t.Fatalf("discard connection: %v", err)
+	}
+	_ = connection.Close()
+	if err := store.DeleteVocabulary(ctx, "owner", item.ItemID); err != nil {
+		t.Fatal(err)
+	}
+	var cards int
+	if err := store.sql.QueryRowContext(ctx, "SELECT count(*) FROM learning_cards WHERE vocabulary_item_id = ?", item.ItemID).Scan(&cards); err != nil {
+		t.Fatal(err)
+	}
+	if cards != 0 {
+		t.Fatalf("replacement connection left %d orphaned learning cards", cards)
+	}
+	assertPragma(t, store, "busy_timeout", 5000)
+	assertPragma(t, store, "synchronous", 1)
 }
 
 func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory(t *testing.T) {

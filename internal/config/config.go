@@ -44,6 +44,9 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if int64(timeoutSeconds) > int64((1<<63-1)/time.Second) {
+		return Config{}, fmt.Errorf("CAMBRIDGE_TIMEOUT_SECONDS exceeds the maximum supported duration")
+	}
 
 	baseURL, err := url.Parse(environment("CAMBRIDGE_BASE_URL", defaultCambridgeURL))
 	if err != nil || baseURL.Scheme == "" || baseURL.Host == "" {
@@ -63,8 +66,28 @@ func Load() (Config, error) {
 	}
 
 	sqlitePath := environment("SQLITE_PATH", defaultSQLitePath)
-	if sqlitePath == ":memory:" {
-		return Config{}, fmt.Errorf("SQLITE_PATH=:memory: is allowed only in automated tests")
+	sqliteFilename := sqlitePath
+	if queryStart := strings.IndexByte(sqlitePath, '?'); queryStart >= 1 {
+		sqliteFilename = sqlitePath[:queryStart]
+	}
+	if strings.HasPrefix(sqlitePath, "file:") {
+		sqliteURL, err := url.Parse(sqlitePath)
+		if err != nil {
+			return Config{}, fmt.Errorf("SQLITE_PATH must be a valid persistent SQLite path")
+		}
+		sqliteFilename = sqliteURL.Path
+		if sqliteURL.Opaque != "" {
+			sqliteFilename, err = url.PathUnescape(sqliteURL.Opaque)
+			if err != nil {
+				return Config{}, fmt.Errorf("SQLITE_PATH must be a valid persistent SQLite path")
+			}
+		}
+		if sqliteURL.Query().Get("mode") == "memory" {
+			return Config{}, fmt.Errorf("SQLITE_PATH must identify a persistent database, not an in-memory database")
+		}
+	}
+	if sqliteFilename == "" || sqliteFilename == ":memory:" {
+		return Config{}, fmt.Errorf("SQLITE_PATH must identify a persistent database, not an in-memory or temporary database")
 	}
 	ownerKey := environment("MCP_OWNER_KEY", "default")
 	if strings.TrimSpace(ownerKey) == "" {
@@ -84,6 +107,9 @@ func Load() (Config, error) {
 	mcpBearerToken := environment("MCP_BEARER_TOKEN", "")
 	if len(mcpBearerToken) < minimumBearerTokenBytes {
 		return Config{}, fmt.Errorf("MCP_BEARER_TOKEN must be at least %d bytes", minimumBearerTokenBytes)
+	}
+	if !validBearerToken(mcpBearerToken) {
+		return Config{}, fmt.Errorf("MCP_BEARER_TOKEN must use bearer-token characters")
 	}
 
 	ankiEnabled, err := strconv.ParseBool(environment("ANKI_SYNC_ENABLED", "false"))
@@ -120,8 +146,8 @@ func Load() (Config, error) {
 
 	adminToken := environment("ADMIN_BEARER_TOKEN", "")
 	if adminToken != "" {
-		if len(adminToken) < minimumBearerTokenBytes || strings.ContainsAny(adminToken, " \t\r\n") {
-			return Config{}, fmt.Errorf("ADMIN_BEARER_TOKEN must be at least 32 bytes without whitespace")
+		if len(adminToken) < minimumBearerTokenBytes || !validBearerToken(adminToken) {
+			return Config{}, fmt.Errorf("ADMIN_BEARER_TOKEN must be at least 32 bytes using bearer-token characters")
 		}
 		if adminToken == mcpBearerToken || adminToken == ankiToken {
 			return Config{}, fmt.Errorf("ADMIN_BEARER_TOKEN must be distinct from MCP and Anki tokens")
@@ -162,13 +188,17 @@ func ankiExportToken() (string, error) {
 	if len(token) < minimumBearerTokenBytes {
 		return "", fmt.Errorf("ANKI_EXPORT_TOKEN must be at least %d bytes", minimumBearerTokenBytes)
 	}
-	unpadded := strings.TrimRight(token, "=")
-	if unpadded == "" || strings.ContainsFunc(unpadded, func(character rune) bool {
-		return !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("-._~+/", character))
-	}) {
+	if !validBearerToken(token) {
 		return "", fmt.Errorf("ANKI_EXPORT_TOKEN must use bearer-token characters")
 	}
 	return token, nil
+}
+
+func validBearerToken(token string) bool {
+	unpadded := strings.TrimRight(token, "=")
+	return unpadded != "" && !strings.ContainsFunc(unpadded, func(character rune) bool {
+		return !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("-._~+/", character))
+	})
 }
 
 func environment(name, fallback string) string {
