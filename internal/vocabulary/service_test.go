@@ -174,6 +174,56 @@ func TestInvalidUsefulnessDoesNotMutateVocabulary(t *testing.T) {
 	}
 }
 
+func TestPersonalInterestUpdatesIndependentlyAndRejectsInvalidChanges(t *testing.T) {
+	service := newTestService(t, "owner-one")
+	ctx := context.Background()
+	saved, err := service.Save(ctx, "bank", InitialValues{
+		Status: domain.LearningStatusLearned, PersonalInterest: domain.PersonalInterestHigh,
+		Notes: []string{"Keep this meaning."}, Context: "A river bank.",
+	})
+	if err != nil || saved.PersonalInterest != domain.PersonalInterestHigh {
+		t.Fatalf("save = %#v, error %v", saved, err)
+	}
+	low := domain.PersonalInterestLow
+	updated, err := service.Update(ctx, saved.ItemID, "", UpdateChanges{PersonalInterest: &low})
+	if err != nil || updated.PersonalInterest != low || updated.Usefulness != saved.Usefulness ||
+		updated.Status != saved.Status || updated.Context != saved.Context || !equalValues(updated.Notes, saved.Notes) {
+		t.Fatalf("interest-only update = %#v, error %v", updated, err)
+	}
+	notes := []string{"Revised note."}
+	updated, err = service.Update(ctx, saved.ItemID, "", UpdateChanges{Notes: &notes})
+	if err != nil || updated.PersonalInterest != low || !equalValues(updated.Notes, notes) {
+		t.Fatalf("omitted interest update = %#v, error %v", updated, err)
+	}
+	for _, invalid := range []domain.PersonalInterest{"urgent", "HIGH", ""} {
+		if invalid != "" {
+			_, err := service.Save(ctx, "invalid", InitialValues{PersonalInterest: invalid})
+			assertApplicationError(t, err, apperr.InvalidArgument)
+			_, err = service.Get(ctx, "", "invalid")
+			assertApplicationError(t, err, apperr.NotFound)
+		}
+		replacement := []string{"Must not persist."}
+		_, err := service.Update(ctx, saved.ItemID, "", UpdateChanges{PersonalInterest: &invalid, Notes: &replacement})
+		assertApplicationError(t, err, apperr.InvalidArgument)
+		current, err := service.Get(ctx, saved.ItemID, "")
+		if err != nil || current.PersonalInterest != low || !equalValues(current.Notes, notes) {
+			t.Fatalf("invalid %q changed item = %#v, error %v", invalid, current, err)
+		}
+	}
+	other := NewService(service.store, "other-owner", service.currentSource)
+	_, err = other.Update(ctx, saved.ItemID, "", UpdateChanges{PersonalInterest: &low})
+	assertApplicationError(t, err, apperr.NotFound)
+	normal := domain.PersonalInterestNormal
+	reset, err := service.Update(ctx, saved.ItemID, "", UpdateChanges{PersonalInterest: &normal})
+	if err != nil || reset.PersonalInterest != normal || reset.Usefulness != saved.Usefulness {
+		t.Fatalf("explicit reset = %#v, error %v", reset, err)
+	}
+	listed, err := service.List(ctx, ListOptions{Limit: 1})
+	if err != nil || len(listed.Items) != 1 || listed.Items[0].PersonalInterest != normal {
+		t.Fatalf("list = %#v, error %v", listed, err)
+	}
+}
+
 func TestListFiltersLearningMetadataAndUsesBoundCursor(t *testing.T) {
 	service := newTestService(t, "owner-one")
 	ctx := context.Background()

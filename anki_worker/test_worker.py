@@ -30,6 +30,7 @@ def vocabulary(item_id="one", **changes):
         "normalizedTerm": "word",
         "status": "new",
         "usefulness": "normal",
+        "personalInterest": "normal",
         "tags": [],
         "notes": [],
         "examples": [],
@@ -42,7 +43,7 @@ def vocabulary(item_id="one", **changes):
 
 def envelope(config, items):
     payload = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "namespace": config.namespace,
         "owner": config.owner,
         "digest": "",
@@ -351,6 +352,7 @@ class ValidationTests(unittest.TestCase):
             ("digest", "not-a-digest"),
             ("schemaVersion", True),
             ("schemaVersion", 1),
+            ("schemaVersion", 2),
         ):
             payload = deepcopy(good)
             payload[key] = value
@@ -368,6 +370,9 @@ class ValidationTests(unittest.TestCase):
         unknown_usefulness = deepcopy(good)
         unknown_usefulness["items"][0]["vocabulary"]["usefulness"] = "urgent"
         variants.append(unknown_usefulness)
+        unknown_interest = deepcopy(good)
+        unknown_interest["items"][0]["vocabulary"]["personalInterest"] = "urgent"
+        variants.append(unknown_interest)
         for payload in variants:
             with self.subTest(payload=payload), self.assertRaises(WorkerError):
                 validate_snapshot(payload, self.config)

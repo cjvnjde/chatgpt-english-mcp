@@ -21,6 +21,7 @@ type selectionCard struct {
 	lastPresentationID  int64
 	lastShownAt         time.Time
 	usefulness          domain.Usefulness
+	personalInterest    domain.PersonalInterest
 }
 
 const (
@@ -49,7 +50,7 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 	rows, err := transaction.QueryContext(ctx, `
 		SELECT card.id, card.due_at, card.fsrs_state, card.scheduled_days,
 			card.consecutive_failures, card.lapses,
-			COALESCE(presentation.id, 0), presentation.shown_at, vocabulary.usefulness
+			COALESCE(presentation.id, 0), presentation.shown_at, vocabulary.usefulness, vocabulary.personal_interest
 		FROM learning_cards card
 		JOIN vocabulary_items vocabulary ON vocabulary.id = card.vocabulary_item_id
 		LEFT JOIN learning_presentations presentation ON presentation.id = (
@@ -72,11 +73,15 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 		var dueAt string
 		var shownAt sql.NullString
 		if err := rows.Scan(&card.cardID, &dueAt, &card.fsrsState, &card.scheduledDays,
-			&card.consecutiveFailures, &card.lapses, &card.lastPresentationID, &shownAt, &card.usefulness); err != nil {
+			&card.consecutiveFailures, &card.lapses, &card.lastPresentationID, &shownAt, &card.usefulness,
+			&card.personalInterest); err != nil {
 			return nil, 0, fmt.Errorf("scan learning selection card: %w", err)
 		}
 		if !card.usefulness.Valid() {
 			return nil, 0, fmt.Errorf("%w: learning candidate usefulness", ErrCorruptData)
+		}
+		if !card.personalInterest.Valid() {
+			return nil, 0, fmt.Errorf("%w: learning candidate personal interest", ErrCorruptData)
 		}
 		card.dueAt, err = parseStoredTime(dueAt, "learning due date")
 		if err != nil {
@@ -270,6 +275,13 @@ func (pool *selectionPool) add(card *selectionCard, now time.Time) {
 }
 
 func selectionWeight(card *selectionCard, now time.Time) float64 {
+	interest := 1.0
+	switch card.personalInterest {
+	case domain.PersonalInterestLow:
+		interest = 0.5
+	case domain.PersonalInterestHigh:
+		interest = 2
+	}
 	if card.fsrsState == 0 {
 		usefulness := 1.0
 		switch card.usefulness {
@@ -278,7 +290,7 @@ func selectionWeight(card *selectionCard, now time.Time) float64 {
 		case domain.UsefulnessHigh:
 			usefulness = 2
 		}
-		return presentationRecency(card, now) * usefulness
+		return presentationRecency(card, now) * usefulness * interest
 	}
 
 	intervalHours := max(float64(card.scheduledDays)*24, 24)
@@ -291,5 +303,5 @@ func selectionWeight(card *selectionCard, now time.Time) float64 {
 	}
 	urgency := 1 + min(max(now.Sub(card.dueAt).Hours(), 0)/intervalHours, 4)
 	failures := 1 + 0.5*float64(min(card.consecutiveFailures, 2)) + 0.25*float64(min(card.lapses, 3))
-	return urgency * failures * exposure
+	return urgency * failures * exposure * interest
 }

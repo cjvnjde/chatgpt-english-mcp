@@ -11,6 +11,7 @@ Diagrams use Mermaid fenced blocks; formulas use LaTeX math. View this document 
 - [System overview](#system-overview): the tutor, dictionary, vocabulary, selector, and scheduler.
 - [Offline usefulness inference](#offline-usefulness-inference): evidence, hints, and classification.
 - [How the next item is selected](#how-the-next-item-is-selected): eligibility, cooldown, exact weights, probabilities, and examples.
+- [Learned-word reinforcement](#learned-word-reinforcement): comment-driven deep practice, personal interest, and the 25% word cap.
 - [How a review changes the schedule](#how-a-review-changes-the-schedule): timing, FSRS equations, and state transitions.
 - [Content precedence during reviews](#content-precedence-during-reviews): how the selected item becomes a question.
 - [What affects what](#what-affects-what): direct influences, indirect influences, and things the algorithm ignores.
@@ -85,6 +86,7 @@ A vocabulary item belongs to the namespace configured by `MCP_OWNER_KEY` and rep
 
 - `new`, `learning`, `learned`, or `archived` status;
 - `low`, `normal`, or `high` usefulness;
+- independent `low`, `normal`, or `high` personal interest;
 - normalized tags;
 - a custom description with optional source attribution;
 - ordered personal notes and examples;
@@ -96,6 +98,8 @@ Saving is idempotent for the same normalized term and selected definition. A dif
 Learning status is learner-managed metadata. FSRS reviews do not automatically change `new` to `learning` or `learned`; all three active statuses remain eligible for selection. Only `archived` removes an item from the review queue.
 
 Usefulness estimates general English value, independently of personal interests, recall difficulty, and learning status. It combines bundled word-frequency and expression evidence with an optional API hint. Changing usefulness changes new-card selection weight, not due-review weight or FSRS review dates. Different saved senses share term-level evidence but can have different hints.
+
+Personal interest records explicit learner priority: high for interesting/learn sooner, low for less important, normal to reset. It multiplies all weighted new/due selection pools and learned-word reinforcement, but never excludes low-interest items or changes FSRS. Existing items default to normal.
 
 ### Offline usefulness inference
 
@@ -394,6 +398,8 @@ $$
 
 These categories are the **calculated, persisted results** of usefulness inference, not necessarily the tutor's submitted hints. They weight only FSRS-new cards, never due learning steps or mature reviews.
 
+**Personal-interest multiplier $I_i$:** low = 0.5, normal = 1, high = 2. Unlike general usefulness, it multiplies all three weighted pools; it cannot bypass cooldown or pool priority.
+
 **Presentation recency multiplier $\rho_i$:**
 
 $$
@@ -445,14 +451,14 @@ For example, one consecutive failure and one lapse give 1.75. Two consecutive fa
 **Final lottery weights:**
 
 $$
-W_i^{\text{new}} = \rho_i U_i
+W_i^{\text{new}} = \rho_i U_i I_i
 \qquad
-W_i^{\text{review}} = A_i F_i \rho_i
+W_i^{\text{review}} = A_i F_i \rho_i I_i
 \qquad
-W_i^{\text{learning}} = A_i F_i
+W_i^{\text{learning}} = A_i F_i I_i
 $$
 
-The possible ranges are 0.125–2 for new-card weights, 0.25–13.75 for mature-review weights, and 1–13.75 for learning/relearning weights, before considering cooldown exclusion. Weights are relative lottery mass, not percentages, mastery scores, or FSRS recall probabilities.
+The possible ranges are 0.0625–4 for new-card weights, 0.125–27.5 for mature-review weights, and 0.5–27.5 for learning/relearning weights, before considering cooldown exclusion. Weights are relative lottery mass, not percentages, mastery scores, or FSRS recall probabilities. Worked examples below assume normal personal interest.
 
 ### 5. Draw within the chosen pool
 
@@ -510,7 +516,7 @@ When there are **no new or due cards at all**:
 2. Choose the least recently presented by latest event ID, treating never-presented cards as ID 0.
 3. Break equal exposure ties by earliest due time, then ascending card ID.
 
-There is no weighted lottery here. Usefulness, urgency, failure counts, and soft recency weights do not change this ordering. Due time is only a tie-breaker, not the primary priority.
+There is no weighted lottery here. Usefulness, personal interest, urgency, failure counts, and soft recency weights do not change this ordering. Due time is only a tie-breaker, not the primary priority.
 
 For example, suppose two nonrecent future cards are due in one minute and one day, with latest presentation IDs 100 and 20 respectively. The one-day card wins because it was presented less recently, regardless of usefulness or failures. If neither was ever presented, both have ID 0 and the one-minute card wins the due-time tie-breaker. If all future cards are recent, the same event-ID/due-time/card-ID ordering applies across all of them.
 
@@ -536,6 +542,30 @@ The response's `reason` is computed **after** choosing the card, in this order:
 These labels are not priority queues and are not inputs to the lottery. In particular, a card due earlier today can have urgency greater than 1 while its label remains `due`. A troublesome future card still has `reason: "early"` and can separately have `troublesome: true`.
 
 The presentation's stored `selection_kind` is coarser: only `new`, `due`, or `early`. Tutors should use the chosen card rather than rerolling for a preferred reason or higher usefulness.
+
+## Learned-word reinforcement
+
+`reinforcement_next` is an explicit alternative to scheduled review for stronger production and nuanced usage of **learned** vocabulary. It is not an early FSRS review. The tutor receives the word, saved meaning, all nonempty dated comments from normal and reinforcement reviews, and independent practice state. It asks for a sentence from a description or situation while hiding the target, then guides around prior confusions. The server selects and stores feedback; it does not generate the question or judge answer text.
+
+For meaning $i$, let $C_i$ count nonempty comments from both review channels, $D_i$ be reinforcement difficulty in $[0,4]$ (initially 0), and $R_i$ recover from 0.25 to 1 linearly over 24 hours since its last reinforcement presentation (1 if never presented). Its weight is:
+
+$$
+w_i = U_i I_i (1+\min(C_i,8))(1+D_i)R_i
+$$
+
+Both $U_i$ and $I_i$ use low/normal/high multipliers 0.5/1/2. All learned meanings retain positive weights. More comments are a bounded teaching-value heuristic, not proof of current inability; comment text is not analyzed automatically. Normal FSRS difficulty, failures, due dates, and learning cooldown are not inputs to this independent lottery.
+
+Group by normalized term. Word weight is the **maximum** of its meaning weights, avoiding an automatic bonus merely for saving more senses. Assign proportional probability, cap any word exceeding 0.25, then redistribute remaining probability proportionally among uncapped words until all comply. Draw a word, then choose one of its learned meanings proportional to meaning weights. `selectionProbability` is the word's probability, summed across all its meanings, not the selected sense's probability.
+
+Before drawing, exclude a whole normalized word for **six hours** after the latest reinforcement issuance among its saved meanings, including archived siblings. This hard cooldown is independent of the 24-hour soft recency weight and the normal learning cooldown. It persists across restart, starts even if no answer follows, and ends at exactly issuance + six hours. Future timestamps remain cooling down until that boundary.
+
+At least four distinct learned words must remain outside cooldown. No learned vocabulary returns `NOT_FOUND`; fewer than four eligible words returns `INVALID_ARGUMENT` without issuing or extending anything. Neither cooldown nor the probability cap is relaxed. `eligibleWordCount` counts the post-cooldown pool. Exactly four eligible words forces uniform 25% probabilities; with more, weights influence the capped distribution. With four learned words total, each issuance pauses selection for six hours. The cap is per-call probability, not an empirical session quota; a word may repeat after expiry. Ordinary learning presentations and reinforcement feedback do not start or extend this cooldown.
+
+Each successful next call records a presentation and a fresh independent `reviewToken`. It changes reinforcement recency, not status or FSRS. `reinforcement_review` accepts that token with `again`, `hard`, `good`, or `easy` and an optional factual comment. Difficulty changes by +1/+0.5/−0.5/−1 respectively, clamped to 0–4; review count, last rating, and timestamp persist separately. This encourages practice after difficulties and reduces weight after independent success. No timing boost applies.
+
+Record the first genuine production attempt including usage; guided success cannot erase initial failure. An identical retry returns the original saved practice result, without another update; a conflicting payload fails. Normal and reinforcement tokens are not interchangeable. Status changes/deletion prevent new feedback, but already accepted review results remain idempotently retrievable. These operations never revise FSRS, usefulness, personal interest, or learner-managed status. Use `vocabulary_update` explicitly to express personal preferences.
+
+See [tool inputs and outputs](tools.md#reinforcement_next) and the [standalone reinforcement prompt](prompts.md#learned-word-reinforcement). Raw tool results include the answer: hidden-word practice depends on the tutor and host not exposing that private context.
 
 ## How a review changes the schedule
 
@@ -912,6 +942,8 @@ The latest **non-empty** review comment is returned separately. A newer review w
 
 “No direct effect” below means the implementation does not read that input for that decision. An AI tutor can still make an **indirect** change by submitting a different hint or rating, or by choosing when to request/review a card.
 
+This table describes **scheduled `learning_next` / `learning_review`**. The independent reinforcement lottery above additionally uses comment count, usefulness for learned words, and separate practice difficulty.
+
 | Input or action | Next-item selection | FSRS schedule | Content / usefulness |
 |---|---|---|---|
 | Owner namespace | Determines whose cards/history are eligible | Scopes valid review tokens/history | Scopes saved vocabulary, not corpus scores |
@@ -921,6 +953,7 @@ The latest **non-empty** review comment is returned separately. A newer review w
 | Due date and scheduled interval | Eligibility and urgency; due time breaks future exposure ties | Outputs of scheduling; old values are not memory-equation multipliers | No usefulness effect |
 | Stored stability, difficulty, last-review time | No direct lottery input; previous schedules affect eligibility/urgency | Core memory inputs | No usefulness effect |
 | Effective usefulness | Multiplies only new-card weights by 0.5/1/2 | No direct effect | Derived from term evidence and hint |
+| Personal interest | Multiplies all selectable new/due weights by 0.5/1/2; no future-rotation effect | No effect | Explicit preference only; never inferred from failures |
 | Term spelling, bundled ranks, expression evidence | Indirectly through calculated usefulness; no separate raw-rank weight | No direct effect | Determine inference matches and votes |
 | Optional usefulness hint | Indirectly through effective category | No direct effect | Weight 2 in inference; not a forced override |
 | Consecutive failures and lapses | Bounded extra due-card weight; troublesome label | Not direct equation multipliers; rating/state update counters | No usefulness effect |
@@ -942,7 +975,7 @@ The latest **non-empty** review comment is returned separately. A newer review w
 ### Practical consequences
 
 - **Marking a word `learned` does not stop reviews.** Archive it to remove it from practice.
-- **Usefulness only prioritizes new introductions within their pool.** Even a high-usefulness new card can be on cooldown, paused behind selectable learning steps, in the unchosen pool, or lose the lottery; usefulness does not weight reviews.
+- **Within scheduled review, usefulness only prioritizes new introductions within their pool.** Even a high-usefulness new card can be on cooldown, paused behind selectable learning steps, in the unchosen pool, or lose the lottery. In the separate reinforcement mode, usefulness also weights learned words.
 - **A troublesome card does not always outrank everything.** Its due-card weight is larger but capped, and the usual pool/fallback rules still apply.
 - **Repeated spelling does not always mean a failed cooldown.** Different saved meanings have different cards; cooldown is card-based.
 - **Skipping an answer is not a failed review.** Presentation affects selection history, but only a submitted review updates FSRS and failure counters.
@@ -952,7 +985,7 @@ The latest **non-empty** review comment is returned separately. A newer review w
 
 ### Which parameters can a caller change?
 
-Tool callers can save/archive items, update usefulness hints and metadata, submit review ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
+Tool callers can save/archive items, update usefulness hints, personal interest and metadata, submit scheduled or reinforcement ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
 
 Learning-step priority, the fixed 20:80 new/mature-review mix, adaptive last-three/30-minute cooldown, 24-hour new/mature recency recovery, 10-minute learning urgency denominator, weight caps, usefulness thresholds, and one-minute timing window are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
 
@@ -972,6 +1005,7 @@ These are the source-of-truth entry points for checking or changing the document
 | Revision-gated usefulness backfill | [`refreshUsefulness`](../internal/storage/usefulness_refresh.go) |
 | Candidate pools, cooldown, lottery, weights, fallbacks | [`loadSelectionCards`, `selectLearningCard`, `selectionWeight`, `presentedBefore`](../internal/storage/selection.go) |
 | Presentation transaction and review idempotency | [`NextLearningItem`, `RecordReview`, `reviewPresentationTime`](../internal/storage/learning.go) |
+| Learned-word capped lottery and independent feedback | [`internal/storage/reinforcement.go`](../internal/storage/reinforcement.go), [`internal/learning/reinforcement.go`](../internal/learning/reinforcement.go) |
 | Timing promotion, FSRS adapter, reasons, question content | [`Service.schedule`, `selectionReason`, `tutoringContent`, `contextualDefinition`](../internal/learning/service.go) |
 | Actual FSRS equations and state machine | Dependency [`arithmetic.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/arithmetic.go), [`scheduler_basic.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/scheduler_basic.go) |
 | FSRS defaults and elapsed-time helpers | Dependency [`parameters.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/parameters.go), [`weights.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/weights.go), [`steps.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/steps.go), [`fsrs.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/fsrs.go) |

@@ -26,6 +26,7 @@ type VocabularyCreate struct {
 	LookupID                string
 	Status                  domain.LearningStatus
 	Usefulness              domain.Usefulness
+	PersonalInterest        domain.PersonalInterest
 	Tags                    []string
 	CustomDescription       string
 	DescriptionSource       *domain.DescriptionSource
@@ -44,6 +45,7 @@ type VocabularyUpdate struct {
 	ItemID               string
 	Status               *domain.LearningStatus
 	Usefulness           *domain.Usefulness
+	PersonalInterest     *domain.PersonalInterest
 	Tags                 *[]string
 	CustomDescription    *string
 	SetDescriptionSource bool
@@ -72,6 +74,12 @@ func (db *DB) SaveVocabulary(
 ) (created bool, item domain.VocabularyItem, err error) {
 	if input.Usefulness != "" && !input.Usefulness.Valid() {
 		return false, domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary usefulness hint %q", input.Usefulness)
+	}
+	if input.PersonalInterest == "" {
+		input.PersonalInterest = domain.PersonalInterestNormal
+	}
+	if !input.PersonalInterest.Valid() {
+		return false, domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary personal interest %q", input.PersonalInterest)
 	}
 
 	itemID, err := NewID()
@@ -109,10 +117,10 @@ func (db *DB) SaveVocabulary(
 	result, err := transaction.ExecContext(ctx, `
 		INSERT INTO vocabulary_items(
 			id, owner_key, term, normalized_term, created_at, updated_at,
-			lookup_id, custom_description, learning_status, usefulness, usefulness_hint,
+			lookup_id, custom_description, learning_status, usefulness, usefulness_hint, personal_interest,
 			description_source_json, notes_json, examples_json, tags_json,
 			sense_key, context, selected_entry_index, selected_definition_index, selected_definition_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(owner_key, normalized_term, sense_key) DO NOTHING
 	`,
 		itemID,
@@ -126,6 +134,7 @@ func (db *DB) SaveVocabulary(
 		input.Status,
 		usefulness.Estimate(input.NormalizedTerm, input.Usefulness),
 		sql.NullString{String: string(input.Usefulness), Valid: input.Usefulness != ""},
+		input.PersonalInterest,
 		descriptionSourceJSON,
 		notesJSON,
 		examplesJSON,
@@ -166,8 +175,8 @@ func (db *DB) SaveVocabulary(
 }
 
 func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (domain.VocabularyItem, error) {
-	assignments := make([]string, 0, 10)
-	arguments := make([]any, 0, 12)
+	assignments := make([]string, 0, 11)
+	arguments := make([]any, 0, 13)
 	if input.Status != nil {
 		assignments = append(assignments, "learning_status = ?")
 		arguments = append(arguments, *input.Status)
@@ -189,6 +198,13 @@ func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (dom
 		}
 		assignments = append(assignments, "usefulness_hint = ?", "usefulness = ?")
 		arguments = append(arguments, *input.Usefulness, usefulness.Estimate(normalizedTerm, *input.Usefulness))
+	}
+	if input.PersonalInterest != nil {
+		if !input.PersonalInterest.Valid() {
+			return domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary personal interest %q", *input.PersonalInterest)
+		}
+		assignments = append(assignments, "personal_interest = ?")
+		arguments = append(arguments, *input.PersonalInterest)
 	}
 	if input.Tags != nil {
 		encoded, err := encodeStringList(*input.Tags, "vocabulary tags")
@@ -396,7 +412,7 @@ func (db *DB) DeleteVocabulary(ctx context.Context, ownerKey, itemID string) err
 
 const vocabularySelect = `
 	SELECT
-		v.id, v.term, v.normalized_term, v.learning_status, v.usefulness, v.tags_json,
+		v.id, v.term, v.normalized_term, v.learning_status, v.usefulness, v.personal_interest, v.tags_json,
 		v.custom_description, v.description_source_json, v.notes_json,
 		v.examples_json, v.context, v.selected_entry_index, v.selected_definition_index,
 		v.selected_definition_json, v.created_at, v.updated_at,
@@ -435,6 +451,7 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		&item.NormalizedTerm,
 		&item.Status,
 		&item.Usefulness,
+		&item.PersonalInterest,
 		&tagsJSON,
 		&item.CustomDescription,
 		&descriptionSourceJSON,
@@ -468,6 +485,9 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 	}
 	if !item.Usefulness.Valid() {
 		return domain.VocabularyItem{}, fmt.Errorf("%w: vocabulary item %s usefulness", ErrCorruptData, item.ItemID)
+	}
+	if !item.PersonalInterest.Valid() {
+		return domain.VocabularyItem{}, fmt.Errorf("%w: vocabulary item %s personal_interest", ErrCorruptData, item.ItemID)
 	}
 	if err := decodeJSON(tagsJSON, &item.Tags, item.ItemID, "tags"); err != nil {
 		return domain.VocabularyItem{}, err

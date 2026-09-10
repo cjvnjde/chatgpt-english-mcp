@@ -142,6 +142,120 @@ func TestVocabularyUsefulnessPersistsWithoutReplacingExistingMetadata(t *testing
 	}
 }
 
+func TestVocabularyPersonalInterestPersistsWithoutChangingLearningState(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "personal-interest.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	input := VocabularyCreate{
+		OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", SenseKey: "river",
+		Status: domain.LearningStatusLearning, Tags: []string{"nature"},
+		CustomDescription: "Land alongside a river", DescriptionSource: &domain.DescriptionSource{Title: "My source"},
+		Notes: []string{"Keep this note"}, Examples: []string{"We sat on the bank."}, Context: "River bank", Now: now,
+	}
+	created, saved, err := store.SaveVocabulary(ctx, input)
+	if err != nil || !created || saved.PersonalInterest != domain.PersonalInterestNormal {
+		t.Fatalf("omitted interest save = %#v, created %t, error %v", saved, created, err)
+	}
+	if _, err := store.sql.ExecContext(ctx, `
+		UPDATE learning_cards SET stability = 2.5, difficulty = 6, repetitions = 3,
+			lapses = 1, fsrs_state = 2, scheduled_days = 2, consecutive_failures = 1
+		WHERE vocabulary_item_id = ?
+	`, saved.ItemID); err != nil {
+		t.Fatal(err)
+	}
+	readCard := func(store *DB) LearningCard {
+		t.Helper()
+		card, err := scanLearningCard(store.sql.QueryRowContext(ctx,
+			"SELECT "+learningCardColumns+" FROM learning_cards card WHERE vocabulary_item_id = ?", saved.ItemID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return card
+	}
+	before := readCard(store)
+	high := domain.PersonalInterestHigh
+	updated, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+		OwnerKey: "owner", ItemID: saved.ItemID, PersonalInterest: &high, Now: now.Add(time.Hour),
+	})
+	want := saved
+	want.PersonalInterest, want.UpdatedAt = high, TimeString(now.Add(time.Hour))
+	if err != nil || !reflect.DeepEqual(updated, want) {
+		t.Fatalf("interest-only update = %#v, error %v; want %#v", updated, err, want)
+	}
+	input.PersonalInterest = domain.PersonalInterestLow
+	created, duplicate, err := store.SaveVocabulary(ctx, input)
+	if err != nil || created || !reflect.DeepEqual(duplicate, want) {
+		t.Fatalf("duplicate save replaced interest: %#v, created %t, error %v", duplicate, created, err)
+	}
+	input.SenseKey, input.Context = "finance", "Financial bank"
+	created, low, err := store.SaveVocabulary(ctx, input)
+	if err != nil || !created || low.PersonalInterest != domain.PersonalInterestLow {
+		t.Fatalf("explicit low sense = %#v, created %t, error %v", low, created, err)
+	}
+	notes := []string{"Revised note"}
+	updated, err = store.UpdateVocabulary(ctx, VocabularyUpdate{
+		OwnerKey: "owner", ItemID: saved.ItemID, Notes: &notes, Now: now.Add(2 * time.Hour),
+	})
+	want.Notes, want.UpdatedAt = notes, TimeString(now.Add(2*time.Hour))
+	if err != nil || !reflect.DeepEqual(updated, want) {
+		t.Fatalf("omitted interest update = %#v, error %v; want %#v", updated, err, want)
+	}
+	if _, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+		OwnerKey: "another-owner", ItemID: saved.ItemID, PersonalInterest: &high, Now: now,
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign owner update error = %v, want ErrNotFound", err)
+	}
+	for _, invalid := range []domain.PersonalInterest{"urgent", ""} {
+		if _, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+			OwnerKey: "owner", ItemID: saved.ItemID, PersonalInterest: &invalid, Notes: &notes, Now: now,
+		}); err == nil {
+			t.Fatalf("invalid interest %q was accepted", invalid)
+		}
+	}
+	input.NormalizedTerm, input.PersonalInterest = "invalid", "urgent"
+	if _, _, err := store.SaveVocabulary(ctx, input); err == nil {
+		t.Fatal("invalid interest create was accepted")
+	}
+	for _, invalid := range []any{"urgent", "", nil} {
+		if _, err := store.sql.ExecContext(ctx, "UPDATE vocabulary_items SET personal_interest = ? WHERE id = ?", invalid, saved.ItemID); err == nil {
+			t.Fatalf("database accepted invalid interest %#v", invalid)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	loaded, err := reopened.VocabularyByID(ctx, "owner", saved.ItemID)
+	if err != nil || !reflect.DeepEqual(loaded, want) {
+		t.Fatalf("reopened item = %#v, error %v; want %#v", loaded, err, want)
+	}
+	if after := readCard(reopened); !reflect.DeepEqual(after, before) {
+		t.Fatalf("interest changed learning state: before %#v, after %#v", before, after)
+	}
+	listed, err := reopened.ListVocabulary(ctx, VocabularyListQuery{OwnerKey: "owner", Sort: "oldest", Limit: 10})
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("listed senses = %#v, error %v", listed, err)
+	}
+	for _, item := range listed {
+		expected := want
+		if item.ItemID == low.ItemID {
+			expected = low
+		}
+		if !reflect.DeepEqual(item, expected) {
+			t.Fatalf("listed sense = %#v, want %#v", item, expected)
+		}
+	}
+}
+
 func TestVocabularyRejectsInvalidUsefulnessWritesAndCorruptReads(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")
@@ -194,7 +308,7 @@ func TestVocabularyRejectsInvalidUsefulnessWritesAndCorruptReads(t *testing.T) {
 	}
 }
 
-func TestUsefulnessMigrationsPreserveVocabularyAndLearningState(t *testing.T) {
+func TestVocabularyMetadataMigrationsPreserveVocabularyAndLearningState(t *testing.T) {
 	ctx := context.Background()
 	legacy := openLegacyDatabase(t, filepath.Join(t.TempDir(), "pre008.sqlite"), 7)
 	store := &DB{sql: legacy}
@@ -351,7 +465,8 @@ func TestUsefulnessMigrationsPreserveVocabularyAndLearningState(t *testing.T) {
 			t.Fatalf("migrated %s hint = %q, want %q", fixture.id, hint, hints[index])
 		}
 		item, err := store.VocabularyByID(ctx, fixture.owner, fixture.id)
-		if err != nil || item.Usefulness != usefulness.Estimate("bank", hint) || item.Status != fixture.status {
+		if err != nil || item.Usefulness != usefulness.Estimate("bank", hint) || item.Status != fixture.status ||
+			item.PersonalInterest != domain.PersonalInterestNormal {
 			t.Fatalf("migrated %s = %#v, error %v", fixture.id, item, err)
 		}
 		low := domain.UsefulnessLow

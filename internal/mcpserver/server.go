@@ -58,6 +58,12 @@ func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
 	if err := registerLearningReview(server, services.Learning, logger); err != nil {
 		return nil, err
 	}
+	if err := registerReinforcementNext(server, services.Learning, logger); err != nil {
+		return nil, err
+	}
+	if err := registerReinforcementReview(server, services.Learning, logger); err != nil {
+		return nil, err
+	}
 	return server, nil
 }
 
@@ -112,6 +118,7 @@ func registerVocabularySave(server *mcp.Server, service *vocabulary.Service, log
 		return service.Save(ctx, input.Term, vocabulary.InitialValues{
 			Status:            input.Status,
 			Usefulness:        input.Usefulness,
+			PersonalInterest:  input.PersonalInterest,
 			Tags:              input.Tags,
 			CustomDescription: input.CustomDescription,
 			DescriptionSource: input.DescriptionSource,
@@ -144,7 +151,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_update",
 		Title:       "Update saved vocabulary",
-		Description: "Partially update an item's status, usefulness hint, tags, description source, notes, or examples. A usefulness hint is combined with offline word and expression evidence, not applied as a forced override. Omitted fields are preserved.",
+		Description: "Partially update an item's status, personalInterest, usefulness hint, tags, description source, notes, or examples. Set personalInterest high for interesting/learn sooner, low for less important without exclusion, or normal to reset. Personal interest is independent of general usefulness; do not change usefulness to express preferences. A usefulness hint is combined with offline evidence, not a forced override. Omitted fields are preserved.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			OpenWorldHint:   &closedWorld,
@@ -153,6 +160,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 		item, err := service.Update(ctx, input.ItemID, input.Term, vocabulary.UpdateChanges{
 			Status:            input.Changes.Status,
 			Usefulness:        input.Changes.Usefulness,
+			PersonalInterest:  input.Changes.PersonalInterest,
 			Tags:              input.Changes.Tags,
 			CustomDescription: input.Changes.CustomDescription,
 			DescriptionSource: input.Changes.DescriptionSource,
@@ -262,7 +270,7 @@ func registerLearningNext(server *mcp.Server, service *learning.Service, logger 
 	return registerTool(server, &mcp.Tool{
 		Name:        "learning_next",
 		Title:       "Get the next vocabulary item",
-		Description: "Issue and record one active vocabulary presentation for production recall. After an adaptive last-three-events/30-minute cooldown, selectable due Learning/Relearning steps take priority; otherwise choose a fixed 20% new / 80% mature review mix when both remain. Usefulness weights only new cards. With no new or due cards, issue the least recently presented nonrecent future card, or least recently presented overall if all are recent; due time breaks exposure ties. On reason early, stop without an answer or review unless the learner explicitly wants early practice. NOT_FOUND means no active cards; there is no daily/session quota. Every call records a fresh presentation and retries may select a different item. Reissuing a pending token is not another scheduled review. Pass the unchanged reviewToken to learning_review after an answer.",
+		Description: "Issue and record one active vocabulary presentation for production recall. After an adaptive last-three-events/30-minute cooldown, selectable due Learning/Relearning steps take priority; otherwise choose a fixed 20% new / 80% mature review mix when both remain. Usefulness weights only new cards; personalInterest weights all selectable new/due pools without excluding low-interest items. With no new or due cards, issue the least recently presented nonrecent future card, or least recently presented overall if all are recent; due time breaks exposure ties. On reason early, stop without an answer or review unless the learner explicitly wants early practice. NOT_FOUND means no active cards; there is no daily/session quota. Every call records a fresh presentation and retries may select a different item. Reissuing a pending token is not another scheduled review. Pass the unchanged reviewToken to learning_review after an answer. For explicit learned-word deep practice without changing FSRS, use reinforcement_next instead.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: &destructive,
@@ -300,6 +308,53 @@ func registerLearningReview(server *mcp.Server, service *learning.Service, logge
 			ReviewToken: input.ReviewToken,
 			Rating:      input.Rating,
 			Comment:     input.Comment,
+		})
+	})
+}
+
+func registerReinforcementNext(server *mcp.Server, service *learning.Service, logger *slog.Logger) error {
+	inputSchema, err := inferredSchema[ReinforcementNextInput]()
+	if err != nil {
+		return err
+	}
+	outputSchema, err := inferredSchema[learning.ReinforcementNextResult]()
+	if err != nil {
+		return err
+	}
+	closedWorld, destructive := false, false
+	return registerTool(server, &mcp.Tool{
+		Name:        "reinforcement_next",
+		Title:       "Practice a learned word deeply",
+		Description: "Select one learned meaning for schedule-independent production practice. A hard six-hour cooldown starts at issuance and covers all saved meanings of the normalized word, even without feedback. Favors useful, personally interesting words, comments, difficulty, and soft recency among words outside cooldown. Each word has at most 25% chance; requires four distinct learned words outside cooldown. INVALID_ARGUMENT means too few eligible words: pause until cooldowns expire or more learned words are available, never reroll or relax the cap. NOT_FOUND means no learned vocabulary. Returns private tutor context including target, meaning, dated comments, practice state, eligibleWordCount after cooldown, and word selectionProbability. Hide the target and revealing examples; ask for a sentence from a description, targeting past mistakes. Do not fetch ahead. Each successful call records a new presentation/token without changing status or FSRS. Submit that token only to reinforcement_review after an attempt.",
+		Annotations: &mcp.ToolAnnotations{
+			ReadOnlyHint: false, DestructiveHint: &destructive, IdempotentHint: false, OpenWorldHint: &closedWorld,
+		},
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, _ ReinforcementNextInput) (learning.ReinforcementNextResult, error) {
+		return service.ReinforcementNext(ctx)
+	})
+}
+
+func registerReinforcementReview(server *mcp.Server, service *learning.Service, logger *slog.Logger) error {
+	inputSchema, err := inferredSchema[ReinforcementReviewInput]()
+	if err != nil {
+		return err
+	}
+	configureInputSchema(inputSchema)
+	outputSchema, err := inferredSchema[learning.ReinforcementReviewResult]()
+	if err != nil {
+		return err
+	}
+	closedWorld, destructive := false, true
+	return registerTool(server, &mcp.Tool{
+		Name:        "reinforcement_review",
+		Title:       "Record learned-word practice feedback",
+		Description: "Record the first genuine production attempt from reinforcement_next, with an optional factual comment about usage, confusion, hints, or recovery. Updates independent reinforcement difficulty and review history, never FSRS, learning status, usefulness, or personalInterest. Again increases difficulty by 1, hard by 0.5; good reduces it by 0.5, easy by 1, bounded 0–4. No timing boost. Guided success never erases initial failure. Identical token/rating/comment retries return the original result with duplicate true; changed payloads are rejected. Never send a learning_next token here.",
+		Annotations: &mcp.ToolAnnotations{
+			DestructiveHint: &destructive, IdempotentHint: true, OpenWorldHint: &closedWorld,
+		},
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, input ReinforcementReviewInput) (learning.ReinforcementReviewResult, error) {
+		return service.ReinforcementReview(ctx, learning.RecordOptions{
+			ReviewToken: input.ReviewToken, Rating: input.Rating, Comment: input.Comment,
 		})
 	})
 }

@@ -22,6 +22,8 @@ const (
 
 type Store interface {
 	NextLearningItem(ctx context.Context, ownerKey string, now time.Time) (storage.LearningCandidate, error)
+	NextReinforcementItem(ctx context.Context, ownerKey string, now time.Time) (storage.ReinforcementCandidate, error)
+	RecordReinforcementReview(ctx context.Context, input storage.RecordReviewInput) (storage.ReinforcementPractice, bool, error)
 	ReviewComments(ctx context.Context, ownerKey, vocabularyID string, includeAll bool) ([]storage.ReviewComment, error)
 	RecordReview(
 		ctx context.Context,
@@ -44,18 +46,19 @@ type ReviewFeedback struct {
 }
 
 type NextResult struct {
-	PresentationID int64             `json:"presentationId"`
-	ShownAt        string            `json:"shownAt"`
-	ReviewToken    string            `json:"reviewToken"`
-	Term           string            `json:"term"`
-	Context        string            `json:"context,omitempty"`
-	Usefulness     domain.Usefulness `json:"usefulness"`
-	Definition     string            `json:"definition,omitempty"`
-	Example        string            `json:"example,omitempty"`
-	Reason         string            `json:"reason"`
-	Troublesome    bool              `json:"troublesome"`
-	LatestComment  *ReviewFeedback   `json:"latestComment,omitempty"`
-	Comments       []ReviewFeedback  `json:"comments,omitempty"`
+	PresentationID   int64                   `json:"presentationId"`
+	ShownAt          string                  `json:"shownAt"`
+	ReviewToken      string                  `json:"reviewToken"`
+	Term             string                  `json:"term"`
+	Context          string                  `json:"context,omitempty"`
+	Usefulness       domain.Usefulness       `json:"usefulness"`
+	PersonalInterest domain.PersonalInterest `json:"personalInterest"`
+	Definition       string                  `json:"definition,omitempty"`
+	Example          string                  `json:"example,omitempty"`
+	Reason           string                  `json:"reason"`
+	Troublesome      bool                    `json:"troublesome"`
+	LatestComment    *ReviewFeedback         `json:"latestComment,omitempty"`
+	Comments         []ReviewFeedback        `json:"comments,omitempty"`
 }
 
 type RecordOptions struct {
@@ -103,16 +106,17 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 
 	definition, example := tutoringContent(candidate.Vocabulary)
 	result := NextResult{
-		PresentationID: candidate.PresentationID,
-		ShownAt:        storage.TimeString(candidate.ShownAt),
-		ReviewToken:    candidate.Card.ReviewToken,
-		Term:           candidate.Vocabulary.Term,
-		Context:        candidate.Vocabulary.Context,
-		Usefulness:     candidate.Vocabulary.Usefulness,
-		Definition:     definition,
-		Example:        example,
-		Reason:         selectionReason(candidate.Card, now),
-		Troublesome:    isTroublesome(candidate.Card),
+		PresentationID:   candidate.PresentationID,
+		ShownAt:          storage.TimeString(candidate.ShownAt),
+		ReviewToken:      candidate.Card.ReviewToken,
+		Term:             candidate.Vocabulary.Term,
+		Context:          candidate.Vocabulary.Context,
+		Usefulness:       candidate.Vocabulary.Usefulness,
+		PersonalInterest: candidate.Vocabulary.PersonalInterest,
+		Definition:       definition,
+		Example:          example,
+		Reason:           selectionReason(candidate.Card, now),
+		Troublesome:      isTroublesome(candidate.Card),
 	}
 	if len(comments) > 0 {
 		latest := reviewFeedback(comments[0])
@@ -128,25 +132,17 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 }
 
 func (service *Service) Record(ctx context.Context, options RecordOptions) (RecordResult, error) {
-	reviewToken := strings.TrimSpace(options.ReviewToken)
-	tokenLength := utf8.RuneCountInString(reviewToken)
-	if tokenLength == 0 || tokenLength > maximumReviewTokenRunes {
-		return RecordResult{}, apperr.New(apperr.InvalidArgument, "reviewToken must contain 1 to 200 Unicode characters")
-	}
-	if !options.Rating.Valid() {
-		return RecordResult{}, apperr.New(apperr.InvalidArgument, "rating must be again, hard, good, or easy")
-	}
-	comment := strings.TrimSpace(options.Comment)
-	if utf8.RuneCountInString(comment) > maximumCommentRunes {
-		return RecordResult{}, apperr.New(apperr.InvalidArgument, "comment must contain at most 1000 Unicode characters")
+	options, err := validateRecordOptions(options)
+	if err != nil {
+		return RecordResult{}, err
 	}
 
 	now := service.now().UTC()
 	attempt, duplicate, err := service.store.RecordReview(ctx, storage.RecordReviewInput{
 		OwnerKey:    service.ownerKey,
-		ReviewToken: reviewToken,
+		ReviewToken: options.ReviewToken,
 		Rating:      options.Rating,
-		Comment:     comment,
+		Comment:     options.Comment,
 		Now:         now,
 	}, service.schedule)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -169,6 +165,22 @@ func (service *Service) Record(ctx context.Context, options RecordOptions) (Reco
 		EffectiveRating: attempt.After.LastRating,
 		TimingBoost:     attempt.Rating == domain.ReviewRatingGood && attempt.After.LastRating == domain.ReviewRatingEasy,
 	}, nil
+}
+
+func validateRecordOptions(options RecordOptions) (RecordOptions, error) {
+	options.ReviewToken = strings.TrimSpace(options.ReviewToken)
+	tokenLength := utf8.RuneCountInString(options.ReviewToken)
+	if tokenLength == 0 || tokenLength > maximumReviewTokenRunes {
+		return RecordOptions{}, apperr.New(apperr.InvalidArgument, "reviewToken must contain 1 to 200 Unicode characters")
+	}
+	if !options.Rating.Valid() {
+		return RecordOptions{}, apperr.New(apperr.InvalidArgument, "rating must be again, hard, good, or easy")
+	}
+	options.Comment = strings.TrimSpace(options.Comment)
+	if utf8.RuneCountInString(options.Comment) > maximumCommentRunes {
+		return RecordOptions{}, apperr.New(apperr.InvalidArgument, "comment must contain at most 1000 Unicode characters")
+	}
+	return options, nil
 }
 
 func (service *Service) schedule(

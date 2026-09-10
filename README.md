@@ -2,13 +2,15 @@
 
 A self-hosted MCP server for looking up English terms, maintaining a personal vocabulary list, and scheduling production-recall reviews with FSRS.
 
-It provides eight tools for:
+It provides ten tools for:
 
 - Cambridge Dictionary lookups with permanent SQLite caching
 - vocabulary metadata, offline word/expression usefulness with optional AI hints, notes, examples, tags, and learning states
 - learning-step priority, a fixed new/mature-review mix, new-word usefulness weights, and recent-card cooldowns
 - idempotent review recording and spaced-repetition scheduling
 - timestamped presentation history retained for future learning analytics
+- learned-word reinforcement weighted by usefulness, comments, difficulty, and recency, with a strict 25% per-word probability cap
+- personal-interest priorities that favor interesting words without excluding less-important ones
 
 The MCP stores and schedules learning data; the connected AI tutor decides how to explain, quiz, and respond to the learner.
 

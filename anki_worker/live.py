@@ -46,6 +46,7 @@ def item(item_id):
         "normalizedTerm": "bank",
         "status": "archived",
         "usefulness": "normal",
+        "personalInterest": "normal",
         "tags": ["live test", "Case", "case"],
         "customDescription": "Original meaning",
         "notes": ["Disposable account integration exercise"],
@@ -82,7 +83,7 @@ def exercise(config, root):
 
     def fetch(current_config):
         payload = {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "namespace": current_config.namespace,
             "owner": current_config.owner,
             "digest": "",

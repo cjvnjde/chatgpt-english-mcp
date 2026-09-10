@@ -139,6 +139,14 @@ Use vocabulary_update on the exact itemId to revise a hint when warranted.
 An unrelated update preserves it, and saving an existing item again does not
 overwrite it. One successful or failed answer is not a reason to reclassify.
 
+Personal interest is separate: when the learner says "interesting", "learn sooner",
+or "prioritize this", set personalInterest: "high"; "not interesting" or "less
+important" means "low"; "normal priority" resets to "normal". Use vocabulary_update
+on the exact itemId (or personalInterest on initial save). Low reduces chance,
+never excludes. Do not archive, change usefulness, or infer disinterest from
+failure. Omission preserves the preference. Interest affects all weighted
+new/due learning pools and learned-word reinforcement, not FSRS intervals.
+
 Use vocabulary_get and vocabulary_list to search or manage saved content, not
 to select scheduled reviews. Use itemId to identify an exact saved meaning;
 term-only requests are ambiguous when multiple meanings are saved. Use
@@ -146,7 +154,7 @@ vocabulary_delete when the learner asks to remove an item.
 
 # Scheduled review
 
-When vocabulary practice is requested, call learning_next with
+For ordinary scheduled vocabulary practice, call learning_next with
 includeComments: true. It returns one production-recall item. For a short daily
 lesson, review at most five scheduled items unless the learner explicitly asks
 to continue. Do not select scheduled material with vocabulary_list.
@@ -240,6 +248,61 @@ previously reviewed term returns with a new token, follow its current reason and
 the lesson limit rather than permanently excluding the term. If learning_next
 returns NOT_FOUND, explain that no active vocabulary is available and end.
 
+# Learned-word deep practice
+
+When the learner asks to strengthen learned words, practice tricky usage, or
+train from past mistakes, use reinforcement_next instead of learning_next.
+This is a separate, schedule-independent mode, not early scheduled review.
+Default to at most five completed exercises unless another limit is requested.
+Finish any pending scheduled attempt before switching; never submit its token
+to reinforcement_review or record one exercise in both channels.
+
+Call reinforcement_next with {} once per exercise. Keep itemId, reviewToken,
+target, meaning, comments, and practice state privately; never show the tool
+payload or answer list. This returns only learned words, with preference for
+general usefulness, personal interest, comments, and reinforcement difficulty.
+Every normalized word has at most 25% chance, including its different meanings.
+An issued word and all its saved meanings enter a hard six-hour cooldown,
+even without an answer. Four learned words must remain outside cooldown;
+exactly four eligible words means equal chances. On shortage, explain and
+pause until cooldowns expire or more learned words are available. Do not poll,
+change statuses, weaken the cap, switch modes, or substitute a manual draw.
+NOT_FOUND here means no learned words, not no active vocabulary.
+
+Use the selected meaning and dated comments to choose a NEW realistic situation
+targeting a prior confusion, collocation, preposition, register, or nuance.
+Describe the intended meaning WITHOUT saying the term; ask the learner to
+identify it and write a natural sentence using it. Occasionally ask for a
+contrast or correction that tests that same meaning. Make the challenge fair:
+no false definitions, misleading traps, or arbitrary rejection of synonyms.
+Hide derivatives, revealing word fragments, and the whole target expression in
+examples. If tool output is visible in the host, do not claim blind recall.
+Resolve missing/contradictory meaning with vocabulary_get using the returned
+itemId or dictionary_lookup before asking. If still unclear, pause.
+
+Ask ONE question and WAIT for a genuine unaided attempt. Use past comments as
+teaching context, never as today's grade. A valid alternative answer may expose
+an ambiguous clue: clarify before judging. After the attempt, guide with one
+progressive hint at a time; explain the relevant distinction and offer a brief
+corrected sentence when needed. Avoid long guessing chains. Preserve evidence
+of initial failure even if the learner succeeds after teaching.
+
+Call reinforcement_review once with the unchanged token, rating, and optional
+factual comment (at most 1,000 characters). Grade production, including usage:
+again = failed recall, materially wrong use, or supplied answer; hard = correct
+but effortful or materially hinted; good = correct independent use; easy =
+effortless, precise use. Do not grade message delays or apply the FSRS timing
+boost. Record the specific confusion, hints, or independent recovery, not generic
+praise or invented problems to increase comment counts.
+
+The server updates separate practice difficulty and history, not FSRS, status,
+usefulness, or interest. Do not set these based on success/failure yourself.
+Retry uncertain feedback delivery with IDENTICAL token/rating/comment; a duplicate
+counts once. Do not reroll, fetch ahead, or call next to recover a pending item.
+New tokens allow new exercises after selection permits them; the same word
+cannot return within six hours. Vary contexts after expiry. Stop at the agreed limit, on request, or tool failure. An unanswered
+exercise gets no feedback. End with a brief summary of useful distinctions.
+
 # Active learning and style
 
 Use active recall when useful: correction, term recall, sentence completion,
@@ -322,6 +385,17 @@ but it does not rewrite saved vocabulary. Ambiguous matches abstain. Do not
 invent a phrase's usefulness from its words, dictionary membership, or CEFR level.
 Successful or failed recall is not a reason to reclassify usefulness. Anki remains
 a separate, optional way to practice, not this lesson's scheduling authority.
+
+Honor explicit personal preferences with vocabulary_update on the exact itemId:
+personalInterest "high" for interesting/learn sooner, "low" for less important,
+"normal" to reset. Low interest is not exclusion or archival. Never change
+usefulness or interest because of recall quality. Interest weights all selectable
+new/due pools without changing their shares, cooldown, or FSRS dates.
+
+This daily lesson stays scheduled unless I explicitly request learned-word
+deep practice. Do not silently switch when early appears. For that separate
+mode use reinforcement_next and reinforcement_review, never learning_review,
+and follow the standalone learned-word prompt below.
 
 # Asking questions
 
@@ -417,4 +491,62 @@ unless it helps review missed terms.
 
 Keep the lesson concise. Use MCP tools quietly so the interaction feels like
 a teacher testing and guiding me.
+```
+
+## Learned-word reinforcement
+
+```text
+Run a learned-word deep-practice lesson with English MCP, at most five completed
+exercises unless I ask otherwise. Use reinforcement_next {} for selection and
+reinforcement_review for feedback. Do not use learning_next/learning_review:
+this mode must not change FSRS schedules. Never manually choose or reroll words.
+
+Keep each returned itemId, term, meaning, dated comments, and reviewToken private
+while awaiting my attempt. Use comments from past learning and reinforcement to
+target a specific confusion or nuance in a fresh realistic context. Describe
+the meaning WITHOUT the word and ask me to identify it and write a natural
+sentence using it. Hide all revealing derivatives/fragments and the entire
+expression in examples. Never paste the raw tool response. If the host exposes
+the answer, acknowledge that the attempt is not blind recall.
+
+Test the saved meaning, not another sense. Use vocabulary_get with itemId if
+content is missing or contradictory; pause if unresolved. Ask one question and
+WAIT. Make challenges fair, not deceptive: accept valid alternatives and clarify
+ambiguous clues before grading. After my attempt, use progressive hints,
+contrast confused meanings, and correct usage briefly. Do not reveal answers
+prematurely or force long guessing chains. Vary sentence contexts on repeats.
+
+Grade the FIRST genuine production attempt, including usage: again for failed
+recall, materially wrong use, or a supplied answer; hard for successful but
+effortful/materially hinted production; good for correct independent use; easy
+for effortless precise use. Guided recovery never upgrades initial failure.
+Ignore message delays; there is no timing boost. Old comments inform teaching,
+not today's rating.
+
+Submit reinforcement_review with the unchanged token, original rating, and a
+short useful factual comment on confusion, usage, hints, or independent recovery
+(at most 1,000 characters). Do not add generic praise or manufacture problems.
+Retry uncertain delivery with the IDENTICAL payload; duplicate true counts once.
+No feedback for unanswered exercises. Never submit a reinforcement token to
+learning_review or count one exercise in both channels.
+
+The server favors useful, interesting, comment-heavy learned words and practice
+difficulty, with recency and randomness. No normalized word has more than 25%
+chance per call across all meanings. Issuance starts a hard six-hour cooldown
+for all saved meanings, even without feedback. Four learned words must remain
+outside cooldown; exactly four eligible words means uniform chances. On shortage,
+explain and pause until cooldowns expire or more learned words are available.
+Never poll, relabel words, weaken the cap, or switch modes to bypass it.
+NOT_FOUND means no learned words. Repeats are allowed after six hours; the cap
+is not a session quota. Keep the pending item; never fetch ahead or reroll.
+
+Feedback updates independent practice state, not status, usefulness, interest,
+or FSRS. Honor my explicit preferences with vocabulary_update:
+personalInterest high for interesting/learn sooner, low for less important,
+normal to reset. Low lowers chance without excluding. Use the exact itemId and
+do not infer disinterest from mistakes.
+
+After feedback, continue within the limit. Stop on request, shortage, or tool
+failure; preserve pending work and never invent results. End with a short
+summary of useful distinctions, not an advance answer list.
 ```

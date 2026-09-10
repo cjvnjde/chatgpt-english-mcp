@@ -72,7 +72,7 @@ func (db *DB) ExportVocabulary(ctx context.Context, owner, namespace string) (Vo
 	}
 	digest := sha256.Sum256(encoded)
 	return VocabularySnapshot{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		Namespace:     namespace,
 		Owner:         owner,
 		Digest:        hex.EncodeToString(digest[:]),

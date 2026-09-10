@@ -19,6 +19,7 @@ type VocabularySaveInput struct {
 	Term              string                    `json:"term" jsonschema:"word, phrase, idiom, or expression to save"`
 	Status            domain.LearningStatus     `json:"status,omitempty" jsonschema:"initial learning status; defaults to new"`
 	Usefulness        domain.Usefulness         `json:"usefulness,omitempty" jsonschema:"optional general-usefulness hint; double weight versus each offline evidence source; omit for automatic word or expression inference; returned usefulness may differ"`
+	PersonalInterest  domain.PersonalInterest   `json:"personalInterest,omitempty" jsonschema:"personal priority: high for interesting or learn sooner, low for less important, normal to reset; independent of usefulness"`
 	Tags              []string                  `json:"tags,omitempty" jsonschema:"initial normalized learning tags"`
 	CustomDescription *string                   `json:"customDescription,omitempty" jsonschema:"initial learner description from any source"`
 	DescriptionSource *domain.DescriptionSource `json:"descriptionSource,omitempty" jsonschema:"source attribution for the custom description"`
@@ -31,6 +32,7 @@ type VocabularySaveInput struct {
 type VocabularyUpdateChanges struct {
 	Status            *domain.LearningStatus    `json:"status,omitempty" jsonschema:"replacement learning status"`
 	Usefulness        *domain.Usefulness        `json:"usefulness,omitempty" jsonschema:"replacement general-usefulness hint; combined with offline word and expression evidence, not a forced override; omission preserves the existing hint"`
+	PersonalInterest  *domain.PersonalInterest  `json:"personalInterest,omitempty" jsonschema:"replacement personal priority: low reduces selection chance but never excludes; normal resets; high favors learning sooner"`
 	Tags              *[]string                 `json:"tags,omitempty" jsonschema:"replacement tags; an empty array clears them"`
 	CustomDescription *string                   `json:"customDescription,omitempty" jsonschema:"replacement description; an empty string clears it"`
 	DescriptionSource *domain.DescriptionSource `json:"descriptionSource,omitempty" jsonschema:"replacement source; an empty object clears it"`
@@ -109,4 +111,12 @@ type LearningReviewInput struct {
 	ReviewToken string              `json:"reviewToken" jsonschema:"opaque token returned by learning_next"`
 	Rating      domain.ReviewRating `json:"rating" jsonschema:"again means failed; hard, good, and easy indicate increasing recall quality"`
 	Comment     string              `json:"comment,omitempty" jsonschema:"optional note about what was difficult or confused"`
+}
+
+type ReinforcementNextInput struct{}
+
+type ReinforcementReviewInput struct {
+	ReviewToken string              `json:"reviewToken" jsonschema:"opaque token returned by reinforcement_next; never a learning_next token"`
+	Rating      domain.ReviewRating `json:"rating" jsonschema:"quality of the first unaided production attempt: again failed, hard effortful or materially hinted, good correct, easy effortless and precise"`
+	Comment     string              `json:"comment,omitempty" jsonschema:"factual usage mistake, confusion, hints, or independent recovery to guide future reinforcement"`
 }

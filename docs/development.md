@@ -109,11 +109,17 @@ Selection starts with all due and FSRS-new cards and applies the global adaptive
 
 After cooldown, any selectable due FSRS Learning (1)/Relearning (3) cards form the priority pool; they pause new introductions and mature reviews only while selectable. Otherwise choose a fixed 20% FSRS New (0) / 80% due Review (2) mix when both pools remain, or the sole pool. Recency and pool size do not change that ratio. New-card weight is recency × usefulness (low ×0.5, normal ×1, high ×2); mature-review weight is urgency × failure × recency; learning/relearning weight is urgency × failure. Soft recency recovers over 24 hours and never weights learning steps. Due urgency is `1 + min(max(overdueHours, 0) / intervalHours, 4)`, with `intervalHours = 1/6` for learning/relearning and `max(scheduledDays * 24, 24)` for mature reviews. Failure multipliers remain capped.
 
+Additionally, personal interest multiplies every selectable new/step/mature weight by 0.5/1/2 for low/normal/high. It does not affect cooldown eligibility, fixed pool shares, FSRS scheduling, or deterministic future rotation. The admin likelihood calculation uses the same selection plan and weights.
+
 Only when no new or due cards exist, choose a future card: restrict to nonrecent cards if possible, then order by latest presentation event ID (never presented = 0), due time, and card ID. If all are recent, use the same ordering across all. This least-exposed-first ordering rotates a static future pool fully rather than repeatedly selecting the nearest-due subset. The API still returns `early`; normal [tutor prompts](prompts.md) stop without an answer/review unless the learner explicitly opts into early practice. There is no backend daily/session quota or early-practice API mode. Reissuing a pending token is another presentation, not another scheduled review. See [the selection algorithm and exact probabilities](how-it-works.md#how-the-next-item-is-selected) for the decision flow, worked examples, cooldown relaxation, and future fallback rules, and [the scheduling equations](how-it-works.md#how-a-review-changes-the-schedule) for the separate FSRS model.
 
 Timestamp strings have variable fractional precision. Compare parsed times, or compare canonical UTC timestamp prefixes with the terminal `Z` removed; raw RFC3339Nano text does not sort chronologically. Presentation history records server issuance, not guaranteed delivery or human visibility. Request retries append new events, potentially for different items. Review-token linkage can associate several presentations with one accepted review, but does not establish a recall duration. Migrations retain existing timestamps and never backfill invented presentation times.
 
 Review persistence reads up to two presentations for the owner/card/token inside the review transaction, using a dedicated token index. Exactly one event supplies a parsed issuance time to the learning scheduler; missing or repeated events supply no timing evidence. A nonnegative interval of at most one minute promotes only `good` to `easy`. The effective rating is stored separately from the submitted rating so retry comparisons and comment history retain the original input. Duplicate lookup precedes timing evaluation and returns the persisted effective result without recomputing it.
+
+`reinforcement_next` and `reinforcement_review` use separate storage and tokens for explicitly learned vocabulary. Selection groups meanings by normalized word, caps each word at 25% through proportional redistribution, and requires at least four distinct words. Positive weights combine usefulness, personal interest, nonempty comments from both review channels, independent difficulty, and reinforcement recency. Feedback is transactional and idempotent, preserving original results and leaving FSRS/status untouched. See [the complete contract and formulas](tools.md#reinforcement_next).
+
+Reinforcement applies a hard six-hour word-level cooldown from the latest persisted issuance across all saved meanings before the capped lottery. Existing `reinforcement_practice.last_shown_at` supplies history; no migration is needed. Fewer than four words outside cooldown returns `INVALID_ARGUMENT` with no write, rather than relaxing cooldown/cap; no learned vocabulary still returns `NOT_FOUND`. UTC fractional timestamps are compared chronologically across meanings. Ordinary learning and reinforcement feedback do not start or extend this cooldown.
 
 ## Migrations
 
@@ -128,6 +134,8 @@ The scoring revision covers bundled frequency data and the scoring policy. The m
 Migration `010` rebuilds vocabulary time-ordering and review-comment indexes over UTC timestamp prefixes without the terminal `Z`. Pagination and latest-comment queries preserve nanosecond ordering without rewriting stored timestamps or immutable history.
 
 Migration `011` adds nullable `review_attempts.effective_rating` and a presentation-token lookup index. Legacy attempts are not rewritten: reads use their original rating when the effective rating is null. New reviews persist the actual FSRS rating. Existing immutability triggers remain in force.
+
+Migration `012` adds constrained `personal_interest` defaulting to `normal`, without changing existing FSRS state or usefulness. Migration `013` introduces independent reinforcement practice, presentations, and immutable reviews. No fabricated past reinforcement is backfilled.
 
 ## Adding or changing a tool
 
@@ -146,7 +154,7 @@ The optional private endpoint returns a complete owner-scoped snapshot from one 
 
 Source identity combines integration namespace, encoded owner, and saved item ID. The worker keeps independent ownership mappings so a remote edit to the visible fields or deck cannot evade reconciliation. Every poll downloads remote state into the private worker collection, compares actual fields/tags with the source, and publishes corrections. The application database is never a sync destination.
 
-Snapshot schema version `2` includes required usefulness metadata. The Python worker validates it but does not render it into Anki fields/tags or use it for Anki scheduling. Deploy the Go exporter and Python worker together; older snapshots are rejected instead of silently weakening validation. Existing source IDs, note mappings, and Anki cards remain unchanged.
+Snapshot schema version `3` includes required usefulness and personal-interest metadata. The Python worker validates both but does not render them into Anki fields/tags or use them for Anki scheduling. Deploy the Go exporter and Python worker together; older snapshots are rejected instead of silently weakening validation. Existing source IDs, note mappings, and Anki cards remain unchanged. Reinforcement practice state is not exported.
 
 Vocabulary and learning responses expose optional top-level `context` for meanings without a dictionary-selected sense. The Anki worker accepts this field and renders it in Context, falling back to `sense.context` for older exports. Deploy the updated exporter and strict-schema worker together.
 

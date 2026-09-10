@@ -49,6 +49,7 @@ type SaveResult struct {
 type InitialValues struct {
 	Status            domain.LearningStatus
 	Usefulness        domain.Usefulness
+	PersonalInterest  domain.PersonalInterest
 	Tags              []string
 	CustomDescription *string
 	DescriptionSource *domain.DescriptionSource
@@ -61,6 +62,7 @@ type InitialValues struct {
 type UpdateChanges struct {
 	Status            *domain.LearningStatus
 	Usefulness        *domain.Usefulness
+	PersonalInterest  *domain.PersonalInterest
 	Tags              *[]string
 	CustomDescription *string
 	DescriptionSource *domain.DescriptionSource
@@ -151,6 +153,7 @@ func (service *Service) Save(ctx context.Context, term string, initial InitialVa
 		LookupID:                lookupID,
 		Status:                  metadata.Status,
 		Usefulness:              metadata.Usefulness,
+		PersonalInterest:        metadata.PersonalInterest,
 		Tags:                    metadata.Tags,
 		CustomDescription:       metadata.CustomDescription,
 		DescriptionSource:       metadata.DescriptionSource,
@@ -361,6 +364,7 @@ func validateTerm(term string) (displayTerm, normalizedTerm string, err error) {
 type normalizedMetadata struct {
 	Status            domain.LearningStatus
 	Usefulness        domain.Usefulness
+	PersonalInterest  domain.PersonalInterest
 	Tags              []string
 	CustomDescription string
 	DescriptionSource *domain.DescriptionSource
@@ -379,6 +383,13 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 	usefulness := input.Usefulness
 	if usefulness != "" && !usefulness.Valid() {
 		return normalizedMetadata{}, apperr.New(apperr.InvalidArgument, "usefulness is unsupported")
+	}
+	interest := input.PersonalInterest
+	if interest == "" {
+		interest = domain.PersonalInterestNormal
+	}
+	if !interest.Valid() {
+		return normalizedMetadata{}, apperr.New(apperr.InvalidArgument, "personalInterest is unsupported")
 	}
 	description, err := normalizeDescription(input.CustomDescription)
 	if err != nil {
@@ -409,6 +420,7 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 	return normalizedMetadata{
 		Status:            status,
 		Usefulness:        usefulness,
+		PersonalInterest:  interest,
 		Tags:              tags,
 		CustomDescription: description,
 		DescriptionSource: source,
@@ -418,7 +430,7 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 }
 
 func normalizeUpdateChanges(input UpdateChanges, current domain.VocabularyItem) (storage.VocabularyUpdate, error) {
-	if input.Status == nil && input.Usefulness == nil && input.Tags == nil &&
+	if input.Status == nil && input.Usefulness == nil && input.PersonalInterest == nil && input.Tags == nil &&
 		input.CustomDescription == nil && input.DescriptionSource == nil && input.Notes == nil && input.Examples == nil {
 		return storage.VocabularyUpdate{}, apperr.New(apperr.InvalidArgument, "changes must contain at least one field")
 	}
@@ -437,6 +449,13 @@ func normalizeUpdateChanges(input UpdateChanges, current domain.VocabularyItem) 
 		}
 		usefulness := *input.Usefulness
 		update.Usefulness = &usefulness
+	}
+	if input.PersonalInterest != nil {
+		if !input.PersonalInterest.Valid() {
+			return storage.VocabularyUpdate{}, apperr.New(apperr.InvalidArgument, "personalInterest is unsupported")
+		}
+		interest := *input.PersonalInterest
+		update.PersonalInterest = &interest
 	}
 	if input.Tags != nil {
 		tags, err := normalizeTags(*input.Tags)

@@ -50,6 +50,7 @@ VOCABULARY = {
     "normalizedTerm": str,
     "status": str,
     "usefulness": str,
+    "personalInterest": str,
     "tags": [str],
     "customDescription?": str,
     "descriptionSource?": {"title?": str, "url?": str},
@@ -146,7 +147,7 @@ def validate_snapshot(payload, config):
         raise WorkerError("Snapshot envelope is missing or unsupported")
     if (
         type(payload["schemaVersion"]) is not int
-        or payload["schemaVersion"] != 2
+        or payload["schemaVersion"] != 3
         or payload["complete"] is not True
     ):
         raise WorkerError("Snapshot is incomplete or uses an unsupported schema")
@@ -177,6 +178,8 @@ def validate_snapshot(payload, config):
             raise WorkerError("Snapshot contains an unknown vocabulary status")
         if item["usefulness"] not in ("low", "normal", "high"):
             raise WorkerError("Snapshot contains an unknown vocabulary usefulness")
+        if item["personalInterest"] not in ("low", "normal", "high"):
+            raise WorkerError("Snapshot contains an unknown personal interest")
         for key in ("createdAt", "updatedAt"):
             try:
                 if (

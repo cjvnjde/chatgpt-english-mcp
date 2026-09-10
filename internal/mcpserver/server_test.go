@@ -63,6 +63,8 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		"dictionary_lookup",
 		"learning_next",
 		"learning_review",
+		"reinforcement_next",
+		"reinforcement_review",
 		"vocabulary_delete",
 		"vocabulary_get",
 		"vocabulary_list",
@@ -363,6 +365,30 @@ func TestMCPExpressionInferencePreservesSavedSpellingAndIdentity(t *testing.T) {
 	})
 	if protected.Usefulness != domain.UsefulnessNormal {
 		t.Fatalf("real-word substitution was treated as a typo: %#v", protected)
+	}
+}
+
+func TestMCPPersonalInterestRejectsInvalidUpdatesAtomically(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t, ctx)
+	saved := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", map[string]any{
+		"term": "interesting expression", "personalInterest": "high",
+	})
+	for _, invalid := range []any{nil, "", "interesting"} {
+		assertToolInvalidArgument(t, ctx, session, "vocabulary_update", map[string]any{
+			"itemId":  saved.ItemID,
+			"changes": map[string]any{"personalInterest": invalid, "notes": []string{"must not commit"}},
+		})
+	}
+	item := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_get", map[string]any{"itemId": saved.ItemID})
+	if item.PersonalInterest != domain.PersonalInterestHigh || len(item.Notes) != 0 {
+		t.Fatalf("invalid preference update changed saved content: %#v", item)
+	}
+	reset := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", map[string]any{
+		"itemId": saved.ItemID, "changes": map[string]any{"personalInterest": "normal"},
+	})
+	if reset.PersonalInterest != domain.PersonalInterestNormal || reset.Usefulness != saved.Usefulness {
+		t.Fatalf("interest reset changed general usefulness: %#v", reset)
 	}
 }
 

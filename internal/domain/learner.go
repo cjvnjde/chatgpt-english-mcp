@@ -35,6 +35,23 @@ func (usefulness Usefulness) Valid() bool {
 	}
 }
 
+type PersonalInterest string
+
+const (
+	PersonalInterestLow    PersonalInterest = "low"
+	PersonalInterestNormal PersonalInterest = "normal"
+	PersonalInterestHigh   PersonalInterest = "high"
+)
+
+func (interest PersonalInterest) Valid() bool {
+	switch interest {
+	case PersonalInterestLow, PersonalInterestNormal, PersonalInterestHigh:
+		return true
+	default:
+		return false
+	}
+}
+
 type DescriptionSource struct {
 	Title string `json:"title,omitempty"`
 	URL   string `json:"url,omitempty"`
@@ -56,6 +73,7 @@ type VocabularyItem struct {
 	NormalizedTerm    string                  `json:"normalizedTerm"`
 	Status            LearningStatus          `json:"status"`
 	Usefulness        Usefulness              `json:"usefulness"`
+	PersonalInterest  PersonalInterest        `json:"personalInterest"`
 	Tags              []string                `json:"tags"`
 	CustomDescription string                  `json:"customDescription,omitempty"`
 	DescriptionSource *DescriptionSource      `json:"descriptionSource,omitempty"`

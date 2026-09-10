@@ -89,6 +89,98 @@ func TestSelectLearningCardUsesWeightedSamplingWithinPools(t *testing.T) {
 	}
 }
 
+func TestPersonalInterestWeightsEveryPoolWithoutChangingPoolShares(t *testing.T) {
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	for _, state := range []int{0, 1, 2, 3} {
+		t.Run(fmt.Sprintf("state-%d", state), func(t *testing.T) {
+			cards := []selectionCard{
+				{cardID: "low", fsrsState: state, dueAt: now, personalInterest: domain.PersonalInterestLow},
+				{cardID: "normal", fsrsState: state, dueAt: now, personalInterest: domain.PersonalInterestNormal},
+				{cardID: "high", fsrsState: state, dueAt: now, personalInterest: domain.PersonalInterestHigh},
+			}
+			plan := planLearningSelection(cards, 0, now)
+			for index, want := range []float64{1.0 / 7, 2.0 / 7, 4.0 / 7} {
+				probability, _ := plan.likelihood(&cards[index])
+				if probability != want {
+					t.Fatalf("%s probability = %g, want %g", cards[index].cardID, probability, want)
+				}
+			}
+			for _, test := range []struct {
+				draw float64
+				want string
+			}{
+				{0, "low"}, {0.14, "low"}, {0.15, "normal"}, {0.42, "normal"}, {0.43, "high"}, {0.999, "high"},
+			} {
+				selected, ok := selectLearningCard(cards, 0, now, func() float64 { return test.draw })
+				if !ok || selected.cardID != test.want {
+					t.Fatalf("draw %g selected %s, want %s", test.draw, selected.cardID, test.want)
+				}
+			}
+		})
+	}
+	cards := []selectionCard{
+		{cardID: "new", personalInterest: domain.PersonalInterestHigh},
+		{cardID: "due", fsrsState: 2, dueAt: now, personalInterest: domain.PersonalInterestLow},
+	}
+	plan := planLearningSelection(cards, 0, now)
+	for index, want := range []float64{0.2, 0.8} {
+		probability, _ := plan.likelihood(&cards[index])
+		if probability != want {
+			t.Fatalf("%s pool probability = %g, want %g", cards[index].cardID, probability, want)
+		}
+	}
+	// Interest cannot bypass cooldown or change deterministic future ordering.
+	cards[0].fsrsState, cards[0].dueAt = 2, now.Add(time.Hour)
+	cards[1].dueAt = now.Add(time.Minute)
+	selected, ok := selectLearningCard(cards, 0, now, func() float64 {
+		t.Fatal("future rotation consumed randomness")
+		return 0
+	})
+	if !ok || selected.cardID != "due" {
+		t.Fatalf("future selection = %#v, want earlier low-interest card", selected)
+	}
+	cards[0].dueAt = now
+	cards[0].lastPresentationID, cards[0].lastShownAt = 1, now
+	cards[1].dueAt = now
+	selected, ok = selectLearningCard(cards, 1, now, func() float64 { return 0 })
+	if !ok || selected.cardID != "due" {
+		t.Fatalf("cooldown selection = %#v, want low-interest alternative", selected)
+	}
+}
+
+func TestAdminLikelihoodLoadsPersistedPersonalInterest(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	expected := make(map[string]float64)
+	for _, interest := range []domain.PersonalInterest{domain.PersonalInterestLow, domain.PersonalInterestHigh} {
+		_, item, err := store.SaveVocabulary(ctx, VocabularyCreate{
+			OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank",
+			SenseKey: string(interest), PersonalInterest: interest, Status: domain.LearningStatusNew, Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected[item.ItemID] = 0.2
+		if interest == domain.PersonalInterestHigh {
+			expected[item.ItemID] = 0.8
+		}
+	}
+	page, err := store.AdminSuggestions(ctx, "owner", 10, 0)
+	if err != nil || page.Selectable != 2 || len(page.Rows) != 2 {
+		t.Fatalf("admin suggestions = %#v, error %v", page, err)
+	}
+	for _, row := range page.Rows {
+		if row.Probability != expected[row.VocabularyItemID] {
+			t.Fatalf("suggestion %s probability = %g, want %g", row.VocabularyItemID, row.Probability, expected[row.VocabularyItemID])
+		}
+	}
+}
+
 func TestSelectLearningCardRecencyPenaltyRecoversByNextDay(t *testing.T) {
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
 	cards := []selectionCard{
