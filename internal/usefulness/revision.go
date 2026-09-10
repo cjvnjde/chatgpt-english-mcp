@@ -1,3 +1,3 @@
 package usefulness
 
-const datasetRevision = "13a7bf3cc451a3ef713ed32b0eed885f93db406a07f768afd58af5fe44642cac"
+const datasetRevision = "493f8819ebc9ba8c97c05c48ed1b5c2c29a83569a577687aa1b0350275da3c01"

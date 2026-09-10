@@ -1,10 +1,11 @@
 {
   "format": "little-endian uint32 count; count records of text offset, wordfreq rank, FrequencyWords rank; UTF-8 text",
-  "normalization": "domain.NormalizeTerm: simple lowercase, whitespace collapse, curly quote folding; best original rank on collisions",
-  "dataset_sha256": "13a7bf3cc451a3ef713ed32b0eed885f93db406a07f768afd58af5fe44642cac",
+  "normalization": "domain.NormalizeTerm: simple lowercase, whitespace collapse, curly quote folding; best tied-group rank on collisions",
+  "ranking": "standard competition ranking: equal-frequency entries share the first position of their group",
+  "dataset_sha256": "493f8819ebc9ba8c97c05c48ed1b5c2c29a83569a577687aa1b0350275da3c01",
   "terms": 1737503,
   "uncompressed_bytes": 36121441,
-  "compressed_bytes": 15811615,
+  "compressed_bytes": 11605514,
   "wordfreq": {
     "version": "3.1.1",
     "url": "https://files.pythonhosted.org/packages/24/61/62835c475d69872d30689f284497853fe33fe1d6dd18f57346d13305861d/wordfreq-3.1.1-py3-none-any.whl",

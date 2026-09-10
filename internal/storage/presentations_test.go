@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,11 +25,11 @@ func TestPresentationHistoryRetainsEveryIssuanceAfterDeletionAndReopen(t *testin
 	now := time.Date(2026, 9, 6, 14, 0, 0, 123456789, time.FixedZone("local", 2*60*60))
 	item := savePresentationVocabulary(t, store, "owner", "meticulous", now.Add(-time.Hour))
 
-	first, err := store.NextLearningItem(ctx, "owner", now)
+	first, err := store.NextLearningItem(ctx, "owner", clockAt(now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.NextLearningItem(ctx, "owner", now)
+	second, err := store.NextLearningItem(ctx, "owner", clockAt(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestPresentationHistoryRetainsEveryIssuanceAfterDeletionAndReopen(t *testin
 	if err := store.DeleteVocabulary(ctx, "owner", item.ItemID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.NextLearningItem(ctx, "owner", now); !errors.Is(err, ErrNotFound) {
+	if _, err := store.NextLearningItem(ctx, "owner", clockAt(now)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("selection after deletion error = %v, want ErrNotFound", err)
 	}
 	if err := store.Close(); err != nil {
@@ -109,13 +110,13 @@ func TestPresentationInsertFailureDoesNotReturnASelection(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.NextLearningItem(ctx, "owner", now); err == nil || !strings.Contains(err.Error(), "presentation storage unavailable") {
+	if _, err := store.NextLearningItem(ctx, "owner", clockAt(now)); err == nil || !strings.Contains(err.Error(), "presentation storage unavailable") {
 		t.Fatalf("NextLearningItem() error = %v, want presentation persistence failure", err)
 	}
 	if _, err := store.sql.ExecContext(ctx, "DROP TRIGGER reject_presentation"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.NextLearningItem(ctx, "owner", now); err != nil {
+	if _, err := store.NextLearningItem(ctx, "owner", clockAt(now)); err != nil {
 		t.Fatalf("selection after storage recovery: %v", err)
 	}
 	var count int
@@ -143,7 +144,7 @@ func TestConcurrentPresentationsRespectRecentHistory(t *testing.T) {
 	var workers sync.WaitGroup
 	for range 4 {
 		workers.Go(func() {
-			candidate, err := store.NextLearningItem(ctx, "owner", now)
+			candidate, err := store.NextLearningItem(ctx, "owner", clockAt(now))
 			if err != nil {
 				failures <- err
 				return
@@ -234,7 +235,7 @@ func TestPresentationMigrationPreservesScheduleWithoutInventingHistory(t *testin
 	if count != 0 {
 		t.Fatalf("migration fabricated %d historical presentations", count)
 	}
-	selected, err := store.NextLearningItem(ctx, "owner", now)
+	selected, err := store.NextLearningItem(ctx, "owner", clockAt(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,4 +254,88 @@ func savePresentationVocabulary(t *testing.T, store *DB, ownerKey, term string, 
 		t.Fatal(err)
 	}
 	return item
+}
+
+func clockAt(now time.Time) func() time.Time {
+	return func() time.Time { return now }
+}
+
+func TestLearningSelectionObservesDueBoundaryAfterWriterWait(t *testing.T) {
+	store, before := reinforcementTestStore(t)
+	ctx := context.Background()
+	item := savePresentationVocabulary(t, store, "owner", "queued-clock", before)
+	due := before.Add(time.Second)
+	if _, err := store.sql.ExecContext(ctx,
+		"UPDATE learning_cards SET fsrs_state = 2, due_at = ? WHERE vocabulary_item_id = ?",
+		TimeString(due), item.ItemID); err != nil {
+		t.Fatal(err)
+	}
+	after := before.Add(2 * time.Second)
+	var selected LearningCandidate
+	afterQueuedWriter(t, store, before, after, func(clock func() time.Time) error {
+		var err error
+		selected, err = store.NextLearningItem(ctx, "owner", clock)
+		return err
+	})
+	var kind string
+	if err := store.sql.QueryRowContext(ctx,
+		"SELECT selection_kind FROM learning_presentations WHERE id = ?", selected.PresentationID).Scan(&kind); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "due" || !selected.ShownAt.Equal(after) {
+		t.Fatalf("queued selection used stale time: kind=%q shown=%s", kind, selected.ShownAt)
+	}
+}
+
+func TestReinforcementSelectionObservesCooldownExpiryAfterWriterWait(t *testing.T) {
+	store, before := reinforcementTestStore(t)
+	for index := range 4 {
+		item := saveReinforcementVocabulary(t, store, "queued-practice-"+string(rune('a'+index)), before)
+		if index == 0 {
+			seedReinforcementPresentation(t, store, item.ItemID, "cooling-down", before.Add(-6*time.Hour+time.Second))
+		}
+	}
+	var selected ReinforcementCandidate
+	afterQueuedWriter(t, store, before, before.Add(2*time.Second), func(clock func() time.Time) error {
+		var err error
+		selected, err = store.NextReinforcementItem(context.Background(), "owner", clock)
+		return err
+	})
+	if selected.EligibleWordCount != 4 || selected.SelectionProbability != 0.25 {
+		t.Fatalf("queued selection did not observe cooldown expiry: %#v", selected)
+	}
+}
+
+func afterQueuedWriter(t *testing.T, store *DB, before, after time.Time, operation func(func() time.Time) error) {
+	t.Helper()
+	tx, err := store.sql.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	waits := store.sql.Stats().WaitCount
+	var released atomic.Bool
+	completed := make(chan error, 1)
+	go func() {
+		completed <- operation(func() time.Time {
+			if released.Load() {
+				return after
+			}
+			return before
+		})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for store.sql.Stats().WaitCount == waits {
+		if time.Now().After(deadline) {
+			t.Fatal("operation did not queue for the occupied database connection")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	released.Store(true)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-completed; err != nil {
+		t.Fatal(err)
+	}
 }

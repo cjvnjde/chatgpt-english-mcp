@@ -17,12 +17,11 @@ import (
 const (
 	maximumReviewTokenRunes = 200
 	maximumCommentRunes     = 1000
-	fastReviewWindow        = time.Minute
 )
 
 type Store interface {
-	NextLearningItem(ctx context.Context, ownerKey string, now time.Time) (storage.LearningCandidate, error)
-	NextReinforcementItem(ctx context.Context, ownerKey string, now time.Time) (storage.ReinforcementCandidate, error)
+	NextLearningItem(ctx context.Context, ownerKey string, clock func() time.Time) (storage.LearningCandidate, error)
+	NextReinforcementItem(ctx context.Context, ownerKey string, clock func() time.Time) (storage.ReinforcementCandidate, error)
 	RecordReinforcementReview(ctx context.Context, input storage.RecordReviewInput) (storage.ReinforcementPractice, bool, error)
 	ReviewComments(ctx context.Context, ownerKey, vocabularyID string, includeAll bool) ([]storage.ReviewComment, error)
 	RecordReview(
@@ -73,7 +72,6 @@ type RecordResult struct {
 	NextReviewAt    string              `json:"nextReviewAt"`
 	Troublesome     bool                `json:"troublesome"`
 	EffectiveRating domain.ReviewRating `json:"effectiveRating"`
-	TimingBoost     bool                `json:"timingBoost"`
 }
 
 func NewService(store Store, ownerKey string) *Service {
@@ -86,8 +84,7 @@ func NewService(store Store, ownerKey string) *Service {
 }
 
 func (service *Service) Next(ctx context.Context, includeComments bool) (NextResult, error) {
-	now := service.now().UTC()
-	candidate, err := service.store.NextLearningItem(ctx, service.ownerKey, now)
+	candidate, err := service.store.NextLearningItem(ctx, service.ownerKey, service.now)
 	if errors.Is(err, storage.ErrNotFound) {
 		return NextResult{}, apperr.New(apperr.NotFound, "no active vocabulary is available for learning")
 	}
@@ -115,7 +112,7 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 		PersonalInterest: candidate.Vocabulary.PersonalInterest,
 		Definition:       definition,
 		Example:          example,
-		Reason:           selectionReason(candidate.Card, now),
+		Reason:           selectionReason(candidate.Card, candidate.ShownAt),
 		Troublesome:      isTroublesome(candidate.Card),
 	}
 	if len(comments) > 0 {
@@ -137,13 +134,12 @@ func (service *Service) Record(ctx context.Context, options RecordOptions) (Reco
 		return RecordResult{}, err
 	}
 
-	now := service.now().UTC()
 	attempt, duplicate, err := service.store.RecordReview(ctx, storage.RecordReviewInput{
 		OwnerKey:    service.ownerKey,
 		ReviewToken: options.ReviewToken,
 		Rating:      options.Rating,
 		Comment:     options.Comment,
-		Now:         now,
+		Now:         service.now,
 	}, service.schedule)
 	if errors.Is(err, storage.ErrNotFound) {
 		return RecordResult{}, apperr.New(apperr.NotFound, "the review token is invalid or no longer current")
@@ -163,7 +159,6 @@ func (service *Service) Record(ctx context.Context, options RecordOptions) (Reco
 		NextReviewAt:    storage.TimeString(attempt.After.DueAt),
 		Troublesome:     isTroublesome(attempt.After),
 		EffectiveRating: attempt.After.LastRating,
-		TimingBoost:     attempt.Rating == domain.ReviewRatingGood && attempt.After.LastRating == domain.ReviewRatingEasy,
 	}, nil
 }
 
@@ -187,25 +182,16 @@ func (service *Service) schedule(
 	card storage.LearningCard,
 	now time.Time,
 	rating domain.ReviewRating,
-	shownAt time.Time,
 ) (storage.LearningCard, float64, error) {
 	fsrsCard, err := toFSRSCard(card)
 	if err != nil {
 		return storage.LearningCard{}, 0, err
 	}
-	// End-to-end latency includes both model turns. Only a short interval is
-	// evidence; a long interval may simply mean the learner was away.
-	effectiveRating := rating
-	elapsed := now.Sub(shownAt)
-	if rating == domain.ReviewRatingGood && !shownAt.IsZero() && elapsed >= 0 && elapsed <= fastReviewWindow {
-		effectiveRating = domain.ReviewRatingEasy
-	}
-
 	previousRetrievability, err := service.scheduler.Retrievability(fsrsCard, now)
 	if err != nil {
 		return storage.LearningCard{}, 0, fmt.Errorf("calculate FSRS retrievability: %w", err)
 	}
-	result, err := service.scheduler.Next(fsrsCard, now, toFSRSRating(effectiveRating))
+	result, err := service.scheduler.Next(fsrsCard, now, toFSRSRating(rating))
 	if err != nil {
 		return storage.LearningCard{}, 0, fmt.Errorf("schedule FSRS review: %w", err)
 	}
@@ -216,7 +202,7 @@ func (service *Service) schedule(
 
 	next := fromFSRSCard(card, result.Card)
 	next.Retrievability = afterRetrievability
-	next.LastRating = effectiveRating
+	next.LastRating = rating
 	if rating == domain.ReviewRatingAgain {
 		next.ConsecutiveFailures = card.ConsecutiveFailures + 1
 	} else {
@@ -242,11 +228,15 @@ func tutoringContent(item domain.VocabularyItem) (definition string, example str
 	if item.Lookup == nil || definition != "" {
 		return definition, example
 	}
-	if matched := contextualDefinition(item); matched != nil {
-		definition = matched.Definition
-		if example == "" && len(matched.Examples) > 0 {
-			example = matched.Examples[0]
+	if matched, hasContext := contextualDefinition(item); hasContext {
+		if matched != nil {
+			definition = matched.Definition
+			if example == "" && len(matched.Examples) > 0 {
+				example = matched.Examples[0]
+			}
 		}
+		// Context without a unique match requires clarification, not an
+		// unrelated first dictionary definition.
 		return definition, example
 	}
 	for _, entry := range item.Lookup.Entries {
@@ -264,22 +254,35 @@ func tutoringContent(item domain.VocabularyItem) (definition string, example str
 	return definition, example
 }
 
-func contextualDefinition(item domain.VocabularyItem) *domain.DictionaryDefinition {
+func contextualDefinition(item domain.VocabularyItem) (*domain.DictionaryDefinition, bool) {
+	hasContext := strings.TrimSpace(item.Context) != "" || len(item.Tags)+len(item.Notes)+len(item.Examples) > 0
+	if !hasContext || item.Lookup == nil {
+		return nil, hasContext
+	}
 	contextParts := make([]string, 0, 1+len(item.Tags)+len(item.Notes)+len(item.Examples))
 	contextParts = append(contextParts, item.Context)
 	contextParts = append(contextParts, item.Tags...)
 	contextParts = append(contextParts, item.Notes...)
 	contextParts = append(contextParts, item.Examples...)
 	contextWords := wordSet(strings.Join(contextParts, " "))
-	if len(contextWords) == 0 || item.Lookup == nil {
-		return nil
+	for word := range strings.FieldsFuncSeq(item.NormalizedTerm, func(character rune) bool {
+		return character < 'a' || character > 'z'
+	}) {
+		delete(contextWords, word)
+	}
+	if len(contextWords) == 0 {
+		return nil, true
 	}
 	bestScore := 0
 	var best *domain.DictionaryDefinition
+	ambiguous := false
 	for entryIndex := range item.Lookup.Entries {
 		entry := &item.Lookup.Entries[entryIndex]
 		for definitionIndex := range entry.Definitions {
 			definition := &entry.Definitions[definitionIndex]
+			if strings.TrimSpace(definition.Definition) == "" {
+				continue
+			}
 			score := 0
 			for word := range wordSet(definition.Definition + " " + definition.Guideword) {
 				if _, found := contextWords[word]; found {
@@ -288,10 +291,16 @@ func contextualDefinition(item domain.VocabularyItem) *domain.DictionaryDefiniti
 			}
 			if score > bestScore {
 				bestScore, best = score, definition
+				ambiguous = false
+			} else if score > 0 && score == bestScore {
+				ambiguous = true
 			}
 		}
 	}
-	return best
+	if ambiguous {
+		return nil, true
+	}
+	return best, true
 }
 
 func wordSet(value string) map[string]struct{} {
@@ -300,9 +309,28 @@ func wordSet(value string) map[string]struct{} {
 	})
 	result := make(map[string]struct{}, len(words))
 	for _, word := range words {
-		if len(word) > 2 {
-			result[word] = struct{}{}
+		if len(word) <= 2 {
+			continue
 		}
+		// Function words identify sentence structure, not dictionary senses.
+		switch word {
+		case "about", "above", "after", "again", "against", "all", "also", "among",
+			"any", "are", "around", "because", "been", "before", "being", "below",
+			"beside", "between", "both", "but", "can", "could", "did", "does",
+			"doing", "done", "during", "each", "for", "from", "had", "has", "have",
+			"having", "her", "here", "hers", "herself", "him", "himself", "his",
+			"how", "into", "its", "itself", "just", "may", "might", "more", "most",
+			"must", "off", "once", "one", "only", "other", "our", "ours", "ourselves",
+			"out", "over", "own", "same", "shall", "she", "should", "since", "some",
+			"such", "than", "that", "the", "their", "theirs", "them", "themselves",
+			"then", "there", "these", "they", "this", "those", "through", "too",
+			"under", "until", "upon", "very", "was", "were", "what", "when",
+			"where", "whether", "which", "while", "who", "whom", "whose", "why",
+			"will", "with", "within", "would", "you", "your", "yours", "yourself",
+			"yourselves":
+			continue
+		}
+		result[word] = struct{}{}
 	}
 	return result
 }

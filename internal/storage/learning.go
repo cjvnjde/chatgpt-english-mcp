@@ -68,20 +68,20 @@ type RecordReviewInput struct {
 	ReviewToken string
 	Rating      domain.ReviewRating
 	Comment     string
-	Now         time.Time
+	Now         func() time.Time
 }
 
-// ScheduleReview receives a zero shownAt when presentation timing is unavailable or ambiguous.
-type ScheduleReview func(card LearningCard, now time.Time, rating domain.ReviewRating, shownAt time.Time) (LearningCard, float64, error)
+// ScheduleReview applies the submitted grade at the transaction's review time.
+type ScheduleReview func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error)
 
-func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, now time.Time) (LearningCandidate, error) {
+func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, clock func() time.Time) (LearningCandidate, error) {
 	transaction, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return LearningCandidate{}, fmt.Errorf("begin presentation transaction: %w", err)
 	}
 	defer transaction.Rollback()
 
-	shownAt := now.UTC()
+	shownAt := clock().UTC()
 	cards, recentSinceID, err := loadSelectionCards(ctx, transaction, ownerKey)
 	if err != nil {
 		return LearningCandidate{}, err
@@ -206,12 +206,8 @@ func (db *DB) RecordReview(
 		return ReviewAttempt{}, false, ErrArchived
 	}
 
-	now := input.Now.UTC()
-	shownAt, err := reviewPresentationTime(ctx, transaction, input.OwnerKey, card.CardID, input.ReviewToken)
-	if err != nil {
-		return ReviewAttempt{}, false, err
-	}
-	next, previousRetrievability, err := schedule(card, now, input.Rating, shownAt)
+	now := input.Now().UTC()
+	next, previousRetrievability, err := schedule(card, now, input.Rating)
 	if err != nil {
 		return ReviewAttempt{}, false, err
 	}
@@ -251,27 +247,6 @@ func (db *DB) RecordReview(
 	}
 
 	return attempt, false, nil
-}
-
-func reviewPresentationTime(ctx context.Context, transaction *sql.Tx, ownerKey, cardID, reviewToken string) (time.Time, error) {
-	var count int
-	var shownAt sql.NullString
-	err := transaction.QueryRowContext(ctx, `
-		SELECT COUNT(*), MIN(shown_at)
-		FROM (
-			SELECT shown_at FROM learning_presentations
-			WHERE owner_key = ? AND review_token = ? AND learning_card_id = ?
-			LIMIT 2
-		)
-	`, ownerKey, reviewToken, cardID).Scan(&count, &shownAt)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("read review presentation timing: %w", err)
-	}
-	if count != 1 {
-		return time.Time{}, nil
-	}
-
-	return parseStoredTime(shownAt.String, "review presentation date")
 }
 
 const learningCardColumns = `

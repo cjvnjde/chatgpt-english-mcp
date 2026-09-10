@@ -606,7 +606,7 @@ func TestVocabularyRevisionIgnoresNoOpAndPresentationWrites(t *testing.T) {
 	if err != nil || noOp.EditRevision != saved.EditRevision {
 		t.Fatalf("identical metadata invalidated revision: %#v, %v", noOp, err)
 	}
-	if _, err := store.NextLearningItem(ctx, "owner", now.Add(time.Minute)); err != nil {
+	if _, err := store.NextLearningItem(ctx, "owner", clockAt(now.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	tags := []string{"after presentation"}

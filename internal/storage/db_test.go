@@ -227,13 +227,10 @@ func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory
 	}
 
 	reviewedAt := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	attempt, duplicate, err := store.RecordReview(ctx, RecordReviewInput{
-		OwnerKey:    "owner",
+	attempt, duplicate, err := store.RecordReview(ctx, RecordReviewInput{OwnerKey: "owner",
 		ReviewToken: reviewToken,
 		Rating:      domain.ReviewRatingGood,
-		Comment:     "Needed a context clue.",
-		Now:         reviewedAt,
-	}, func(card LearningCard, now time.Time, rating domain.ReviewRating, shownAt time.Time) (LearningCard, float64, error) {
+		Comment:     "Needed a context clue.", Now: clockAt(reviewedAt)}, func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
 		card.DueAt = now.Add(24 * time.Hour)
 		card.Stability = 1
 		card.Difficulty = 5
@@ -292,10 +289,7 @@ func TestReviewTimingMigrationPreservesLegacyRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	attempt, duplicate, err := store.RecordReview(ctx, RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: "legacy-token", Rating: domain.ReviewRatingGood,
-		Now: time.Date(2026, 9, 7, 14, 0, 0, 0, time.UTC),
-	}, nil)
+	attempt, duplicate, err := store.RecordReview(ctx, RecordReviewInput{OwnerKey: "owner", ReviewToken: "legacy-token", Rating: domain.ReviewRatingGood, Now: clockAt(time.Date(2026, 9, 7, 14, 0, 0, 0, time.UTC))}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +385,7 @@ func TestNextLearningItemKeepsEligibleCardsAheadOfFutureAndIsolatesOwners(t *tes
 
 	eligible := map[string]bool{"troublesome": true, "due": true, "new": true}
 	for selection := range 5 {
-		selected, err := store.NextLearningItem(ctx, "owner", now)
+		selected, err := store.NextLearningItem(ctx, "owner", clockAt(now))
 		if err != nil {
 			t.Fatalf("NextLearningItem() error = %v", err)
 		}
@@ -421,7 +415,7 @@ func TestNextLearningItemKeepsEligibleCardsAheadOfFutureAndIsolatesOwners(t *tes
 			t.Fatalf("archive selected %q: %v", term, err)
 		}
 	}
-	if _, err := store.NextLearningItem(ctx, "owner", now); !errors.Is(err, ErrNotFound) {
+	if _, err := store.NextLearningItem(ctx, "owner", clockAt(now)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("NextLearningItem(empty) error = %v, want ErrNotFound", err)
 	}
 }

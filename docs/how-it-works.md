@@ -12,7 +12,7 @@ Diagrams use Mermaid fenced blocks; formulas use LaTeX math. View this document 
 - [Offline usefulness inference](#offline-usefulness-inference): evidence, hints, and classification.
 - [How the next item is selected](#how-the-next-item-is-selected): eligibility, cooldown, exact weights, probabilities, and examples.
 - [Learned-word reinforcement](#learned-word-reinforcement): comment-driven deep practice, personal interest, and the 25% word cap.
-- [How a review changes the schedule](#how-a-review-changes-the-schedule): timing, FSRS equations, and state transitions.
+- [How a review changes the schedule](#how-a-review-changes-the-schedule): submitted grades, FSRS equations, and state transitions.
 - [Content precedence during reviews](#content-precedence-during-reviews): how the selected item becomes a question.
 - [What affects what](#what-affects-what): direct influences, indirect influences, and things the algorithm ignores.
 - [Implementation map](#implementation-map): the source files behind the rules.
@@ -217,7 +217,7 @@ Cambridge definition `labels` can contain CEFR levels and usage information alre
 
 The commercial Linguatools collocation package is not bundled. It requires an actual licensed download; permission to use it privately does not provide the data.
 
-The runtime consumes bundled source-order ranks, not live usage counts or wordfreq Zipf scores. Equal-frequency entries can have different ranks because source ordering is retained. Source overlap, historical coverage, and term-level aggregation limit what “usefulness” can mean: this is not a calibrated probability, personal relevance model, or score for the learner's exact selected sense.
+The runtime consumes bundled standard-competition ranks, not live usage counts or wordfreq Zipf scores. Terms in the same wordfreq frequency bin or with the same FrequencyWords count share the first rank of that tied group; later groups count every original row. Normalization collisions retain the best group rank. Equal-frequency terms therefore cannot cross a usefulness boundary merely because of row ordering. Source overlap, historical coverage, and term-level aggregation still limit what “usefulness” can mean: this is not a calibrated probability, personal relevance model, or score for the learner's exact selected sense.
 
 #### Why saved hints and calculated results stay separate
 
@@ -260,7 +260,7 @@ Lookup and saving are independent. A term may be saved first, and a later succes
 ### Run one review
 
 1. Call `learning_next` with `{}`.
-2. If `reason` is `early`, end normal scheduled practice without asking a question or recording a review, unless the learner explicitly wants optional early practice. Otherwise use its definition, example, and latest problem comment to create one production-recall question without revealing `term`.
+2. If `reason` is `early`, end normal scheduled practice without asking a question or recording a review, unless the learner explicitly wants optional early practice. Otherwise use its definition, example, and latest problem comment to create one production-recall question without revealing `term`. If the returned context does not identify the meaning, clarify it rather than guessing a dictionary sense.
 3. Let the learner answer.
 4. Rate the answer and call `learning_review` with the unchanged `reviewToken`.
 5. Explain the answer and use the returned schedule only as learner-facing context when helpful.
@@ -272,13 +272,13 @@ Rating guidance:
 | `again` | The answer is absent or incorrect. |
 | `hard` | The answer is correct only after substantial effort or a strong hint. |
 | `good` | The answer is correct with ordinary effort and no material hint. |
-| `easy` | Recall is immediate and confident. |
+| `easy` | Recall is clearly effortless and confident. |
 
 The tutor should add a short review comment only when a concrete confusion, failed cue, or useful hint will improve the next attempt.
 
-The server also uses a **one-minute, positive-only timing signal**. For a `good` answer, if exactly one presentation exists for the owner, card, and pending review token and the review arrives within 60 seconds (inclusive), FSRS uses `easy`. The interval includes both AI turns, reading, and answering; it is supporting evidence rather than precise human recall time. Wrong or hinted answers must still be rated `again` or `hard` and never receive this boost.
+FSRS uses the **submitted grade unchanged**. A fast `good` remains `good`; only an explicit `easy` receives the corresponding schedule. Server issuance includes model processing and delivery, not a measurement of human recall time.
 
-Anything longer—including a morning question answered hours later—has no timing effect. Missing or repeated presentations and negative clock intervals also have no timing effect. The tutor must not treat delayed messages as hesitation or apply its own time-based adjustment. `learning_review` returns `effectiveRating` and `timingBoost`; retries use the original submitted rating and preserve the original result.
+Neither the server nor the tutor should use chat latency to promote or penalize a grade. `learning_review` returns `effectiveRating`, which equals the submitted grade for new reviews. Historical retries preserve the original effective grade and schedule; always retry with the original submitted rating and comment.
 
 ### Continue a lesson
 
@@ -528,7 +528,7 @@ The API therefore permits **early reviews** and still records an early presentat
 
 ### 7. Record the presentation and explain the result
 
-Selection, reading the chosen vocabulary/card, and inserting the presentation happen in one SQLite transaction. Presenting changes future cooldown/recency and creates possible review-timing evidence; it does not update stability, difficulty, due date, repetitions, or the pending review token.
+Selection, reading the chosen vocabulary/card, and inserting the presentation happen in one SQLite transaction. The selection clock is captured after acquiring that transaction and reused for due/cooldown decisions, persisted issuance, and the response reason. A queued request therefore observes a card becoming due while it waits. Presenting changes future cooldown/recency; it does not update stability, difficulty, due date, repetitions, or the pending review token.
 
 The response's `reason` is computed **after** choosing the card, in this order:
 
@@ -552,18 +552,18 @@ The presentation's stored `selection_kind` is coarser: only `new`, `due`, or `ea
 For meaning $i$, let $C_i$ count nonempty comments from both review channels, $D_i$ be reinforcement difficulty in $[0,4]$ (initially 0), and $R_i$ recover from 0.25 to 1 linearly over 24 hours since its last reinforcement presentation (1 if never presented). Its weight is:
 
 $$
-w_i = U_i I_i (1+\min(C_i,8))(1+D_i)R_i
+w_i = U_i I_i \left(1+\min(C_i,8)\frac{D_i}{4}\right)(1+D_i)R_i
 $$
 
-Both $U_i$ and $I_i$ use low/normal/high multipliers 0.5/1/2. All learned meanings retain positive weights. More comments are a bounded teaching-value heuristic, not proof of current inability; comment text is not analyzed automatically. Normal FSRS difficulty, failures, due dates, and learning cooldown are not inputs to this independent lottery.
+Both $U_i$ and $I_i$ use low/normal/high multipliers 0.5/1/2. All learned meanings retain positive weights. The bounded comment bonus scales with current difficulty: successful good/easy feedback reduces it, and it disappears at difficulty zero. Historical comments remain available for teaching; their count alone is not evidence of current inability. Comment text is not analyzed automatically. Normal FSRS difficulty, failures, due dates, and learning cooldown are not inputs to this independent lottery.
 
 Group by normalized term. Word weight is the **maximum** of its meaning weights, avoiding an automatic bonus merely for saving more senses. Assign proportional probability, cap any word exceeding 0.25, then redistribute remaining probability proportionally among uncapped words until all comply. Draw a word, then choose one of its learned meanings proportional to meaning weights. `selectionProbability` is the word's probability, summed across all its meanings, not the selected sense's probability.
 
-Before drawing, exclude a whole normalized word for **six hours** after the latest reinforcement issuance among its saved meanings, including archived siblings. This hard cooldown is independent of the 24-hour soft recency weight and the normal learning cooldown. It persists across restart, starts even if no answer follows, and ends at exactly issuance + six hours. Future timestamps remain cooling down until that boundary.
+Before drawing, exclude a whole normalized word for **six hours** after the latest reinforcement issuance among its saved meanings, including archived siblings. This hard cooldown is independent of the 24-hour soft recency weight and the normal learning cooldown. It persists across restart, starts even if no answer follows, and ends at exactly issuance + six hours. Eligibility uses the clock captured after acquiring the write transaction, so a cooldown that expires while a request waits is observed. Future timestamps remain cooling down until that boundary.
 
 At least four distinct learned words must remain outside cooldown. No learned vocabulary returns `NOT_FOUND`; fewer than four eligible words returns `INVALID_ARGUMENT` without issuing or extending anything. Neither cooldown nor the probability cap is relaxed. `eligibleWordCount` counts the post-cooldown pool. Exactly four eligible words forces uniform 25% probabilities; with more, weights influence the capped distribution. With four learned words total, each issuance pauses selection for six hours. The cap is per-call probability, not an empirical session quota; a word may repeat after expiry. Ordinary learning presentations and reinforcement feedback do not start or extend this cooldown.
 
-Each successful next call records a presentation and a fresh independent `reviewToken`. It changes reinforcement recency, not status or FSRS. `reinforcement_review` accepts that token with `again`, `hard`, `good`, or `easy` and an optional factual comment. Difficulty changes by +1/+0.5/−0.5/−1 respectively, clamped to 0–4; review count, last rating, and timestamp persist separately. This encourages practice after difficulties and reduces weight after independent success. No timing boost applies.
+Each successful next call records a presentation and a fresh independent `reviewToken`. It changes reinforcement recency, not status or FSRS. `reinforcement_review` accepts that token with `again`, `hard`, `good`, or `easy` and an optional factual comment. Difficulty changes by +1/+0.5/−0.5/−1 respectively, clamped to 0–4; review count, last rating, and timestamp persist separately. Independent success reduces both the difficulty multiplier and its share of the comment bonus without deleting history. Answer latency does not change the grade.
 
 Record the first genuine production attempt including usage; guided success cannot erase initial failure. An identical retry returns the original saved practice result, without another update; a conflicting payload fails. Normal and reinforcement tokens are not interchangeable. Status changes/deletion prevent new feedback, but already accepted review results remain idempotently retrievable. These operations never revise FSRS, usefulness, personal interest, or learner-managed status. Use `vocabulary_update` explicitly to express personal preferences.
 
@@ -579,7 +579,7 @@ sequenceDiagram
     participant Learner
     participant MCP as MCP service
     participant DB as SQLite transaction
-    participant Schedule as Timing rule and FSRS
+    participant Schedule as FSRS
     Tutor->>MCP: learning_next
     MCP->>DB: Select card, read content, append presentation
     DB-->>MCP: Commit item and pending token T
@@ -591,15 +591,15 @@ sequenceDiagram
     alt Matching attempt already exists
         DB-->>MCP: Original saved result, duplicate = true
     else First submission with a valid active-card token
-        DB->>Schedule: Card, server time, rating, unique presentation time if available
+        DB->>Schedule: Card, transaction review time, submitted rating
         Schedule-->>DB: Effective rating and updated scheduling state
         DB->>DB: Save immutable attempt, update card, rotate token, commit
         DB-->>MCP: New saved result, duplicate = false
     end
-    MCP-->>Tutor: nextReviewAt, effectiveRating, timingBoost, troublesome
+    MCP-->>Tutor: nextReviewAt, effectiveRating, troublesome
 ```
 
-The service trims the token and comment, validates the rating, and captures the current UTC time. The review transaction checks for an existing attempt **before** resolving the current card:
+The service trims the token and comment and validates the rating. After acquiring its write transaction, persistence checks for an existing attempt **before** resolving the current card or capturing the new review's UTC timestamp:
 
 - Same token, submitted rating, and trimmed comment: return the original saved result without scheduling again.
 - Same token with a different rating or comment: `INVALID_ARGUMENT`.
@@ -609,25 +609,13 @@ The service trims the token and comment, validates the rating, and captures the 
 
 Consequently, a valid duplicate can still return its original result after later reviews, archiving, or deletion. It returns that attempt's schedule, not the latest schedule. A failed transaction does not partially record a review.
 
-A due date is not an acceptance gate: a valid active-card token can be reviewed early. A presentation is also not a storage-level prerequisite, although the normal tutor workflow gets the token from `learning_next`; missing presentation history simply disables timing promotion.
+A due date is not an acceptance gate: a valid active-card token can be reviewed early. A presentation is also not a storage-level prerequisite, although the normal tutor workflow gets the token from `learning_next`. Neither missing nor repeated presentation history changes the grade.
 
 ### Submitted rating versus effective rating
 
-Map `again`, `hard`, `good`, and `easy` to grades 1, 2, 3, and 4. Let $g$ be the submitted grade, $n$ the number of matching owner/card/token presentations, and $\tau$ the interval from the unique presentation to the captured review time.
+Map `again`, `hard`, `good`, and `easy` to grades 1, 2, 3, and 4. For a new review, the effective grade is exactly the submitted grade. Presentation timestamps and counts do not influence it.
 
-$$
-g_{\mathrm{effective}} =
-\begin{cases}
-4 & g=3,\ n=1,\ 0\leq\tau\leq60\text{ seconds}\\
-g & \text{otherwise}
-\end{cases}
-$$
-
-Only `good` can be promoted, and only to `easy`. There is no penalty for a long delay. Exactly 60 seconds qualifies; more than 60 seconds, a negative interval, zero presentations, or two or more presentations does not.
-
-This is based on **server issuance**, including tutor processing and delivery, not a stopwatch on the learner's thought process. Asking for the same pending card twice makes timing ambiguous; the second issuance does not “restart” a unique-presentation timer.
-
-The attempt keeps both grades. Comment history uses the submitted grade; the card's last rating and FSRS use the effective grade. Retry with the **original submitted** grade, even when the returned effective grade is `easy`.
+The attempt retains both grades to preserve historical results. Some older attempts submitted as `good` were scheduled as `easy` under the previous timing policy; those attempts are immutable and retries still return their original grade and schedule. Comment history retains the submitted grade. Always retry with the **original submitted** grade and comment, not a historical effective grade.
 
 ### The FSRS model actually used here
 
@@ -714,7 +702,7 @@ stateDiagram-v2
 
 The initial hard step is $\operatorname{round}((1+10)/2)=6$ minutes, not 5 or 5.5.
 
-**Important consequence:** a first submitted `good` with exactly one presentation within one minute becomes effective `easy` and goes directly to an **8-day** review. Without that timing evidence, `good` takes the **10-minute** Learning step.
+**Important consequence:** a first submitted `good` always takes the **10-minute** Learning step with the current FSRS defaults, even when answered immediately. Only a submitted `easy` goes directly to an **8-day** review.
 
 **Subsequent step behavior:**
 
@@ -913,8 +901,8 @@ The server first takes a trimmed custom description, if present, and the first p
 
 1. **Explicit saved sense:** fill any missing definition/example from that sense, even without a linked lookup, then stop. Never borrow an example from a different sense.
 2. **No linked lookup, or a custom definition without an explicit sense:** return the personal content. A custom meaning does not borrow arbitrary dictionary examples.
-3. **No explicit sense or custom definition:** try lexical context matching against the linked definitions. If a match is found, use that definition and, if needed, its first example, then stop.
-4. **Fallback:** take the first dictionary definition in stored order and, if needed, its own first example. If that sense has no example, leave it absent instead of searching other senses.
+3. **Learner context without an explicit sense or custom definition:** try lexical matching against the linked definitions. Only a unique positive best match supplies a dictionary definition and its own first example. Ties or no content-bearing overlap leave dictionary content absent; preserve personal content and clarify rather than guessing.
+4. **No learner context:** take the first dictionary definition in stored order and, if needed, its own first example. If that sense has no example, leave it absent instead of searching other senses.
 
 Non-empty saved `context` is returned separately, including for context-only items with no dictionary content. It distinguishes the intended meaning but need not be a complete definition.
 
@@ -924,7 +912,7 @@ This is word overlap, not an embedding or language-model similarity score:
 
 - Context words come from **saved context + tags + notes + personal examples**.
 - Candidate words come from **definition text + guideword**.
-- Both sides are lowercased, split on non-ASCII-letter characters, reduced to unique words, and discard words of two letters or fewer.
+- Both sides are lowercased, split on non-ASCII-letter characters, reduced to unique words, and discard words of two letters or fewer and a fixed list of common function words such as `the`, `where`, and `which`. Words from the normalized target term are excluded from context evidence, including hyphen-separated components.
 
 For dictionary definition $d$:
 
@@ -934,7 +922,7 @@ $$
 \cap \operatorname{words}(d.\text{definition},d.\text{guideword})\right|
 $$
 
-Only a positive score can win. The largest overlap wins; ties keep the first definition in dictionary order. There is no stemming, semantic matching, or stop-word list beyond the length cutoff.
+Only a positive score can win. The largest overlap must be unique; tied best scores abstain instead of choosing dictionary order. Context containing only function words, the target spelling, or unrelated words also abstains. There is no stemming or semantic matching.
 
 For example, a `boating` context or tag can favor a definition containing “boating,” but does not automatically match “boat” or “sailing.” An explicit selected sense takes precedence over the heuristic.
 
@@ -959,10 +947,10 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 | Term spelling, bundled ranks, expression evidence | Indirectly through calculated usefulness; no separate raw-rank weight | No direct effect | Determine inference matches and votes |
 | Optional usefulness hint | Indirectly through effective category | No direct effect | Weight 2 in inference; not a forced override |
 | Consecutive failures and lapses | Bounded extra due-card weight; troublesome label | Not direct equation multipliers; rating/state update counters | No usefulness effect |
-| Latest presentation and recent event IDs | Global adaptive cooldown; new/mature-review recency weight; future exposure ordering | Only indirectly via review time and unique-presentation timing promotion | Issuance is not proof of human visibility |
-| Repeated `learning_next` calls | Change future selection history, even without an answer | Do not reschedule; repeated token presentations disable timing promotion | New presentation event each time |
+| Latest presentation and recent event IDs | Global adaptive cooldown; new/mature-review recency weight; future exposure ordering | No direct scheduling or grading effect | Issuance is not proof of human visibility |
+| Repeated `learning_next` calls | Change future selection history, even without an answer | Do not reschedule or change grades | New presentation event each time |
 | Rating | Indirectly through updated due/state/failures | Effective grade is a direct input | Server does not inspect answer text |
-| Answer latency | No separate speed-based selection score | Only the exact positive-only good-to-easy rule | Includes model/delivery time, not pure recall time |
+| Answer latency | No separate speed-based selection score | Does not change the grade; FSRS still measures elapsed time since the previous review | Includes model/delivery time, not pure recall time |
 | Tags, notes, personal examples | Not filters or weights for `learning_next` | No direct effect | Can choose a fallback definition by word overlap |
 | Custom description and selected sense | Do not change lottery weight | No direct effect | Control returned definition/example; sense identity gives an independent card |
 | Review comment text / `includeComments` | No selection effect | No direct effect | Feedback for the tutor, not automated scoring |
@@ -981,7 +969,7 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 - **A troublesome card does not always outrank everything.** Its due-card weight is larger but capped, and the usual pool/fallback rules still apply.
 - **Repeated spelling does not always mean a failed cooldown.** Different saved meanings have different cards; cooldown is card-based.
 - **Skipping an answer is not a failed review.** Presentation affects selection history, but only a submitted review updates FSRS and failure counters.
-- **Waiting hours is not graded as hesitation.** Timing no longer supplies a boost; the answer-quality rating still controls scheduling.
+- **Waiting hours is not graded as hesitation.** Answer latency never changes the submitted grade; answer quality controls scheduling.
 - **Completing all due cards does not make `learning_next` empty.** It can return new items or early reviews until the tutor/learner stops.
 - **Learning-step priority and the fixed new/review mix are not lesson quotas.** Selectable due learning steps pause new introductions and mature reviews; otherwise both remaining pools get a 20/80 split independent of recency. There is no backend daily quota, target session length, or guarantee that all due cards will be covered.
 
@@ -989,7 +977,7 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 
 Tool callers can save/archive items, update usefulness hints, personal interest and metadata, submit scheduled or reinforcement ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
 
-Learning-step priority, the fixed 20:80 new/mature-review mix, adaptive last-three/30-minute cooldown, 24-hour new/mature recency recovery, 10-minute learning urgency denominator, weight caps, usefulness thresholds, and one-minute timing window are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
+Learning-step priority, the fixed 20:80 new/mature-review mix, adaptive last-three/30-minute cooldown, 24-hour new/mature recency recovery, 10-minute learning urgency denominator, weight caps, and usefulness thresholds are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
 
 ## Implementation map
 
@@ -1006,9 +994,9 @@ These are the source-of-truth entry points for checking or changing the document
 | Source preparation and limitations | [`build_usefulness.py`](../scripts/build_usefulness.py), [`build_expressions.py`](../scripts/build_expressions.py), [rank manifest](../internal/usefulness/assets/manifest.json), [expression manifest](../internal/usefulness/assets/expressions-manifest.json) |
 | Revision-gated usefulness backfill | [`refreshUsefulness`](../internal/storage/usefulness_refresh.go) |
 | Candidate pools, cooldown, lottery, weights, fallbacks | [`loadSelectionCards`, `selectLearningCard`, `selectionWeight`, `presentedBefore`](../internal/storage/selection.go) |
-| Presentation transaction and review idempotency | [`NextLearningItem`, `RecordReview`, `reviewPresentationTime`](../internal/storage/learning.go) |
+| Presentation transaction and review idempotency | [`NextLearningItem`, `RecordReview`](../internal/storage/learning.go) |
 | Learned-word capped lottery and independent feedback | [`internal/storage/reinforcement.go`](../internal/storage/reinforcement.go), [`internal/learning/reinforcement.go`](../internal/learning/reinforcement.go) |
-| Timing promotion, FSRS adapter, reasons, question content | [`Service.schedule`, `selectionReason`, `tutoringContent`, `contextualDefinition`](../internal/learning/service.go) |
+| Submitted-grade FSRS adapter, reasons, question content | [`Service.schedule`, `selectionReason`, `tutoringContent`, `contextualDefinition`](../internal/learning/service.go) |
 | Actual FSRS equations and state machine | Dependency [`arithmetic.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/arithmetic.go), [`scheduler_basic.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/scheduler_basic.go) |
 | FSRS defaults and elapsed-time helpers | Dependency [`parameters.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/parameters.go), [`weights.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/weights.go), [`steps.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/steps.go), [`fsrs.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/fsrs.go) |
 

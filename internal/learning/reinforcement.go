@@ -39,7 +39,7 @@ type ReinforcementReviewResult struct {
 }
 
 func (service *Service) ReinforcementNext(ctx context.Context) (ReinforcementNextResult, error) {
-	candidate, err := service.store.NextReinforcementItem(ctx, service.ownerKey, service.now().UTC())
+	candidate, err := service.store.NextReinforcementItem(ctx, service.ownerKey, service.now)
 	if errors.Is(err, storage.ErrNotFound) {
 		return ReinforcementNextResult{}, apperr.New(apperr.NotFound, "no learned vocabulary is available for reinforcement")
 	}
@@ -81,7 +81,7 @@ func (service *Service) ReinforcementReview(ctx context.Context, options RecordO
 		ReviewToken: options.ReviewToken,
 		Rating:      options.Rating,
 		Comment:     options.Comment,
-		Now:         service.now().UTC(),
+		Now:         service.now,
 	})
 	if errors.Is(err, storage.ErrNotFound) {
 		return ReinforcementReviewResult{}, apperr.New(apperr.NotFound, "the reinforcement review token is invalid or its vocabulary was deleted")

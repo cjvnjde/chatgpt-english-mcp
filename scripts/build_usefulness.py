@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Build-only dependency: uv run --no-project --with msgpack scripts/build_usefulness.py
+# Build-only: uv run --no-project --with-requirements .github/requirements-builders.txt scripts/build_usefulness.py
 # Inputs are pinned by release/commit and SHA-256; no app Python dependencies.
 import gzip
 import hashlib
@@ -65,8 +65,9 @@ def wordfreq_ranks(wheel):
     for words in bins[1:]:
         if not isinstance(words, list):
             raise TypeError("Expected a wordfreq word list")
-        # Preserve stored ordering within tied frequency bins, just as
-        # wordfreq.iter_wordlist does. Never invoke multiword frequency APIs.
+        # Standard competition ranking: equal-frequency terms share the first
+        # position of their bin; later groups still count every original row.
+        group_rank = count + 1
         for word in words:
             if not isinstance(word, str):
                 raise TypeError(f"Expected wordfreq text, got {word!r}")
@@ -74,7 +75,7 @@ def wordfreq_ranks(wheel):
             term = normalize(word)
             if not term:
                 raise ValueError("Empty normalized wordfreq term")
-            ranks.setdefault(term, count)
+            ranks.setdefault(term, group_rank)
     if not count:
         raise ValueError("Wordfreq source supplied no terms")
     return ranks, count, hashlib.sha256(stored).hexdigest()
@@ -83,6 +84,7 @@ def wordfreq_ranks(wheel):
 def frequencywords_ranks(content):
     ranks = {}
     previous_count = None
+    group_rank = 0
     count = 0
     # Only actual line endings delimit records. Other Unicode whitespace can
     # occur inside a term and must reach normalize rather than split a row.
@@ -93,12 +95,14 @@ def frequencywords_ranks(content):
             previous_count is not None and occurrences > previous_count
         ):
             raise ValueError(f"FrequencyWords not descending at row {count}")
+        if occurrences != previous_count:
+            group_rank = count
         previous_count = occurrences
         term = normalize(word)
         if not term:
             raise ValueError(f"Empty normalized FrequencyWords term at row {count}")
-        # Equal counts retain upstream row order; normalization keeps best rank.
-        ranks.setdefault(term, count)
+        # Equal counts share their group's first rank, independent of row order.
+        ranks.setdefault(term, group_rank)
     if not count:
         raise ValueError("FrequencyWords source supplied no terms")
     return ranks, count
@@ -146,7 +150,8 @@ def main():
     )
     manifest = {
         "format": "little-endian uint32 count; count records of text offset, wordfreq rank, FrequencyWords rank; UTF-8 text",
-        "normalization": "domain.NormalizeTerm: simple lowercase, whitespace collapse, curly quote folding; best original rank on collisions",
+        "normalization": "domain.NormalizeTerm: simple lowercase, whitespace collapse, curly quote folding; best tied-group rank on collisions",
+        "ranking": "standard competition ranking: equal-frequency entries share the first position of their group",
         "dataset_sha256": digest,
         "terms": term_count,
         "uncompressed_bytes": len(encoded),

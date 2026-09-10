@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -82,8 +83,9 @@ func TestReinforcementProbabilityUsesInterestUsefulnessFeedbackAndRecency(t *tes
 		{"high usefulness", reinforcementSense{usefulness: domain.UsefulnessHigh}, 2},
 		{"low interest remains reachable", reinforcementSense{interest: domain.PersonalInterestLow}, 0.5},
 		{"high interest", reinforcementSense{interest: domain.PersonalInterestHigh}, 2},
-		{"comments", reinforcementSense{commentCount: 3}, 4},
-		{"comments saturate", reinforcementSense{commentCount: 100}, 9},
+		{"resolved comments do not add priority", reinforcementSense{commentCount: 3}, 1},
+		{"comments track unresolved difficulty", reinforcementSense{commentCount: 3, practice: ReinforcementPractice{Difficulty: 2}}, 7.5},
+		{"unresolved comments saturate", reinforcementSense{commentCount: 100, practice: ReinforcementPractice{Difficulty: 1}}, 6},
 		{"independent difficulty", reinforcementSense{practice: ReinforcementPractice{Difficulty: 4}}, 5},
 		{"just shown excluded", reinforcementSense{lastShownAt: now}, 0},
 		{"cooldown expired", reinforcementSense{lastShownAt: now.Add(-6 * time.Hour)}, 0.4375},
@@ -115,10 +117,47 @@ func TestReinforcementProbabilityUsesInterestUsefulnessFeedbackAndRecency(t *tes
 	}
 }
 
+func TestReinforcementSuccessRemovesCommentPriorityWithoutDeletingHistory(t *testing.T) {
+	store, now := reinforcementTestStore(t)
+	ctx := context.Background()
+	target := saveReinforcementVocabulary(t, store, "practice-target", now)
+	for index := range 7 {
+		saveReinforcementVocabulary(t, store, fmt.Sprintf("practice-peer-%d", index), now)
+	}
+	for index := range 16 {
+		rating := domain.ReviewRatingAgain
+		if index >= 8 {
+			rating = domain.ReviewRatingGood
+		}
+		at := now.Add(time.Duration(index-72) * time.Hour)
+		token := fmt.Sprintf("resolved-practice-%d", index)
+		seedReinforcementPresentation(t, store, target.ItemID, token, at)
+		if _, _, err := store.RecordReinforcementReview(ctx, RecordReviewInput{
+			OwnerKey: "owner", ReviewToken: token, Rating: rating,
+			Comment: fmt.Sprintf("Teaching context %d", index), Now: clockAt(at.Add(time.Minute)),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, err := store.NextReinforcementItem(ctx, "owner", clockAt(now))
+	if err != nil || selected.SelectionProbability != 1.0/8 {
+		t.Fatalf("resolved vocabulary must have equal probability regardless of comment history: %#v, %v", selected, err)
+	}
+	tx, err := store.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	comments, err := reinforcementComments(ctx, tx, "owner", target.ItemID)
+	if err != nil || len(comments) != 16 || comments[0].Comment != "Teaching context 15" {
+		t.Fatalf("resolution must retain the full teaching history: %#v, %v", comments, err)
+	}
+}
+
 func TestReinforcementShortageCountsDistinctLearnedWordsWithoutIssuing(t *testing.T) {
 	store, now := reinforcementTestStore(t)
 	ctx := context.Background()
-	if _, err := store.NextReinforcementItem(ctx, "owner", now); !errors.Is(err, ErrNotFound) {
+	if _, err := store.NextReinforcementItem(ctx, "owner", clockAt(now)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("empty selection error = %v", err)
 	}
 	for _, input := range []VocabularyCreate{
@@ -136,13 +175,13 @@ func TestReinforcementShortageCountsDistinctLearnedWordsWithoutIssuing(t *testin
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.NextReinforcementItem(ctx, "owner", now); !errors.Is(err, ErrReinforcementShortage) {
+	if _, err := store.NextReinforcementItem(ctx, "owner", clockAt(now)); !errors.Is(err, ErrReinforcementShortage) {
 		t.Fatalf("three distinct learned words error = %v", err)
 	}
 	assertReinforcementRowCount(t, store, "reinforcement_presentations", 0)
 	assertReinforcementRowCount(t, store, "reinforcement_practice", 0)
 	saveReinforcementVocabulary(t, store, "eager", now)
-	candidate, err := store.NextReinforcementItem(ctx, "owner", now)
+	candidate, err := store.NextReinforcementItem(ctx, "owner", clockAt(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,9 +212,7 @@ func TestReinforcementFeedbackIsIndependentImmutableAndDurable(t *testing.T) {
 	} {
 		token := fmt.Sprintf("practice-%d", index)
 		seedReinforcementPresentation(t, store, item.ItemID, token, now)
-		practice, duplicate, err := store.RecordReinforcementReview(ctx, RecordReviewInput{
-			OwnerKey: "owner", ReviewToken: token, Rating: test.rating, Comment: "Keep every comment", Now: now.Add(time.Duration(index) * time.Nanosecond),
-		})
+		practice, duplicate, err := store.RecordReinforcementReview(ctx, RecordReviewInput{OwnerKey: "owner", ReviewToken: token, Rating: test.rating, Comment: "Keep every comment", Now: clockAt(now.Add(time.Duration(index) * time.Nanosecond))})
 		if err != nil || duplicate || practice.Difficulty != test.difficulty || practice.ReviewCount != index+1 || practice.LastRating != test.rating {
 			t.Fatalf("review %d: practice=%#v duplicate=%t error=%v", index, practice, duplicate, err)
 		}
@@ -183,7 +220,7 @@ func TestReinforcementFeedbackIsIndependentImmutableAndDurable(t *testing.T) {
 			first = practice
 		}
 	}
-	retry := RecordReviewInput{OwnerKey: "owner", ReviewToken: "practice-0", Rating: domain.ReviewRatingAgain, Comment: "Keep every comment", Now: now.Add(24 * time.Hour)}
+	retry := RecordReviewInput{OwnerKey: "owner", ReviewToken: "practice-0", Rating: domain.ReviewRatingAgain, Comment: "Keep every comment", Now: clockAt(now.Add(24 * time.Hour))}
 	practice, duplicate, err := store.RecordReinforcementReview(ctx, retry)
 	if err != nil || !duplicate || practice != first {
 		t.Fatalf("retry must replay original result, not current practice: %#v %t %v", practice, duplicate, err)
@@ -227,7 +264,7 @@ func TestReinforcementPendingTokensCheckOwnerStatusAndDeletion(t *testing.T) {
 			ctx := context.Background()
 			item := saveReinforcementVocabulary(t, store, "bank", now)
 			seedReinforcementPresentation(t, store, item.ItemID, "pending", now)
-			input := RecordReviewInput{OwnerKey: "other", ReviewToken: "pending", Rating: domain.ReviewRatingGood, Now: now}
+			input := RecordReviewInput{OwnerKey: "other", ReviewToken: "pending", Rating: domain.ReviewRatingGood, Now: clockAt(now)}
 			if _, _, err := store.RecordReinforcementReview(ctx, input); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("cross-owner review error = %v", err)
 			}
@@ -259,14 +296,14 @@ func TestReinforcementTransactionsRollbackIssuanceAndReview(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'practice unavailable'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.NextReinforcementItem(ctx, "owner", now); err == nil {
+	if _, err := store.NextReinforcementItem(ctx, "owner", clockAt(now)); err == nil {
 		t.Fatal("expected failed issuance")
 	}
 	assertReinforcementRowCount(t, store, "reinforcement_presentations", 0)
 	if _, err := store.sql.ExecContext(ctx, "DROP TRIGGER reject_practice_insert"); err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := store.NextReinforcementItem(ctx, "owner", now)
+	candidate, err := store.NextReinforcementItem(ctx, "owner", clockAt(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +311,7 @@ func TestReinforcementTransactionsRollbackIssuanceAndReview(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'practice unavailable'); END`); err != nil {
 		t.Fatal(err)
 	}
-	input := RecordReviewInput{OwnerKey: "owner", ReviewToken: candidate.ReviewToken, Rating: domain.ReviewRatingHard, Now: now}
+	input := RecordReviewInput{OwnerKey: "owner", ReviewToken: candidate.ReviewToken, Rating: domain.ReviewRatingHard, Now: clockAt(now)}
 	if _, _, err := store.RecordReinforcementReview(ctx, input); err == nil {
 		t.Fatal("expected failed review")
 	}
@@ -332,12 +369,12 @@ func TestReinforcementCooldownExcludesWordsUntilExactExpiryAfterReopen(t *testin
 	}
 	store = reopened
 	for _, at := range []time.Time{now.Add(-time.Hour), now.Add(30 * time.Minute), latest.Add(6*time.Hour - time.Nanosecond)} {
-		if _, err := store.NextReinforcementItem(ctx, "owner", at); !errors.Is(err, ErrReinforcementShortage) {
+		if _, err := store.NextReinforcementItem(ctx, "owner", clockAt(at)); !errors.Is(err, ErrReinforcementShortage) {
 			t.Fatalf("selection before expiry at %s: %v", at, err)
 		}
 	}
 	assertReinforcementRowCount(t, store, "reinforcement_presentations", 2)
-	candidate, err := store.NextReinforcementItem(ctx, "owner", latest.Add(6*time.Hour))
+	candidate, err := store.NextReinforcementItem(ctx, "owner", clockAt(latest.Add(6*time.Hour)))
 	if err != nil || candidate.EligibleWordCount != 4 || candidate.SelectionProbability != 0.25 {
 		t.Fatalf("exact expiry must restore four eligible words: %#v, %v", candidate, err)
 	}
@@ -357,7 +394,7 @@ func TestReinforcementCooldownPreservesVarietyAndCapWithoutRelaxation(t *testing
 	}
 	seen := make(map[string]bool)
 	for index := range 4 {
-		candidate, err := store.NextReinforcementItem(ctx, "owner", now)
+		candidate, err := store.NextReinforcementItem(ctx, "owner", clockAt(now))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -367,7 +404,7 @@ func TestReinforcementCooldownPreservesVarietyAndCapWithoutRelaxation(t *testing
 		}
 		seen[term] = true
 	}
-	if _, err := store.NextReinforcementItem(ctx, "owner", now.Add(5*time.Hour)); !errors.Is(err, ErrReinforcementShortage) {
+	if _, err := store.NextReinforcementItem(ctx, "owner", clockAt(now.Add(5*time.Hour))); !errors.Is(err, ErrReinforcementShortage) {
 		t.Fatalf("must pause rather than relax cooldown or cap: %v", err)
 	}
 	assertReinforcementRowCount(t, store, "reinforcement_presentations", 4)
@@ -416,14 +453,12 @@ func TestReinforcementCombinesCommentEvidenceAndRetainsItAfterReopen(t *testing.
 	t.Cleanup(func() { _ = store.Close() })
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	item := saveReinforcementVocabulary(t, store, "bank", now)
-	normal, err := store.NextLearningItem(ctx, "owner", now)
+	normal, err := store.NextLearningItem(ctx, "owner", clockAt(now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = store.RecordReview(ctx, RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: normal.Card.ReviewToken,
-		Rating: domain.ReviewRatingHard, Comment: "Ordinary evidence", Now: now,
-	}, func(card LearningCard, now time.Time, rating domain.ReviewRating, shownAt time.Time) (LearningCard, float64, error) {
+	_, _, err = store.RecordReview(ctx, RecordReviewInput{OwnerKey: "owner", ReviewToken: normal.Card.ReviewToken,
+		Rating: domain.ReviewRatingHard, Comment: "Ordinary evidence", Now: clockAt(now)}, func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
 		card.LastRating = rating
 		card.LastReviewAt = now
 		return card, 0, nil
@@ -432,18 +467,14 @@ func TestReinforcementCombinesCommentEvidenceAndRetainsItAfterReopen(t *testing.
 		t.Fatal(err)
 	}
 	seedReinforcementPresentation(t, store, item.ItemID, "comment-token", now)
-	input := RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: "comment-token", Rating: domain.ReviewRatingAgain,
-		Comment: "Reinforcement evidence", Now: now.Add(time.Nanosecond),
-	}
+	input := RecordReviewInput{OwnerKey: "owner", ReviewToken: "comment-token", Rating: domain.ReviewRatingAgain,
+		Comment: "Reinforcement evidence", Now: clockAt(now.Add(time.Nanosecond))}
 	accepted, _, err := store.RecordReinforcementReview(ctx, input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	seedReinforcementPresentation(t, store, item.ItemID, "empty-token", now)
-	if _, _, err := store.RecordReinforcementReview(ctx, RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: "empty-token", Rating: domain.ReviewRatingGood, Now: now.Add(2 * time.Nanosecond),
-	}); err != nil {
+	if _, _, err := store.RecordReinforcementReview(ctx, RecordReviewInput{OwnerKey: "owner", ReviewToken: "empty-token", Rating: domain.ReviewRatingGood, Now: clockAt(now.Add(2 * time.Nanosecond))}); err != nil {
 		t.Fatal(err)
 	}
 	transaction, err := store.sql.BeginTx(ctx, nil)

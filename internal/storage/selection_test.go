@@ -555,7 +555,7 @@ func TestNextLearningItemRotatesEntireFuturePoolBeforeRepeating(t *testing.T) {
 
 	// Keep scheduling and wall time fixed: only presentation order advances.
 	for turn := range 2 * poolSize {
-		selected, err := store.NextLearningItem(ctx, "owner", now)
+		selected, err := store.NextLearningItem(ctx, "owner", clockAt(now))
 		if err != nil {
 			t.Fatal(err)
 		}

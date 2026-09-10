@@ -34,17 +34,14 @@ func TestConcurrentReviewHandlesKeepOneImmutableAttempt(t *testing.T) {
 	}
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	savePresentationVocabulary(t, first, "owner", "resilient", now)
-	candidate, err := first.NextLearningItem(ctx, "owner", now)
+	candidate, err := first.NextLearningItem(ctx, "owner", clockAt(now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: candidate.Card.ReviewToken,
-		Rating: domain.ReviewRatingGood, Comment: "Remembered independently.", Now: now.Add(time.Minute),
-	}
+	input := RecordReviewInput{OwnerKey: "owner", ReviewToken: candidate.Card.ReviewToken,
+		Rating: domain.ReviewRatingGood, Comment: "Remembered independently.", Now: clockAt(now.Add(time.Minute))}
 	var competingErr error
-	attempt, duplicate, err := first.RecordReview(ctx, input, func(card LearningCard, now time.Time, rating domain.ReviewRating, shownAt time.Time) (LearningCard, float64, error) {
-		// Read-only snapshots must remain usable while a review is in flight.
+	attempt, duplicate, err := first.RecordReview(ctx, input, func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) { // Read-only snapshots must remain usable while a review is in flight.
 		reader, err := second.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return LearningCard{}, 0, err
@@ -59,7 +56,7 @@ func TestConcurrentReviewHandlesKeepOneImmutableAttempt(t *testing.T) {
 			return LearningCard{}, 0, rollbackErr
 		}
 		_, _, competingErr = second.RecordReview(ctx, input, coreStorageReviewSchedule)
-		return coreStorageReviewSchedule(card, now, rating, shownAt)
+		return coreStorageReviewSchedule(card, now, rating)
 	})
 	if err != nil || duplicate {
 		t.Fatalf("first in-flight review failed: duplicate=%t error=%v", duplicate, err)
@@ -112,10 +109,8 @@ func TestContextSenseMigrationPreservesIdentityAndLearningHistory(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewInput := RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: initialCard.ReviewToken,
-		Rating: domain.ReviewRatingGood, Comment: "A useful river context.", Now: now.Add(time.Minute),
-	}
+	reviewInput := RecordReviewInput{OwnerKey: "owner", ReviewToken: initialCard.ReviewToken,
+		Rating: domain.ReviewRatingGood, Comment: "A useful river context.", Now: clockAt(now.Add(time.Minute))}
 	attempt, _, err := oldStore.RecordReview(ctx, reviewInput, coreStorageReviewSchedule)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +215,7 @@ func TestContextSenseMigrationConflictRollsBackWithoutLosingVocabulary(t *testin
 	}
 }
 
-func coreStorageReviewSchedule(card LearningCard, now time.Time, rating domain.ReviewRating, _ time.Time) (LearningCard, float64, error) {
+func coreStorageReviewSchedule(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
 	card.DueAt = now.Add(24 * time.Hour)
 	card.Stability = 1
 	card.Difficulty = 5

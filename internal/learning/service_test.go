@@ -11,6 +11,7 @@ import (
 	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/domain"
 	"english-learning-mcp/internal/storage"
+	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
 )
 
 func TestNextReturnsOneCompactNewItemThenClosestFutureReview(t *testing.T) {
@@ -117,91 +118,75 @@ func TestRecordSupportsAllRatingsWithFSRSScheduling(t *testing.T) {
 	}
 }
 
-func TestReviewTimingOnlyBoostsGoodAnswersWithinOneMinute(t *testing.T) {
+func TestGoodReviewPreservesGradeAcrossPresentationTiming(t *testing.T) {
 	start := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
-		name      string
-		elapsed   time.Duration
-		rating    domain.ReviewRating
-		repeated  bool
-		effective domain.ReviewRating
+		name     string
+		elapsed  time.Duration
+		repeated bool
 	}{
-		{name: "one minute inclusive", elapsed: time.Minute, rating: domain.ReviewRatingGood, effective: domain.ReviewRatingEasy},
-		{name: "just outside window", elapsed: time.Minute + time.Nanosecond, rating: domain.ReviewRatingGood, effective: domain.ReviewRatingGood},
-		{name: "morning prompt answered hours later", elapsed: 4 * time.Hour, rating: domain.ReviewRatingGood, effective: domain.ReviewRatingGood},
-		{name: "clock moved backwards", elapsed: -time.Nanosecond, rating: domain.ReviewRatingGood, effective: domain.ReviewRatingGood},
-		{name: "fast wrong answer", elapsed: 30 * time.Second, rating: domain.ReviewRatingAgain, effective: domain.ReviewRatingAgain},
-		{name: "fast hinted answer", elapsed: 30 * time.Second, rating: domain.ReviewRatingHard, effective: domain.ReviewRatingHard},
-		{name: "already easy", elapsed: 30 * time.Second, rating: domain.ReviewRatingEasy, effective: domain.ReviewRatingEasy},
-		{name: "ambiguous repeated presentation", elapsed: 30 * time.Second, rating: domain.ReviewRatingGood, repeated: true, effective: domain.ReviewRatingGood},
+		{"fast answer", 59 * time.Second, false},
+		{"slower answer", 61 * time.Second, false},
+		{"repeated presentation", 30 * time.Second, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, service := newTestService(t)
 			now := start
 			service.now = func() time.Time { return now }
-			saveVocabulary(t, store, "meticulous", start.Add(-time.Hour), domain.LearningStatusNew)
+			createdAt := start.Add(-time.Hour)
+			saveVocabulary(t, store, "meticulous", createdAt, domain.LearningStatusNew)
 			next := nextWord(t, service, false)
 			if test.repeated {
 				now = start.Add(20 * time.Second)
 				nextWord(t, service, false)
 			}
 			now = start.Add(test.elapsed)
-			result := recordReview(t, service, next.ReviewToken, test.rating, "")
-			wantBoost := test.effective != test.rating
-			if result.EffectiveRating != test.effective || result.TimingBoost != wantBoost {
-				t.Fatalf("Record() = %#v, want rating %s and timing boost %t", result, test.effective, wantBoost)
+			result := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "")
+			expected, err := fsrs.NewFSRS(fsrs.DefaultParam()).Next(fsrs.Card{Due: createdAt}, now, fsrs.Good)
+			if err != nil {
+				t.Fatal(err)
 			}
-
-			// Compare the actual schedule with a normally graded review at the
-			// same instant, outside the timing window.
-			referenceStore, reference := newTestService(t)
-			referenceTime := start.Add(-2 * time.Minute)
-			reference.now = func() time.Time { return referenceTime }
-			saveVocabulary(t, referenceStore, "meticulous", start.Add(-time.Hour), domain.LearningStatusNew)
-			referenceNext := nextWord(t, reference, false)
-			referenceTime = now
-			expected := recordReview(t, reference, referenceNext.ReviewToken, test.effective, "")
-			if result.NextReviewAt != expected.NextReviewAt || result.Troublesome != expected.Troublesome {
-				t.Fatalf("schedule = %#v, want equivalent to a %s review: %#v", result, test.effective, expected)
+			if result.EffectiveRating != domain.ReviewRatingGood || result.NextReviewAt != storage.TimeString(expected.Card.Due) {
+				t.Fatalf("answer timing changed the submitted grade's schedule: %#v, want due %s", result, expected.Card.Due)
 			}
 		})
 	}
 }
 
-func TestTimingBoostSurvivesRetryWithoutChangingSubmittedRating(t *testing.T) {
+func TestHistoricalEffectiveRatingSurvivesRetryWithoutRegrading(t *testing.T) {
 	store, service := newTestService(t)
 	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 	saveVocabulary(t, store, "meticulous", now.Add(-time.Hour), domain.LearningStatusNew)
 	next := nextWord(t, service, false)
 	now = now.Add(45 * time.Second)
-	result := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "Clear distinction.")
-	if !result.TimingBoost || result.EffectiveRating != domain.ReviewRatingEasy {
-		t.Fatalf("fast correct review = %#v", result)
+	// Simulate an immutable review accepted by the previous timing policy.
+	previous, _, err := store.RecordReview(context.Background(), storage.RecordReviewInput{
+		OwnerKey: "owner", ReviewToken: next.ReviewToken, Rating: domain.ReviewRatingGood,
+		Comment: "Clear distinction.", Now: service.now,
+	}, func(card storage.LearningCard, at time.Time, _ domain.ReviewRating) (storage.LearningCard, float64, error) {
+		return service.schedule(card, at, domain.ReviewRatingEasy)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-
 	service = NewService(store, "owner")
 	now = now.Add(4 * time.Hour)
 	service.now = func() time.Time { return now }
 	duplicate := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "Clear distinction.")
-	expected := result
-	expected.Duplicate = true
-	if duplicate != expected {
-		t.Fatalf("delayed retry = %#v, want original result %#v", duplicate, expected)
+	if !duplicate.Duplicate || duplicate.EffectiveRating != domain.ReviewRatingEasy || duplicate.NextReviewAt != storage.TimeString(previous.After.DueAt) {
+		t.Fatalf("historical retry must preserve its original grade and schedule: %#v", duplicate)
 	}
-	_, err := service.Record(context.Background(), RecordOptions{
-		ReviewToken: next.ReviewToken,
-		Rating:      domain.ReviewRatingEasy,
-		Comment:     "Clear distinction.",
+	_, err = service.Record(context.Background(), RecordOptions{
+		ReviewToken: next.ReviewToken, Rating: domain.ReviewRatingEasy, Comment: "Clear distinction.",
 	})
 	assertApplicationCode(t, err, apperr.InvalidArgument)
-
-	// The next review gets its own timing evidence, not the old token's history.
+	now = previous.After.DueAt.Add(time.Minute)
 	following := nextWord(t, service, false)
 	now = now.Add(45 * time.Second)
-	followingResult := recordReview(t, service, following.ReviewToken, domain.ReviewRatingGood, "")
-	if !followingResult.TimingBoost || followingResult.Duplicate {
-		t.Fatalf("next review = %#v, want independent timing boost", followingResult)
+	result := recordReview(t, service, following.ReviewToken, domain.ReviewRatingGood, "")
+	if result.EffectiveRating != domain.ReviewRatingGood || result.Duplicate {
+		t.Fatalf("new reviews must use their submitted grade: %#v", result)
 	}
 }
 
@@ -346,6 +331,64 @@ func TestTutoringContentInfersLegacySenseFromLearnerMetadata(t *testing.T) {
 	definition, example := tutoringContent(item)
 	if definition != "to move a boat through water using oars" || example != "Row for your life!" {
 		t.Fatalf("tutoringContent() = %q, %q", definition, example)
+	}
+}
+
+func TestTutoringContentRejectsAmbiguousOrIrrelevantLegacyContext(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		note        string
+		definitions []domain.DictionaryDefinition
+		want        string
+	}{
+		{
+			"content words outrank function words", "The edge of the river where we sat.",
+			[]domain.DictionaryDefinition{
+				{Definition: "the place where the money that you save is kept", Guideword: "money"},
+				{Definition: "sloping land beside a river", Guideword: "river"},
+			}, "sloping land beside a river",
+		},
+		{
+			"equal evidence requires clarification", "river",
+			[]domain.DictionaryDefinition{{Definition: "land beside a river"}, {Definition: "the current in a river"}}, "",
+		},
+		{
+			"irrelevant context does not pick the first sense", "wildlife",
+			[]domain.DictionaryDefinition{{Definition: "a place to save money"}, {Definition: "sloping land beside a river"}}, "",
+		},
+		{
+			"function words alone are not sense evidence", "the place where",
+			[]domain.DictionaryDefinition{{Definition: "where the money is kept"}, {Definition: "sloping land beside a river"}}, "",
+		},
+		{
+			"a later unique match resolves an earlier tie", "river wildlife",
+			[]domain.DictionaryDefinition{{Definition: "a river"}, {Definition: "river current"}, {Definition: "river wildlife"}}, "river wildlife",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := domain.VocabularyItem{
+				Term: "bank", NormalizedTerm: "bank", Notes: []string{test.note},
+				Lookup: &domain.DictionaryLookupResult{Entries: []domain.DictionaryEntry{{Definitions: test.definitions}}},
+			}
+			definition, example := tutoringContent(item)
+			if definition != test.want || example != "" {
+				t.Fatalf("legacy content = %q, %q; want %q without borrowed examples", definition, example, test.want)
+			}
+		})
+	}
+}
+
+func TestTutoringContentDoesNotUseTargetSpellingAsSenseEvidence(t *testing.T) {
+	item := domain.VocabularyItem{
+		Term: "well-being", NormalizedTerm: "well-being", Notes: []string{"well being"},
+		Lookup: &domain.DictionaryLookupResult{Entries: []domain.DictionaryEntry{{
+			Definitions: []domain.DictionaryDefinition{
+				{Definition: "feeling well"}, {Definition: "general health"},
+			},
+		}}},
+	}
+	if definition, _ := tutoringContent(item); definition != "" {
+		t.Fatalf("repeating the target is not evidence for a particular meaning: %q", definition)
 	}
 }
 

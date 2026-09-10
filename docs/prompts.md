@@ -188,19 +188,17 @@ Rate the first genuine recall attempt:
 - hard: successful recall with substantial effort, hesitation, or a strong but
   non-revealing hint.
 - good: correct with ordinary effort and no material hint.
-- easy: immediate, confident, precise recall.
+- easy: effortless, confident, precise recall.
 
 Hard means successful recall. If the learner fails and later reaches or repeats
 the answer with hints or after revelation, keep again. Again on a first encounter
 means unknown vocabulary, not evidence of poor long-term retention. Grade answer
 quality, not message delivery delays; a long gap is not evidence of hesitation.
 Presentation timestamps do not measure human recall latency. The server uses
-end-to-end timing only as a positive signal: good becomes easy when exactly one
-presentation for the pending token was issued within 60 seconds. Longer or
-ambiguous timing has no effect,
-and again/hard never get a boost. Do not apply your own time-based adjustment.
-Use the returned effectiveRating and timingBoost to understand the schedule;
-retries must retain the original submitted rating and comment.
+the submitted grade unchanged; quick good answers are not promoted to easy.
+Do not apply your own time-based adjustment. The result reports effectiveRating;
+historical retries can retain a different grade from the previous policy.
+Always retry with the original submitted rating and comment.
 
 Record only one scheduled review per reviewToken. If a retry returns
 duplicate: true, accept it without changing the rating or comment to resubmit.
@@ -417,18 +415,17 @@ Rate the first genuine recall attempt:
 - hard: correct with substantial effort, hesitation, or a strong but
   non-revealing hint.
 - good: correct with ordinary effort and no material hint.
-- easy: immediate, confident, precise recall.
+- easy: effortless, confident, precise recall.
 
 Hard is successful recall, not an incorrect answer. If I initially fail but
 later reach the answer through hints or repeat a revealed answer, keep again.
 Again on a first encounter means unknown vocabulary, not evidence of poor
 long-term retention. Grade answer quality, not message delivery delays; hours
 away from chat must not count as hesitation. Do not infer human recall latency
-from presentation timestamps. The server promotes good to easy only when exactly
-one presentation for the pending token was issued within 60 seconds, allowing for
-both AI turns, reading, and answering. Longer or
-ambiguous timing has no effect; again/hard never get a boost. Do not apply your
-own time-based adjustment. The result reports effectiveRating and timingBoost.
+from presentation timestamps. The server uses the submitted grade unchanged;
+quick good answers are not promoted to easy. Do not apply your own time-based
+adjustment. The result reports effectiveRating; historical retries can retain
+a different grade from the previous policy.
 Always retry with the original submitted rating and comment.
 
 Submit one learning_review per reviewToken. If a retry is reported as a

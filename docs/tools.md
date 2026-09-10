@@ -242,15 +242,14 @@ Presentation events and review attempts are retained after vocabulary deletion. 
   nextReviewAt: string;
   troublesome: boolean;
   effectiveRating: ReviewRating; // rating actually used by FSRS
-  timingBoost: boolean; // good promoted to easy by the one-minute signal
 }
 ```
 
-Comments are trimmed and limited to 1,000 Unicode characters. The server records the attempt at its current UTC time, updates the FSRS card, and rotates the token atomically.
+Comments are trimmed and limited to 1,000 Unicode characters. After acquiring the write transaction and validating a new attempt, the server captures the current UTC time, updates the FSRS card, and rotates the token atomically. Time spent waiting for the database is not mistaken for an earlier review time.
 
-Submit the answer-quality rating without adjusting it for chat delivery delays. The server measures from the persisted `learning_next` issuance to receipt of `learning_review`, including model thinking, reading, and answering time. If exactly one presentation exists for this owner, card, and pending token, a nonnegative interval of at most 60 seconds promotes `good` to `easy` for scheduling. This is approximate positive evidence, not a measurement of human recall time. `again`, `hard`, and `easy` stay unchanged. Longer intervals, missing history, repeated presentations, and negative intervals never change the submitted rating.
+Submit the answer-quality rating without adjusting it for chat delivery delays. FSRS uses that grade unchanged: a quick `good` remains `good`, not `easy`. Presentation counts, issuance timestamps, and message delays do not change grades.
 
-The response reports `effectiveRating` and whether a `timingBoost` was applied. The submitted rating and effective scheduling rating are persisted separately; comment history retains the submitted rating. Retries must send the original rating and comment, not the effective rating, and return the original schedule and timing result even after the one-minute window expires. Pre-upgrade reviews keep their original ratings.
+The response reports `effectiveRating`. For new reviews it equals the submitted rating. Historical attempts retain their original effective grade and schedule, including reviews accepted under the previous timing-promotion policy. Retries must send the original submitted rating and comment, not a historical effective rating. The obsolete `timingBoost` output field is no longer returned.
 
 ## `reinforcement_next`
 
@@ -281,17 +280,17 @@ The response reports `effectiveRating` and whether a `timingBoost` was applied. 
 }
 ```
 
-Only items explicitly marked `learned` qualify, regardless of FSRS due dates. All usefulness and interest levels remain eligible. Selection favors useful, comment-heavy words and reinforcement difficulties, with reduced weight after recent reinforcement presentations. It is not a deterministic “most comments” ranking.
+Only items explicitly marked `learned` qualify, regardless of FSRS due dates. All usefulness and interest levels remain eligible. Selection favors useful words and unresolved reinforcement difficulty, with reduced weight after recent reinforcement presentations. Historical comments add priority only while difficulty remains unresolved.
 
 The probability of any **distinct normalized word** is at most **25% per call**, including all saved meanings of that word. Selection first applies a **hard six-hour word-level cooldown** from the latest reinforcement issuance across its saved meanings, including a meaning subsequently archived. The cooldown persists across restarts and applies even without feedback. Exactly six hours later the word is eligible again; normal `learning_next` presentations do not start or extend it.
 
 At least four distinct learned words must remain **outside cooldown**. No learned vocabulary returns `NOT_FOUND`; fewer than four eligible words returns `INVALID_ARGUMENT` explaining the cooldown/shortage, without issuing anything or extending cooldowns. The tool never relaxes cooldown or the 25% cap. `eligibleWordCount` counts distinct words after cooldown. With exactly four eligible words, each has 25%; with only four learned words in total, one issuance pauses further selection until its six-hour cooldown expires. Repeats can occur after expiry; the cap is not a session-frequency quota.
 
-Per-meaning weight is usefulness × interest × `(1 + min(commentCount, 8))` × `(1 + difficulty)` × recency. Usefulness and interest independently use 0.5/1/2 for low/normal/high. Recency rises from 0.25 to 1 over 24 hours since the last reinforcement presentation; never presented means 1. Comments count nonempty normal-learning and reinforcement review comments, not vocabulary notes. Word weight is the maximum meaning weight; capped proportional redistribution limits word probabilities, then a weighted draw chooses a meaning within the selected word.
+Per-meaning weight is usefulness × interest × `(1 + min(commentCount, 8) * difficulty / 4)` × `(1 + difficulty)` × recency. Usefulness and interest independently use 0.5/1/2 for low/normal/high. Recency rises from 0.25 to 1 over 24 hours since the last reinforcement presentation; never presented means 1. Comments count nonempty normal-learning and reinforcement review comments, not vocabulary notes. Good/easy feedback reduces both difficulty and the comment bonus; at difficulty zero, old comments add no priority. Word weight is the maximum meaning weight; capped proportional redistribution limits word probabilities, then a weighted draw chooses a meaning within the selected word.
 
-`comments` contains all nonempty comments from both review channels, newest first. More comments are a heuristic for teaching value, not proof of failure; use timestamps, ratings, and current answers. Definition/example follow ordinary tutoring-content precedence. The AI must hide the target, revealing derivatives, and examples until the learner attempts a sentence from a description or situation. These tool results contain the answer; a host exposing raw tool output can reveal it.
+`comments` contains all nonempty comments from both review channels, newest first, including comments whose selection bonus has disappeared after successful practice. Use timestamps, ratings, and current answers rather than treating old comments as proof of present difficulty. Definition/example follow ordinary tutoring-content precedence. Ambiguous or irrelevant legacy context does not select a dictionary definition; clarify the intended meaning rather than guessing. The AI must hide the target, revealing derivatives, and examples until the learner attempts a sentence from a description or situation. These tool results contain the answer; a host exposing raw tool output can reveal it.
 
-Each call creates a fresh independent token and persists recency; do not reroll, fetch ahead, or retry casually. Keep the current response while awaiting an answer. Neither selection nor feedback changes status, usefulness, interest, or FSRS state. This mode does not consume scheduled-review tokens and does not use the normal review cooldown or timing boost.
+Each call creates a fresh independent token and persists recency; do not reroll, fetch ahead, or retry casually. Keep the current response while awaiting an answer. Neither selection nor feedback changes status, usefulness, interest, or FSRS state. This mode does not consume scheduled-review tokens and does not use the normal review cooldown. Both selection paths capture their clock after acquiring the database transaction, so queued calls observe newly due cards and expired cooldowns.
 
 ## `reinforcement_review`
 

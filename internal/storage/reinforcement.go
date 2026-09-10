@@ -72,7 +72,10 @@ func reinforcementWeight(sense reinforcementSense, now time.Time) float64 {
 	if !sense.lastShownAt.IsZero() {
 		recency = 0.25 + 0.75*max(0, min(now.Sub(sense.lastShownAt).Hours()/24, 1))
 	}
-	return usefulness * interest * float64(1+min(sense.commentCount, 8)) * (1 + sense.practice.Difficulty) * recency
+	// Historical comments add priority only while difficulty remains unresolved.
+	// Good/easy reviews reduce both difficulty and its share of the comment bonus.
+	commentBonus := float64(min(sense.commentCount, 8)) * sense.practice.Difficulty / 4
+	return usefulness * interest * (1 + commentBonus) * (1 + sense.practice.Difficulty) * recency
 }
 
 // Word mass uses its strongest sense, not the sum: adding meanings cannot buy
@@ -160,12 +163,13 @@ func selectReinforcementSense(senses []reinforcementSense, words []reinforcement
 	return senses[word.senses[len(word.senses)-1]], word.probability
 }
 
-func (db *DB) NextReinforcementItem(ctx context.Context, ownerKey string, now time.Time) (ReinforcementCandidate, error) {
+func (db *DB) NextReinforcementItem(ctx context.Context, ownerKey string, clock func() time.Time) (ReinforcementCandidate, error) {
 	transaction, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return ReinforcementCandidate{}, fmt.Errorf("begin reinforcement presentation: %w", err)
 	}
 	defer transaction.Rollback()
+	now := clock().UTC()
 	senses, err := loadReinforcementSenses(ctx, transaction, ownerKey)
 	if err != nil {
 		return ReinforcementCandidate{}, err
@@ -350,7 +354,7 @@ func (db *DB) RecordReinforcementReview(ctx context.Context, input RecordReviewI
 	}
 	practice.ReviewCount++
 	practice.LastRating = input.Rating
-	practice.LastReviewedAt = input.Now.UTC()
+	practice.LastReviewedAt = input.Now().UTC()
 	switch input.Rating {
 	case domain.ReviewRatingAgain:
 		practice.Difficulty += 1
