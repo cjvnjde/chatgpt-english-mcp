@@ -8,8 +8,9 @@ Configuration is read from environment variables at startup. The process exits w
 |---|---|---|
 | `SQLITE_PATH` | `/app/data/english-mcp.sqlite` | Persistent filesystem path or local `file:` URI. Empty paths, temporary databases, and in-memory DSN variants are rejected outside tests. |
 | `MCP_OWNER_KEY` | `default` | Vocabulary namespace for this deployment. It is supplied by the server, never by a tool caller. |
-| `MCP_EXTERNAL_LISTEN_ADDRESS` | `0.0.0.0:8081` | The sole MCP listener; all clients require bearer authentication. |
-| `MCP_BEARER_TOKEN` | none | Required secret for all MCP clients; at least 32 bytes. |
+| `MCP_TUNNEL_LISTEN_ADDRESS` | `0.0.0.0:8080` | Listener intended only for the private OpenAI tunnel network. |
+| `MCP_EXTERNAL_LISTEN_ADDRESS` | `0.0.0.0:8081` | Bearer-authenticated listener for direct clients. |
+| `MCP_BEARER_TOKEN` | none | Required direct-client secret; at least 32 bytes. |
 | `ADMIN_BEARER_TOKEN` | empty | Optional admin API secret; at least 32 bytes and distinct from MCP/Anki tokens. Empty disables the admin API. |
 | `CAMBRIDGE_BASE_URL` | `https://dictionary.cambridge.org` | Absolute HTTP(S) provider base URL. Primarily useful for testing. |
 | `CAMBRIDGE_TIMEOUT_SECONDS` | `20` | Positive upstream request timeout in seconds, within Go's representable duration range. |
@@ -20,19 +21,22 @@ All enabled listen addresses must be different. The Anki export must never share
 
 All bearer tokens must use HTTP bearer-token characters; embedded whitespace and controls are rejected. MCP POST requests reject foreign browser origins; same-origin and originless native clients remain supported. HTTP headers have a 10-second read deadline; complete MCP request reads, including bodies, are bounded to 30 seconds.
 
-## Container image
+## OpenAI tunnel container
 
 | Variable | Default | Description |
 |---|---|---|
+| `CONTROL_PLANE_API_KEY` | none | Required credential used by the tunnel client. It is not sent to the MCP server. |
+| `CONTROL_PLANE_TUNNEL_ID` | none | Required tunnel identifier. |
+| `TUNNEL_CLIENT_VERSION` | `v0.0.13` | Tunnel-client Git tag built into the image. |
 | `IMAGE_TAG` | `latest` | Optional tag for the locally built image. |
 
-## Generate the MCP token
+## Generate the direct-client token
 
 ```sh
 openssl rand -base64 32
 ```
 
-Put the complete output in `MCP_BEARER_TOKEN`. All MCP clients use this token. Keep it distinct from the admin and Anki export tokens.
+Put the complete output in `MCP_BEARER_TOKEN`. Do not reuse the OpenAI control-plane key for direct MCP authentication.
 
 ## Direct MCP client
 
@@ -65,7 +69,7 @@ The single Compose stack includes the private exporter and Anki worker. Set the 
 | Variable | Default | Description |
 |---|---|---|
 | `ANKI_SYNC_ENABLED` | `false` outside Compose | Enables the Go export listener and Python worker. Compose sets this to `true` for both services. |
-| `ANKI_EXPORT_LISTEN_ADDRESS` | `0.0.0.0:8082` | Go-only private listener; never publish it or route it through the public reverse proxy. |
+| `ANKI_EXPORT_LISTEN_ADDRESS` | `0.0.0.0:8082` | Go-only private listener; never publish or tunnel it. |
 | `ANKI_EXPORT_TOKEN` | none | Required by Compose. Export-only bearer secret, at least 32 bytes, different from `MCP_BEARER_TOKEN`. Shared only by the exporter and worker. |
 | `ANKI_SOURCE_URL` | `http://english-learning-mcp:8082/internal/anki/snapshot` | Worker snapshot endpoint. Plain HTTP is intended only for the private Compose network; use HTTPS across hosts. |
 | `ANKI_SOURCE_NAMESPACE` | `english-mcp` | Stable integration identity; must agree between server and worker and must not change on an existing worker volume. |

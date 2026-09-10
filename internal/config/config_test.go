@@ -43,6 +43,32 @@ func TestLoadRequiresStrongBearerToken(t *testing.T) {
 	}
 }
 
+func TestLoadUsesSeparateTunnelAndExternalAddresses(t *testing.T) {
+	setValidEnvironment(t)
+	t.Setenv("MCP_TUNNEL_LISTEN_ADDRESS", " 0.0.0.0:8080 ")
+	t.Setenv("MCP_EXTERNAL_LISTEN_ADDRESS", " 0.0.0.0:8081 ")
+
+	configuration, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if configuration.MCPTunnelListenAddress != defaultTunnelAddress {
+		t.Fatalf("MCPTunnelListenAddress = %q, want %q", configuration.MCPTunnelListenAddress, defaultTunnelAddress)
+	}
+	if configuration.MCPExternalListenAddress != defaultExternalAddress {
+		t.Fatalf("MCPExternalListenAddress = %q, want %q", configuration.MCPExternalListenAddress, defaultExternalAddress)
+	}
+}
+
+func TestLoadRejectsSharedTunnelAndExternalAddress(t *testing.T) {
+	setValidEnvironment(t)
+	t.Setenv("MCP_EXTERNAL_LISTEN_ADDRESS", defaultTunnelAddress)
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil")
+	}
+}
+
 func TestLoadAnkiExportIsDisabledWithoutSecrets(t *testing.T) {
 	setValidEnvironment(t)
 	t.Setenv("ANKI_EXPORT_TOKEN_FILE", "/does/not/exist")
@@ -93,6 +119,7 @@ func TestLoadRejectsInvalidAnkiExportConfiguration(t *testing.T) {
 		{name: "missing address", key: "ANKI_EXPORT_LISTEN_ADDRESS", value: ""},
 		{name: "malformed address", key: "ANKI_EXPORT_LISTEN_ADDRESS", value: "localhost"},
 		{name: "dynamic port", key: "ANKI_EXPORT_LISTEN_ADDRESS", value: "0.0.0.0:0"},
+		{name: "tunnel collision", key: "ANKI_EXPORT_LISTEN_ADDRESS", value: defaultTunnelAddress},
 		{name: "external collision", key: "ANKI_EXPORT_LISTEN_ADDRESS", value: "127.0.0.1:8081"},
 		{name: "empty namespace", key: "ANKI_SOURCE_NAMESPACE", value: ""},
 		{name: "namespace control", key: "ANKI_SOURCE_NAMESPACE", value: "english\nmcp"},
@@ -125,6 +152,7 @@ func setValidEnvironment(t *testing.T) {
 	t.Setenv("LOG_FORMAT", "json")
 	t.Setenv("SQLITE_PATH", "/tmp/english-mcp-test.sqlite")
 	t.Setenv("MCP_OWNER_KEY", "test-owner")
+	t.Setenv("MCP_TUNNEL_LISTEN_ADDRESS", defaultTunnelAddress)
 	t.Setenv("MCP_EXTERNAL_LISTEN_ADDRESS", defaultExternalAddress)
 	t.Setenv("MCP_BEARER_TOKEN", strings.Repeat("x", minimumBearerTokenBytes))
 	t.Setenv("ADMIN_BEARER_TOKEN", "")

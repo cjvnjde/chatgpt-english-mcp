@@ -24,7 +24,7 @@ The Compose stack includes [one-way AnkiWeb sync](docs/deployment.md#ankiweb-syn
 
 The server advertises this display name and description in its MCP initialization response. Use the name and description above when creating your OpenAI marketplace listing; repository metadata does not publish a listing automatically.
 
-Connect using your public HTTPS `/mcp` URL and bearer-token authentication (`Authorization: Bearer <MCP_BEARER_TOKEN>`). Each deployment shares one vocabulary namespace among clients using its token; it does not provide separate accounts for marketplace users.
+Use the OpenAI tunnel connection for ChatGPT. Direct MCP clients can use your public HTTPS `/mcp` URL with `Authorization: Bearer <MCP_BEARER_TOKEN>`. Each deployment provides one shared vocabulary namespace, not separate accounts for marketplace users.
 
 ## Documentation
 
@@ -40,11 +40,11 @@ Connect using your public HTTPS `/mcp` URL and bearer-token authentication (`Aut
 
 ```sh
 cp .env.example .env
-# Fill in the MCP token, Anki export token, and AnkiWeb credentials.
+# Fill in the tunnel, MCP token, Anki export token, and AnkiWeb credentials.
 docker compose up -d --build
 ```
 
-The Streamable HTTP endpoint is `/mcp` on internal port `8081`. Every MCP client must supply `MCP_BEARER_TOKEN`; there is no unauthenticated MCP listener. Route public access through an HTTPS reverse proxy.
+The Streamable HTTP endpoint is `/mcp`. The Compose deployment exposes it to an OpenAI tunnel on internal port `8080` and to authenticated direct clients on internal port `8081`.
 
 For Dokploy, select `docker-compose.yml`, copy the variables from `.env.example` into Environment, fill in the required values, and deploy. No additional Compose file is needed.
 

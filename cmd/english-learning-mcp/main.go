@@ -85,6 +85,12 @@ func run() (runErr error) {
 	}
 	endpoints := []httpEndpoint{
 		{
+			name:    "tunnel",
+			address: configuration.MCPTunnelListenAddress,
+			path:    mcpserver.EndpointPath,
+			handler: mcpserver.NewHTTPHandler(server, logger),
+		},
+		{
 			name:    "external",
 			address: configuration.MCPExternalListenAddress,
 			path:    mcpserver.EndpointPath,
