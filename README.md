@@ -18,7 +18,7 @@ The Compose stack includes [one-way AnkiWeb sync](docs/deployment.md#ankiweb-syn
 
 ## Marketplace listing
 
-- **Name:** English Vocabulary Coach
+- **Name:** English Vocabulary
 - **Description:** Look up English words and expressions, save the meanings you want to learn, and build lasting vocabulary with personalized spaced-repetition reviews and contextual practice.
 - **MCP server ID:** `english-learning-mcp`
 
