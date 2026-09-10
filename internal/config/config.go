@@ -16,7 +16,6 @@ import (
 const (
 	defaultSQLitePath        = "/app/data/english-mcp.sqlite"
 	defaultCambridgeURL      = "https://dictionary.cambridge.org"
-	defaultTunnelAddress     = "0.0.0.0:8080"
 	defaultExternalAddress   = "0.0.0.0:8081"
 	defaultAnkiExportAddress = "0.0.0.0:8082"
 	minimumBearerTokenBytes  = 32
@@ -25,7 +24,6 @@ const (
 type Config struct {
 	SQLitePath               string
 	OwnerKey                 string
-	MCPTunnelListenAddress   string
 	MCPExternalListenAddress string
 	MCPBearerToken           string
 	AdminBearerToken         string
@@ -93,16 +91,9 @@ func Load() (Config, error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return Config{}, fmt.Errorf("MCP_OWNER_KEY must not be empty")
 	}
-	tunnelAddress := environment("MCP_TUNNEL_LISTEN_ADDRESS", defaultTunnelAddress)
-	if tunnelAddress == "" {
-		return Config{}, fmt.Errorf("MCP_TUNNEL_LISTEN_ADDRESS must not be empty")
-	}
 	externalAddress := environment("MCP_EXTERNAL_LISTEN_ADDRESS", defaultExternalAddress)
 	if externalAddress == "" {
 		return Config{}, fmt.Errorf("MCP_EXTERNAL_LISTEN_ADDRESS must not be empty")
-	}
-	if tunnelAddress == externalAddress {
-		return Config{}, fmt.Errorf("MCP tunnel and external listen addresses must be different")
 	}
 	mcpBearerToken := environment("MCP_BEARER_TOKEN", "")
 	if len(mcpBearerToken) < minimumBearerTokenBytes {
@@ -128,12 +119,10 @@ func Load() (Config, error) {
 		if err != nil || portErr != nil || portNumber < 1 || portNumber > 65535 {
 			return Config{}, fmt.Errorf("ANKI_EXPORT_LISTEN_ADDRESS must contain a host and a valid TCP port")
 		}
-		for _, address := range []string{tunnelAddress, externalAddress} {
-			_, mcpPort, err := net.SplitHostPort(address)
-			mcpPortNumber, portErr := strconv.Atoi(mcpPort)
-			if address == ankiAddress || (err == nil && portErr == nil && mcpPortNumber == portNumber) {
-				return Config{}, fmt.Errorf("Anki export and MCP listeners must use different ports")
-			}
+		_, mcpPort, err := net.SplitHostPort(externalAddress)
+		mcpPortNumber, portErr := strconv.Atoi(mcpPort)
+		if externalAddress == ankiAddress || (err == nil && portErr == nil && mcpPortNumber == portNumber) {
+			return Config{}, fmt.Errorf("Anki export and MCP listeners must use different ports")
 		}
 		ankiToken, err = ankiExportToken()
 		if err != nil {
@@ -157,7 +146,6 @@ func Load() (Config, error) {
 	return Config{
 		SQLitePath:               sqlitePath,
 		OwnerKey:                 ownerKey,
-		MCPTunnelListenAddress:   tunnelAddress,
 		MCPExternalListenAddress: externalAddress,
 		MCPBearerToken:           mcpBearerToken,
 		AdminBearerToken:         adminToken,

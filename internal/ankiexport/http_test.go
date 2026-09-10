@@ -132,19 +132,15 @@ func TestSnapshotHandlerFailureIsNeverAnEmptySnapshot(t *testing.T) {
 	}
 }
 
-func TestMCPHandlersDoNotExposeSnapshot(t *testing.T) {
+func TestMCPHandlerDoesNotExposeSnapshot(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, nil)
 	token := strings.Repeat("mcp-secret", 4)
-	for _, handler := range []http.Handler{
-		mcpserver.NewHTTPHandler(server, nil),
-		mcpserver.NewAuthenticatedHTTPHandler(server, token, nil),
-	} {
-		request := httptest.NewRequest(http.MethodGet, EndpointPath, nil)
-		request.Header.Set("Authorization", "Bearer "+token)
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
-		if response.Code != http.StatusNotFound {
-			t.Fatalf("MCP listener exposed export: %d", response.Code)
-		}
+	handler := mcpserver.NewAuthenticatedHTTPHandler(server, token, nil)
+	request := httptest.NewRequest(http.MethodGet, EndpointPath, nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("MCP listener exposed export: %d", response.Code)
 	}
 }

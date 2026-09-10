@@ -1,15 +1,13 @@
 # Deployment
 
-The single `docker-compose.yml` runs the MCP server, OpenAI tunnel client, and Anki worker. The MCP server and tunnel share the Go image; the worker has its own Python image and persistent volume.
+The single `docker-compose.yml` runs the MCP server, static admin UI, and Anki worker. The MCP server has its own Go image; the worker has a separate Python image and persistent volume.
 
 ```mermaid
 flowchart TD
-    A[ChatGPT] --> B[OpenAI tunnel]
-    B --> C[Private listener :8080/mcp]
+    A[ChatGPT] --> E[HTTPS reverse proxy]
     D[Direct MCP client] --> E[HTTPS reverse proxy]
     E --> F[Bearer listener :8081/mcp]
-    C --> G[English Learning MCP]
-    F --> G
+    F --> G[English Learning MCP]
     G --> H[(SQLite volume)]
     G --> I[Cambridge Dictionary]
     J[Anki worker] --> K[Private export :8082]
@@ -18,15 +16,14 @@ flowchart TD
     J --> M[(Anki worker volume)]
 ```
 
-The two MCP listeners expose the same stateless Streamable HTTP tools, owner namespace, and SQLite database. The third listener serves only vocabulary exports:
+The MCP listener serves stateless Streamable HTTP tools using one owner namespace and SQLite database. A separate private listener serves only vocabulary exports:
 
 | Listener | Intended access | Authentication |
 |---|---|---|
-| `:8080/mcp` | `openai-tunnel` on the private Docker network | None |
-| `:8081/mcp` | HTTPS reverse proxy and direct MCP clients | Bearer token |
+| `:8081/mcp` | HTTPS reverse proxy, ChatGPT, and other MCP clients | Bearer token |
 | `:8082/internal/anki/snapshot` | Anki worker on the private Docker network | Separate export bearer token |
 
-Never publish or publicly route ports `8080` or `8082`.
+Never publish or publicly route port `8082`. All public MCP access must use HTTPS and the configured MCP bearer token.
 
 ## Start the stack
 
@@ -34,7 +31,7 @@ Never publish or publicly route ports `8080` or `8082`.
 cp .env.example .env
 ```
 
-Set the OpenAI tunnel values, MCP bearer token, separate Anki export token, and AnkiWeb credentials in `.env`, then run:
+Set the MCP bearer token, separate Anki export token, and AnkiWeb credentials in `.env`, then run:
 
 ```sh
 docker compose up -d --build
@@ -46,7 +43,7 @@ The application applies embedded, checksum-verified SQLite migrations automatica
 ### Dokploy
 
 1. Use a Docker Compose application with the repository's `docker-compose.yml`.
-2. Copy `.env.example` into Dokploy's **Environment** settings and fill in `CONTROL_PLANE_API_KEY`, `CONTROL_PLANE_TUNNEL_ID`, `MCP_BEARER_TOKEN`, `ANKI_EXPORT_TOKEN`, `ANKIWEB_USERNAME`, and `ANKIWEB_PASSWORD`.
+2. Copy `.env.example` into Dokploy's **Environment** settings and fill in `MCP_BEARER_TOKEN`, `ANKI_EXPORT_TOKEN`, `ANKIWEB_USERNAME`, and `ANKIWEB_PASSWORD`.
 3. Generate the two bearer tokens independently with `openssl rand -base64 32`. The export token must differ from the MCP token.
 4. Deploy the stack. No override file, Compose profile, or host secret-file mount is required.
 5. Route your public MCP domain only to `english-learning-mcp:8081/mcp`. Do not add a public domain for the worker or export listener.
@@ -90,10 +87,16 @@ docker compose up -d --build
 
 Migrations run transactionally. Startup fails rather than silently continuing if an applied migration is missing, newer than the executable, or has a different checksum.
 
+### Migrating an existing tunnel deployment
+
+The OpenAI tunnel client and unauthenticated port `8080` have been removed. Remove the old `openai-tunnel` container from your deployment, and delete `CONTROL_PLANE_API_KEY`, `CONTROL_PLANE_TUNNEL_ID`, `TUNNEL_CLIENT_VERSION`, and `MCP_TUNNEL_LISTEN_ADDRESS` from its environment settings.
+
+Keep the existing application identity and named volumes. The authenticated listener remains on port `8081`; its proxy route and `MCP_BEARER_TOKEN` can remain unchanged. Configure ChatGPT to connect to your public HTTPS `/mcp` URL using that bearer token instead of the old tunnel connection.
+
 ## Security checklist
 
-- Expose only HTTPS to direct clients.
-- Keep `:8080` and `:8082` private.
+- Expose only HTTPS to MCP clients.
+- Keep `:8082` private.
 - Use a unique bearer token with at least 32 bytes of randomness.
 - Keep `.env` out of version control.
 - Apply reverse-proxy request limits appropriate to your deployment.
@@ -126,7 +129,7 @@ docker compose up -d --build
 docker compose logs -f anki-worker
 ```
 
-Port `8082` is not published and must never be routed through the tunnel or reverse proxy. The export credential grants snapshot reads only.
+Port `8082` is not published and must never be routed through the public reverse proxy. The export credential grants snapshot reads only.
 
 Allow outbound HTTPS to AnkiWeb, including authentication and sync shard redirects. Restricted sandboxes require host-side `sbx policy` changes for blocked hosts; no host desktop service is required.
 

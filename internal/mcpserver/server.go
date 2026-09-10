@@ -29,8 +29,8 @@ func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
 	}
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:        "english-learning-mcp",
-		Title:       "English Learning",
-		Description: "Permanent dictionary lookups and saved vocabulary tools.",
+		Title:       "English Vocabulary Coach",
+		Description: "Look up English words and expressions, save the meanings you want to learn, and build lasting vocabulary with personalized spaced-repetition reviews and contextual practice.",
 		Version:     Version,
 	}, &mcp.ServerOptions{Logger: logger})
 

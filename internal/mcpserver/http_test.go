@@ -69,28 +69,10 @@ func TestAuthenticatedHTTPHandlerRequiresBearerToken(t *testing.T) {
 	}
 }
 
-func TestHTTPHandlerAllowsTunnelRequestWithoutAuthentication(t *testing.T) {
-	handler := NewHTTPHandler(
-		mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil),
-		nil,
-	)
-	requestBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}`)
-	request := httptest.NewRequest(http.MethodPost, EndpointPath, bytes.NewReader(requestBody))
-	request.Header.Set("Accept", "application/json, text/event-stream")
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
-	}
-	assertInitializeResponse(t, response.Body.Bytes())
-}
-
 func TestHTTPHandlerOnlyExposesMCPPath(t *testing.T) {
-	handler := NewHTTPHandler(
+	handler := NewAuthenticatedHTTPHandler(
 		mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil),
+		strings.Repeat("secret", 6),
 		nil,
 	)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -168,37 +150,24 @@ func TestAuthenticatedHTTPHandlerFailsClosedWithEmptyToken(t *testing.T) {
 	}
 }
 
-func TestHTTPHandlersRejectCrossOriginRequests(t *testing.T) {
+func TestAuthenticatedHTTPHandlerRejectsCrossOriginRequests(t *testing.T) {
 	token := strings.Repeat("secret", 6)
-	for _, authenticated := range []bool{false, true} {
-		name := "tunnel"
-		if authenticated {
-			name = "external"
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	handler := NewAuthenticatedHTTPHandler(server, token, nil)
+	for _, origin := range []string{"http://attacker.example", "http://mcp.example"} {
+		request := httptest.NewRequest(http.MethodPost, "http://mcp.example"+EndpointPath, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}`))
+		request.Header.Set("Accept", "application/json, text/event-stream")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", origin)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		wantStatus := http.StatusForbidden
+		if origin == "http://mcp.example" {
+			wantStatus = http.StatusOK
 		}
-		t.Run(name, func(t *testing.T) {
-			server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
-			handler := NewHTTPHandler(server, nil)
-			if authenticated {
-				handler = NewAuthenticatedHTTPHandler(server, token, nil)
-			}
-			for _, origin := range []string{"http://attacker.example", "http://mcp.example"} {
-				request := httptest.NewRequest(http.MethodPost, "http://mcp.example"+EndpointPath, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}`))
-				request.Header.Set("Accept", "application/json, text/event-stream")
-				request.Header.Set("Content-Type", "application/json")
-				request.Header.Set("Origin", origin)
-				if authenticated {
-					request.Header.Set("Authorization", "Bearer "+token)
-				}
-				response := httptest.NewRecorder()
-				handler.ServeHTTP(response, request)
-				wantStatus := http.StatusForbidden
-				if origin == "http://mcp.example" {
-					wantStatus = http.StatusOK
-				}
-				if response.Code != wantStatus {
-					t.Fatalf("origin=%q status=%d want=%d body=%s", origin, response.Code, wantStatus, response.Body.String())
-				}
-			}
-		})
+		if response.Code != wantStatus {
+			t.Fatalf("origin=%q status=%d want=%d body=%s", origin, response.Code, wantStatus, response.Body.String())
+		}
 	}
 }

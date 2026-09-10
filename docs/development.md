@@ -13,16 +13,15 @@ The SQLite driver is pure Go, so local development does not require CGO.
 ```sh
 export SQLITE_PATH="$PWD/data/english-mcp.sqlite"
 export MCP_BEARER_TOKEN="$(openssl rand -base64 32)"
-export MCP_TUNNEL_LISTEN_ADDRESS="127.0.0.1:8080"
 export MCP_EXTERNAL_LISTEN_ADDRESS="127.0.0.1:8081"
 export LOG_FORMAT=text
 
 go run ./cmd/english-learning-mcp
 ```
 
-The unauthenticated local endpoint is `http://127.0.0.1:8080/mcp`; the endpoint on port `8081` requires the configured bearer token. Do not bind the unauthenticated listener to a public interface.
+The local endpoint is `http://127.0.0.1:8081/mcp`. All requests to it require `Authorization: Bearer <MCP_BEARER_TOKEN>`. There is no unauthenticated MCP listener.
 
-Both MCP handlers reject foreign browser origins while allowing same-origin and originless native requests. Each HTTP server bounds complete request reads to 30 seconds, including partially delivered bodies; the admin API also sets per-request read/write deadlines.
+The MCP handler rejects foreign browser origins while allowing same-origin and originless native requests. Each HTTP server bounds complete request reads to 30 seconds, including partially delivered bodies; the admin API also sets per-request read/write deadlines.
 
 ## Test and build
 

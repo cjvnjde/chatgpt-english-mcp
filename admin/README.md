@@ -4,7 +4,7 @@ A static SolidJS + TypeScript admin app. Vite produces `dist/`; nginx serves it 
 
 ## Deploy with Dokploy
 
-Use `docker-compose.yml` from the repository version containing the admin API and frontend. This single file includes the MCP, tunnel, Anki worker, and nginx admin service. Generate a separate admin secret:
+Use `docker-compose.yml` from the repository version containing the admin API and frontend. This single file includes the MCP, Anki worker, and nginx admin service. Generate a separate admin secret:
 
 ```sh
 openssl rand -base64 32
@@ -19,7 +19,7 @@ Copy the result into `ADMIN_BEARER_TOKEN` in Dokploy Environment. Keep `MCP_BEAR
 
 Enable HTTPS for the domain and deploy. Open `https://english-mcp.cjvnjde.tech/admin` and enter `ADMIN_BEARER_TOKEN`. nginx redirects `/admin` to `/admin/` using a relative redirect, so the HTTPS scheme and host are preserved. The admin route also covers its assets and `/admin/api/`; no separate API domain rule is required.
 
-Keep the incoming paths intact: nginx serves the UI at `/admin/` and forwards `/admin/api/` unchanged to the MCP. Dokploy handles domain routing and TLS; the Compose file publishes no host ports or manual Traefik labels. All four containers share an explicit Compose network for internal communication, alongside the proxy networks Dokploy adds for Domains. See [Dokploy Domains](https://docs.dokploy.com/docs/core/domains) for path settings.
+Keep the incoming paths intact: nginx serves the UI at `/admin/` and forwards `/admin/api/` unchanged to the MCP. Dokploy handles domain routing and TLS; the Compose file publishes no host ports or manual Traefik labels. All three containers share an explicit Compose network for internal communication, alongside the proxy networks Dokploy adds for Domains. See [Dokploy Domains](https://docs.dokploy.com/docs/core/domains) for path settings.
 
 For an ordinary Compose deployment with your own reverse proxy, use the same file and routes:
 
@@ -27,7 +27,7 @@ For an ordinary Compose deployment with your own reverse proxy, use the same fil
 docker compose up -d --build
 ```
 
-The admin container does not mount the database or receive the token. It forwards the token supplied by the browser. The Go API is available on the existing external listener (8081), never the unauthenticated tunnel listener (8080). An empty `ADMIN_BEARER_TOKEN` leaves the admin API disabled. The token grants database-wide read/export access; vocabulary mutations use the configured `MCP_OWNER_KEY` namespace. Do not use this single-administrator API for mutually untrusted users.
+The admin container does not mount the database or receive the token. It forwards the token supplied by the browser. The Go API is available on the existing external listener (8081), alongside the token-authenticated MCP endpoint. An empty `ADMIN_BEARER_TOKEN` leaves the admin API disabled. The token grants database-wide read/export access; vocabulary mutations use the configured `MCP_OWNER_KEY` namespace. Do not use this single-administrator API for mutually untrusted users.
 
 The sign-in form includes an optional **Remember me on this device** checkbox, unchecked by default. After a successful sign-in, checking it saves the admin token in localStorage under `english-mcp.admin.token`, so it survives reloads and browser restarts. The app verifies the saved token with `/admin/api/session` before opening the workspace. Signing out or receiving HTTP 401 clears the saved token. Temporary connection/server failures keep it available for a retry. With Remember me unchecked, the token is held only in memory and reloading signs you out. If browser storage is blocked, sign-in still works for the current tab and the UI reports that the preference could not be saved.
 
