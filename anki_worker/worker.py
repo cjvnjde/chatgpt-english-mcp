@@ -75,10 +75,11 @@ class Worker:
     def bootstrap_upload(self, adapter):
         state = self.store.state
         collection = adapter.collection
+        note_ids = set(collection.find_notes(""))
         if (
             not state["bootstrap"]
-            or collection.note_count() != len(state["notes"])
-            or collection.card_count() != len(state["notes"])
+            or not note_ids.issubset(state["notes"].values())
+            or collection.card_count() != len(note_ids)
         ):
             self.unsafe_upload()
         # Only the server's explicit FULL_UPLOAD response authorizes this path;
@@ -140,6 +141,11 @@ class Worker:
                         snapshot = latest
                         continue
                     self.store.state["bootstrap"] = False
+                    self.store.state["notes"] = {
+                        source: self.store.state["notes"][source]
+                        for source in snapshot.items
+                    }
+                    self.store.state.pop("pendingDeletes", None)
                     self.store.save()
                     return self.store.status(
                         healthy=True,

@@ -76,7 +76,7 @@ The server cannot initiate a lesson or send a reminder. MCP is request/response:
 
 `dictionary_lookup` normalizes the requested term and checks SQLite first. A successful cached lookup is permanent for the current provider/parser version unless the caller explicitly requests a refresh.
 
-On a cache miss, the server fetches and parses Cambridge Dictionary. A successful refresh creates a new immutable snapshot and makes it active. Legacy/context-only vocabulary with the same normalized term follows the current successful snapshot automatically. Dictionary-selected meanings retain their original snapshot so definition indices, part of speech, and pronunciation remain consistent.
+On a cache miss, the server fetches and parses Cambridge Dictionary. A successful refresh creates a new immutable snapshot and makes it active. Legacy/context-only vocabulary with the same normalized term follows the current successful snapshot automatically, including after parser upgrades within the same provider and dataset. Dictionary-selected meanings retain their original snapshot so definition indices, part of speech, and pronunciation remain consistent.
 
 Genuine not-found results can be cached, but an ordinary future lookup retries empty results. An HTTP 200 page without usable entries or suggestions is treated as an upstream failure rather than replacing good cached content. If an explicit refresh fails and an older snapshot exists for the current parser, the server returns it with `cache.state` set to `stale_fallback`. Parsed resource links allow only HTTP(S) URLs without embedded credentials.
 

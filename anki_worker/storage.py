@@ -115,6 +115,13 @@ class Store:
             raise WorkerError(
                 "Worker note mapping contains conflicting identities; restore backup"
             )
+        pending_deletes = state.get("pendingDeletes", [])
+        if not isinstance(pending_deletes, list) or any(
+            type(nid) is not int or nid <= 0 for nid in pending_deletes
+        ):
+            raise WorkerError(
+                "Worker pending deletion identity is malformed; restore backup"
+            )
         if any(
             state.get(key) is not None
             and (type(state[key]) is not int or state[key] <= 0)

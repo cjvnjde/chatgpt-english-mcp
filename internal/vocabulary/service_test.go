@@ -367,6 +367,42 @@ func TestSavedVocabularyLinksCachedLookupAndFollowsRefresh(t *testing.T) {
 	}
 }
 
+func TestUnselectedVocabularyFollowsParserUpgrade(t *testing.T) {
+	service := newTestService(t, "owner")
+	store := service.store.(*storage.DB)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	original := insertLookup(t, ctx, store, now, "an institution")
+	unselected, err := service.Save(ctx, "bank", InitialValues{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := service.Save(ctx, "bank", InitialValues{Definition: "an institution"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := store.InsertDictionarySnapshot(ctx, storage.DictionarySnapshotInsert{
+		Provider: "cambridge", NormalizedTerm: "bank", ParserVersion: 13,
+		FetchedAt: now.Add(time.Hour), ExpiresAt: now.Add(time.Hour),
+		Data: domain.DictionarySnapshotData{Status: 200, Entries: []domain.DictionaryEntry{{
+			Headword: "bank", Definitions: []domain.DictionaryDefinition{{Definition: "a corrected definition"}},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := service.Get(ctx, unselected.ItemID, "")
+	if err != nil || loaded.Lookup == nil || loaded.Lookup.LookupID != upgraded.ID ||
+		loaded.Lookup.Entries[0].Definitions[0].Definition != "a corrected definition" {
+		t.Fatalf("unselected lookup stayed on the old parser: %#v, error %v", loaded, err)
+	}
+	loaded, err = service.Get(ctx, selected.ItemID, "")
+	if err != nil || loaded.Lookup == nil || loaded.Lookup.LookupID != original.ID ||
+		loaded.Sense == nil || loaded.Sense.Definition.Definition != "an institution" {
+		t.Fatalf("parser upgrade changed the selected sense: %#v, error %v", loaded, err)
+	}
+}
+
 func TestSaveCreatesSeparateItemsForDictionarySenses(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.Open(ctx, ":memory:")
@@ -460,6 +496,50 @@ func TestContextOnlySensesRemainDistinctAndReadable(t *testing.T) {
 	}
 	if len(contexts) != 0 {
 		t.Fatalf("missing saved senses: %v", contexts)
+	}
+}
+
+func TestContextAndDefinitionWithSameTextRemainSeparateSenses(t *testing.T) {
+	for _, contextFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "context_first", false: "definition_first"}[contextFirst], func(t *testing.T) {
+			service := newTestService(t, "owner")
+			store := service.store.(*storage.DB)
+			ctx := context.Background()
+			definition := "a financial institution"
+			insertLookup(t, ctx, store, time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC), definition)
+			inputs := []InitialValues{{Context: definition}, {Definition: definition}}
+			if !contextFirst {
+				inputs[0], inputs[1] = inputs[1], inputs[0]
+			}
+			first, err := service.Save(ctx, "bank", inputs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := service.Save(ctx, "bank", inputs[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !first.Created || !second.Created || first.ItemID == second.ItemID {
+				t.Fatalf("context and selected definition were merged: %#v, %#v", first, second)
+			}
+			for index, saved := range []SaveResult{first, second} {
+				retry, err := service.Save(ctx, "BANK", inputs[index])
+				if err != nil || retry.Created || retry.ItemID != saved.ItemID {
+					t.Fatalf("sense retry = %#v, error %v", retry, err)
+				}
+				loaded, err := service.Get(ctx, saved.ItemID, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if inputs[index].Definition == "" {
+					if loaded.Sense != nil || loaded.Context != definition {
+						t.Fatalf("context-only sense changed: %#v", loaded)
+					}
+				} else if loaded.Sense == nil || loaded.Sense.Definition.Definition != definition {
+					t.Fatalf("selected definition was lost: %#v", loaded)
+				}
+			}
+		})
 	}
 }
 

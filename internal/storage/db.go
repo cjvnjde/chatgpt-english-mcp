@@ -71,6 +71,10 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	for _, pragma := range []string{"foreign_keys(ON)", "busy_timeout(5000)", "synchronous(NORMAL)"} {
 		query.Add("_pragma", pragma)
 	}
+	// Reserve the writer before reading a mutation's snapshot. A deferred
+	// read-to-write upgrade can fail immediately despite busy_timeout when
+	// another connection has committed. ReadOnly transactions remain deferred.
+	query.Set("_txlock", "immediate")
 	location.RawQuery = query.Encode()
 	dsn := location.String()
 	database, err := sql.Open("sqlite", dsn)

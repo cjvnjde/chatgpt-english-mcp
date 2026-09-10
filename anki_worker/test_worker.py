@@ -6,6 +6,7 @@ from contextlib import closing
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from pathlib import Path
 from unittest.mock import patch
 
@@ -108,6 +109,13 @@ class RealCollectionCase(unittest.TestCase):
 
 
 class ReconciliationTests(RealCollectionCase):
+    def test_source_link_preserves_decomposed_unicode_destination(self):
+        url = "https://example.com/cafe\u0301?term=e\u0301&tag=é"
+        item = vocabulary(descriptionSource={"title": "Source", "url": url})
+        self.apply(item)
+        self.assertIn(f'href="{url}"', unescape(self.managed_note()["Source"]))
+        self.assertFalse(any(self.apply(item).values()))
+
     def test_usefulness_changes_leave_anki_content_and_schedule_unchanged(self):
         item = vocabulary(usefulness="low")
         self.apply(item)
@@ -192,7 +200,6 @@ class ReconciliationTests(RealCollectionCase):
         manual = add_basic(self.collection, self.store.state["deckId"])
         self.apply()
         self.assertEqual(self.collection.find_notes(""), [unrelated.id])
-        self.assertEqual(self.store.state["notes"], {})
         self.assertNotIn(manual.id, self.collection.find_notes(""))
 
     def test_shared_manual_note_keeps_unrelated_card_and_review_state(self):
@@ -229,6 +236,52 @@ class ReconciliationTests(RealCollectionCase):
         self.apply(item)
         self.assertEqual(self.managed_note().id, canonical.id)
         self.assertEqual(len(self.managed_note().cards()), 1)
+
+    def test_crash_gap_recovered_deletion_is_durable_before_note_removal(self):
+        self.apply(vocabulary())
+        note = self.managed_note()
+        self.store.state["notes"] = {}
+        self.store.save()
+        with (
+            patch.object(
+                self.collection, "remove_notes", side_effect=OSError("interrupted")
+            ),
+            self.assertRaises(OSError),
+        ):
+            self.apply()
+        note["SourceID"] = "remote identity edit"
+        self.collection.update_note(note)
+        other = self.collection.decks.id("Other")
+        self.collection.set_deck([note.cards()[0].id], other)
+        self.store.load()
+        self.apply()
+        self.assertEqual(self.collection.find_notes(""), [])
+
+    def test_pending_deletion_refuses_remotely_converted_note(self):
+        self.apply(vocabulary())
+        note = self.managed_note()
+        self.store.state["notes"] = {}
+        self.store.state["pendingDeletes"] = [note.id]
+        self.store.save()
+        info = self.collection.models.change_notetype_info(
+            old_notetype_id=note.mid,
+            new_notetype_id=self.collection.models.by_name("Basic (and reversed card)")[
+                "id"
+            ],
+        )
+        info.input.note_ids.append(note.id)
+        self.collection.models.change_notetype_of_notes(info.input)
+        converted = self.collection.get_note(note.id)
+        before = (converted.fields, self.collection.card_ids_of_note(note.id))
+        with self.assertRaises(WorkerError):
+            self.apply()
+        self.assertEqual(
+            (
+                self.collection.get_note(note.id).fields,
+                self.collection.card_ids_of_note(note.id),
+            ),
+            before,
+        )
 
     def assert_creation_crash_recovers(self, identity_key):
         save = self.store.save
@@ -563,6 +616,26 @@ class WorkerCycleTests(unittest.TestCase):
             jitter=lambda: 0,
         )
 
+    def test_normalized_deck_name_converges_and_preserves_existing_parent(self):
+        self.config = replace(self.config, deck=" CAFE\u0301 :: Vocabulary ")
+        self.worker.config = self.config
+        self.worker.store = Store(self.config)
+        self.worker.store.load()
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            parent = collection.decks.id("Café")
+            unrelated = add_basic(collection, parent)
+
+        self.assertTrue(self.worker.once()["healthy"])
+        self.assertTrue(self.worker.once()["healthy"])
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            nid = next(iter(self.worker.store.state["notes"].values()))
+            card = collection.get_note(nid).cards()[0]
+            self.assertEqual(collection.decks.get(card.did)["name"], "Café::Vocabulary")
+            self.assertEqual(
+                collection.get_note(unrelated.id)["Back"], "Unrelated answer"
+            )
+            self.assertEqual(collection.decks.get(parent)["name"], "Café")
+
     def test_decomposed_unicode_converges_without_rewriting_reviewed_cards(self):
         self.items = [
             vocabulary(
@@ -720,6 +793,98 @@ class WorkerCycleTests(unittest.TestCase):
             self.assertEqual(collection.note_count(), 2)
             self.assertEqual(len(collection.find_notes('deck:"English MCP"')), 1)
         self.assertEqual(self.script["full"], [False])
+
+    def test_deleted_identity_survives_restart_and_full_download(self):
+        self.worker.once()
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            nid = next(iter(self.worker.store.state["notes"].values()))
+            note = collection.get_note(nid)
+            note["SourceID"] = "remote identity edit"
+            collection.update_note(note)
+            other = collection.decks.id("Remote unrelated")
+            collection.set_deck([note.cards()[0].id], other)
+            unrelated = add_basic(collection, other)
+            remote_backup = (
+                self.worker.store.backup() / self.config.collection_path.name
+            )
+
+        self.items = []
+        self.script["sync"] = [
+            "accepted",
+            TransientError("offline"),
+            TransientError("offline"),
+            TransientError("offline"),
+        ]
+        with self.assertRaises(TransientError):
+            self.worker.once()
+
+        def download(adapter):
+            adapter.collection.close()
+            adapter.store.config.collection_path.write_bytes(remote_backup.read_bytes())
+            adapter.collection = Collection(str(adapter.store.config.collection_path))
+
+        self.script["sync"] = ["download", "accepted"]
+        self.script["download"] = download
+        self.assertTrue(self.worker.once()["healthy"])
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            self.assertEqual(collection.find_notes(""), [unrelated.id])
+            self.assertEqual(
+                collection.get_note(unrelated.id)["Back"], "Unrelated answer"
+            )
+
+    def test_deleted_duplicate_stays_owned_after_remote_identity_edit(self):
+        self.worker.once()
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            nid = next(iter(self.worker.store.state["notes"].values()))
+            canonical = collection.get_note(nid)
+            duplicate = collection.new_note(canonical.note_type())
+            duplicate.fields = list(canonical.fields)
+            collection.add_note(duplicate, self.worker.store.state["deckId"])
+            other = collection.decks.id("Remote unrelated")
+            unrelated = add_basic(collection, other)
+            remote_backup = (
+                self.worker.store.backup() / self.config.collection_path.name
+            )
+        with closing(Collection(str(remote_backup))) as remote:
+            edited = remote.get_note(duplicate.id)
+            edited["SourceID"] = "remote identity edit"
+            remote.update_note(edited)
+            remote.set_deck([edited.cards()[0].id], other)
+
+        self.script["sync"] = [
+            "accepted",
+            TransientError("offline"),
+            TransientError("offline"),
+            TransientError("offline"),
+        ]
+        with self.assertRaises(TransientError):
+            self.worker.once()
+
+        def download(adapter):
+            adapter.collection.close()
+            adapter.store.config.collection_path.write_bytes(remote_backup.read_bytes())
+            adapter.collection = Collection(str(adapter.store.config.collection_path))
+
+        self.script["sync"] = ["download", "accepted"]
+        self.script["download"] = download
+        self.assertTrue(self.worker.once()["healthy"])
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            self.assertEqual(set(collection.find_notes("")), {nid, unrelated.id})
+            self.assertEqual(
+                collection.get_note(unrelated.id)["Back"], "Unrelated answer"
+            )
+
+    def test_interrupted_bootstrap_can_delete_source_before_upload(self):
+        self.script["sync"] = ["upload", "upload"]
+        self.script["uploadError"] = TransientError("offline")
+        with self.assertRaises(TransientError):
+            self.worker.once()
+        self.items = []
+        del self.script["uploadError"]
+        self.script["sync"] = ["upload", "upload"]
+        self.assertTrue(self.worker.once()["healthy"])
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            self.assertEqual(collection.note_count(), 0)
 
     def test_failed_upload_retains_mapping_and_restart_does_not_duplicate(self):
         def verify_mapping_then_fail(adapter):

@@ -75,7 +75,9 @@ def ensure_structure(collection, store):
         store.save()
         deck = collection.decks.get(state["deckId"])
         changed = True
-    if deck["name"] != store.config.deck:
+    # Anki resolves NFC, whitespace, and case-equivalent names to the same deck.
+    # Compare resolved identity, not raw spelling, or normalization never settles.
+    if named_deck is None:
         collection.decks.rename(deck["id"], store.config.deck)
         changed = True
     if state.pop("pendingDeck", None):
@@ -130,6 +132,7 @@ def reconcile(collection, store, snapshot):
     model_id = state["modelId"]
     mapping = state["notes"]
     tracked = {nid: source for source, nid in mapping.items()}
+    pending_deletes = set(state.get("pendingDeletes", []))
     prefix = text(source_id(store.config.namespace, store.config.owner, ""))
     expected_fields = {text(source): source for source in snapshot.items}
     by_source = {}
@@ -142,17 +145,20 @@ def reconcile(collection, store, snapshot):
         )
     )
     for nid, mid in collection.db.all("select id, mid from notes"):
-        if nid not in tracked and mid != model_id and nid not in deck_notes:
+        if (
+            nid not in tracked
+            and nid not in pending_deletes
+            and mid != model_id
+            and nid not in deck_notes
+        ):
             continue
         cards = [collection.get_card(cid) for cid in collection.card_ids_of_note(nid)]
         note = collection.get_note(nid)
         all_notes[nid] = note
         cards_by_note[nid] = cards
+        if (nid in tracked or nid in pending_deletes) and mid != model_id:
+            refuse_schema(store, "A tracked note was converted to another note type")
         if nid in tracked:
-            if mid != model_id:
-                refuse_schema(
-                    store, "A tracked note was converted to another note type"
-                )
             source = tracked[nid]
         elif mid == model_id:
             value = note.fields[source_index]
@@ -166,14 +172,13 @@ def reconcile(collection, store, snapshot):
             by_source.setdefault(source, []).append(nid)
 
     # Exceptional tracked/shared notes are refused before any note/card mutation.
-    for source, nids in by_source.items():
-        for nid in nids:
-            cards = cards_by_note[nid]
-            if len(cards) > 1:
-                refuse_schema(
-                    store,
-                    "A managed note has multiple cards; separate unrelated cards into their own note before retrying",
-                )
+    owned = pending_deletes | {nid for nids in by_source.values() for nid in nids}
+    for nid in owned & cards_by_note.keys():
+        if len(cards_by_note[nid]) > 1:
+            refuse_schema(
+                store,
+                "A managed note has multiple cards; separate unrelated cards into their own note before retrying",
+            )
 
     counts = {
         "created": 0,
@@ -219,7 +224,10 @@ def reconcile(collection, store, snapshot):
             mapping[source] = nid
         keep.add(nid)
 
-    owned = {nid for nids in by_source.values() for nid in nids}
+    # Persist every owned deletion before mutating Anki, including duplicates
+    # that cannot fit in the canonical source-to-note mapping.
+    state["pendingDeletes"] = sorted(owned - keep)
+    store.save()
     for nid, note in all_notes.items():
         if nid in keep:
             continue
@@ -234,7 +242,9 @@ def reconcile(collection, store, snapshot):
             # remove_notes_by_card removes entire notes: NEVER use it here.
             collection.remove_cards_and_orphaned_notes(managed_cards)
             counts["removedCards"] += len(managed_cards)
-    state["notes"] = {source: mapping[source] for source in snapshot.items}
+    # Keep deletion identities until the remote accepts the projection. A full
+    # download can restore a deleted note with an edited SourceID in another deck.
+    # Forgetting its ID here would turn that owned note into unrelated content.
     store.save()
     return counts
 

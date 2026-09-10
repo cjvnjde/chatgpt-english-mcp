@@ -1,0 +1,3 @@
+-- Context-only sense identities use a separate namespace from dictionary definitions.
+-- migrateContextSenseKeys performs the data update with Go's Unicode normalization
+-- and SHA-256, preserving vocabulary IDs, scheduling state, and immutable history.

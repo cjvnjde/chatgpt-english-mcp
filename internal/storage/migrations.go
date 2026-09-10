@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"embed"
 	"encoding/hex"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"english-learning-mcp/internal/domain"
 )
 
 //go:embed migrations/*.sql
@@ -87,6 +90,11 @@ func (db *DB) migrate(ctx context.Context) error {
 		if _, err := transaction.ExecContext(ctx, item.contents); err != nil {
 			return fmt.Errorf("apply migration %03d: %w", item.version, err)
 		}
+		if item.version == 14 {
+			if err := migrateContextSenseKeys(ctx, transaction); err != nil {
+				return fmt.Errorf("apply migration %03d: %w", item.version, err)
+			}
+		}
 		if _, err := transaction.ExecContext(
 			ctx,
 			"INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
@@ -104,6 +112,52 @@ func (db *DB) migrate(ctx context.Context) error {
 
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("commit migrations: %w", err)
+	}
+	return nil
+}
+
+func migrateContextSenseKeys(ctx context.Context, transaction *sql.Tx) error {
+	rows, err := transaction.QueryContext(ctx, `
+		SELECT id, context, sense_key FROM vocabulary_items
+		WHERE selected_definition_json IS NULL AND sense_key <> 'legacy' AND context <> ''
+	`)
+	if err != nil {
+		return fmt.Errorf("read context-only vocabulary identities: %w", err)
+	}
+	type identity struct {
+		id  string
+		key string
+	}
+	var updates []identity
+	for rows.Next() {
+		var id, contextValue, previousKey string
+		if err := rows.Scan(&id, &contextValue, &previousKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan context-only vocabulary identity: %w", err)
+		}
+		if strings.TrimSpace(contextValue) == "" {
+			continue
+		}
+		digest := sha256.Sum256([]byte(domain.NormalizeTerm(contextValue)))
+		key := "context:" + hex.EncodeToString(digest[:])
+		if key != previousKey {
+			updates = append(updates, identity{id: id, key: key})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close context-only vocabulary identities: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate context-only vocabulary identities: %w", err)
+	}
+	for _, item := range updates {
+		// A uniqueness conflict must roll back the migration, not merge or
+		// discard independently saved vocabulary and its learning history.
+		if _, err := transaction.ExecContext(ctx,
+			"UPDATE vocabulary_items SET sense_key = ? WHERE id = ?", item.key, item.id,
+		); err != nil {
+			return fmt.Errorf("migrate context-only vocabulary %q: %w", item.id, err)
+		}
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"english-learning-mcp/internal/domain"
 	"english-learning-mcp/internal/storage"
 	"english-learning-mcp/internal/vocabulary"
 )
@@ -202,6 +203,69 @@ func TestAdminSuggestionsPage(t *testing.T) {
 		if result := adminRequest(handler, method, "/suggestions", `{}`, testToken); result.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("mutable suggestions: %s returned %d", method, result.Code)
 		}
+	}
+}
+
+func TestAdminPersonalInterestPersistsAndRejectsInvalidChangesAtomically(t *testing.T) {
+	_, handler := testHandler(t)
+	created := adminRequest(handler, "POST", "/vocabulary", `{"term":"wringer","personalInterest":"high","notes":["Keep this note"]}`, testToken)
+	if created.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	var saved domain.VocabularyItem
+	if err := json.Unmarshal(created.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	path := "/vocabulary/" + saved.ItemID
+	checkInterest := func(want domain.PersonalInterest) {
+		t.Helper()
+		response := adminRequest(handler, "GET", path, "", testToken)
+		var current domain.VocabularyItem
+		if response.Code != http.StatusOK {
+			t.Fatalf("get: %d %s", response.Code, response.Body.String())
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &current); err != nil {
+			t.Fatal(err)
+		}
+		if current.PersonalInterest != want || current.Usefulness != saved.Usefulness ||
+			len(current.Notes) != 1 || current.Notes[0] != "Keep this note" {
+			t.Fatalf("persisted preference or unrelated metadata changed: %#v", current)
+		}
+	}
+	checkInterest(domain.PersonalInterestHigh)
+	changed := adminRequest(handler, "PATCH", path, `{"personalInterest":"low"}`, testToken)
+	if changed.Code != http.StatusOK {
+		t.Fatalf("interest-only update: %d %s", changed.Code, changed.Body.String())
+	}
+	checkInterest(domain.PersonalInterestLow)
+	rejected := adminRequest(handler, "PATCH", path, `{"personalInterest":"urgent","notes":["Must not persist"]}`, testToken)
+	if rejected.Code != http.StatusBadRequest {
+		t.Fatalf("invalid interest update: %d %s", rejected.Code, rejected.Body.String())
+	}
+	checkInterest(domain.PersonalInterestLow)
+	reset := adminRequest(handler, "PATCH", path, `{"personalInterest":"normal"}`, testToken)
+	if reset.Code != http.StatusOK {
+		t.Fatalf("reset: %d %s", reset.Code, reset.Body.String())
+	}
+	checkInterest(domain.PersonalInterestNormal)
+}
+
+func TestAdminInvalidPersonalInterestDoesNotCreateVocabulary(t *testing.T) {
+	_, handler := testHandler(t)
+	response := adminRequest(handler, "POST", "/vocabulary", `{"term":"wringer","personalInterest":"urgent"}`, testToken)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid interest save: %d %s", response.Code, response.Body.String())
+	}
+	page := adminRequest(handler, "GET", "/tables/vocabulary_items", "", testToken)
+	var result storage.AdminPage
+	if page.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", page.Code, page.Body.String())
+	}
+	if err := json.Unmarshal(page.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 {
+		t.Fatalf("invalid save persisted vocabulary: %#v", result)
 	}
 }
 

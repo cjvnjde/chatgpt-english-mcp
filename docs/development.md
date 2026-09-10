@@ -94,7 +94,7 @@ Unexpected internal causes are logged server-side and replaced with a safe `INTE
 
 ## Storage behavior
 
-SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchronous=NORMAL`, and one open connection. Connection-local pragmas are reapplied by the driver whenever a connection is replaced. Filesystem names are URI-escaped; explicit local `file:` URIs retain their parameters. Vocabulary writes hydrate their return values inside the write transaction, so corrupt stored JSON cannot produce a committed write followed by an error. Important invariants include:
+SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchronous=NORMAL`, and one open connection per handle. Writable transactions use `BEGIN IMMEDIATE`, reserving the writer before reading their snapshot so competing handles cannot invalidate a later write upgrade. Read-only transactions remain deferred. Connection-local pragmas and the write-lock policy are reapplied by the driver whenever a connection is replaced. Filesystem names are URI-escaped; other explicit local `file:` URI parameters are retained. Vocabulary writes hydrate their return values inside the write transaction, so corrupt stored JSON cannot produce a committed write followed by an error. Important invariants include:
 
 - one vocabulary item per owner, normalized term, and sense key;
 - one active dictionary snapshot per provider, term, dataset version, and parser version;
@@ -137,6 +137,8 @@ Migration `011` adds nullable `review_attempts.effective_rating` and a presentat
 
 Migration `012` adds constrained `personal_interest` defaulting to `normal`, without changing existing FSRS state or usefulness. Migration `013` introduces independent reinforcement practice, presentations, and immutable reviews. No fabricated past reinforcement is backfilled.
 
+Migration `014` separates context-only sense keys from dictionary-definition keys. Its Go data step applies the same Unicode normalization and SHA-256 identity calculation used by vocabulary saves. Only context-only keys change; vocabulary IDs, metadata, card schedules, tokens, and immutable history remain intact. Conflicting stored identities abort the transaction rather than merging or deleting learner records. A previously discarded save cannot be reconstructed from the surviving item.
+
 ## Adding or changing a tool
 
 1. Add or update request/response types in `internal/mcpserver/types.go` or the relevant domain package.
@@ -152,7 +154,7 @@ All new errors exposed to callers should use a stable `apperr` code and avoid le
 
 The optional private endpoint returns a complete owner-scoped snapshot from one SQLite read transaction. Its metadata includes schema version, stable namespace and owner, item count, explicit completeness, and a SHA-256 snapshot digest. The worker validates the entire snapshot and verifies the digest against its items before opening or changing Anki state. Digest verification matches Go's compact JSON encoding, including HTML-sensitive characters and Unicode line separators; it detects content mismatch, not the authenticity of an untrusted server. The worker never uses the paginated MCP list as a deletion authority.
 
-Source identity combines integration namespace, encoded owner, and saved item ID. The worker keeps independent ownership mappings so a remote edit to the visible fields or deck cannot evade reconciliation. Every poll downloads remote state into the private worker collection, compares actual fields/tags with the source, and publishes corrections. The application database is never a sync destination.
+Source identity combines integration namespace, encoded owner, and saved item ID. The worker keeps independent ownership mappings so a remote edit to the visible fields or deck cannot evade reconciliation. Canonical mappings and a pending-deletion ID ledger retain ownership until remote convergence is confirmed, including deleted duplicates and creations recovered after an interrupted mapping write. Every poll downloads remote state into the private worker collection, compares actual fields/tags with the source, and publishes corrections. The application database is never a sync destination.
 
 Snapshot schema version `3` includes required usefulness and personal-interest metadata. The Python worker validates both but does not render them into Anki fields/tags or use them for Anki scheduling. Deploy the Go exporter and Python worker together; older snapshots are rejected instead of silently weakening validation. Existing source IDs, note mappings, and Anki cards remain unchanged. Reinforcement practice state is not exported.
 

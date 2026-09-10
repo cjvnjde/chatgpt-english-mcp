@@ -70,10 +70,14 @@ def attribution(title, url):
         )
     except ValueError:
         safe = False
-    if safe and not any(ord(char) < 32 for char in url):
+    if safe and not any(ord(char) < 32 or ord(char) == 127 for char in url):
         return (
             '<a href="'
-            + escape(normalize_field_text(url), quote=True)
+            # Character references preserve URL identity across Anki's NFC
+            # normalization; normalizing a path/query can change its destination.
+            + escape(url, quote=True)
+            .encode("ascii", "xmlcharrefreplace")
+            .decode("ascii")
             + '" rel="noreferrer">'
             + text(label)
             + "</a>"

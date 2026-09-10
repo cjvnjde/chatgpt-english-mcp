@@ -223,7 +223,11 @@ func vocabularySenseKey(definition, contextValue string) string {
 		return "legacy"
 	}
 	digest := sha256.Sum256([]byte(domain.NormalizeTerm(identity)))
-	return hex.EncodeToString(digest[:])
+	key := hex.EncodeToString(digest[:])
+	if definition == "" {
+		return "context:" + key
+	}
+	return key
 }
 
 func (service *Service) Get(ctx context.Context, itemID, term string) (domain.VocabularyItem, error) {

@@ -123,7 +123,7 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 			return nil, err
 		}
 		return service.Save(r.Context(), input.Term, vocabulary.InitialValues{
-			Status: input.Status, Usefulness: input.Usefulness, Tags: input.Tags, CustomDescription: input.CustomDescription,
+			Status: input.Status, Usefulness: input.Usefulness, PersonalInterest: input.PersonalInterest, Tags: input.Tags, CustomDescription: input.CustomDescription,
 			DescriptionSource: input.DescriptionSource, Notes: input.Notes, Examples: input.Examples, Context: input.Context, Definition: input.Definition,
 		})
 	})
@@ -133,7 +133,7 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 			return nil, err
 		}
 		return service.Update(r.Context(), r.PathValue("id"), "", vocabulary.UpdateChanges{
-			Status: changes.Status, Usefulness: changes.Usefulness, Tags: changes.Tags, CustomDescription: changes.CustomDescription,
+			Status: changes.Status, Usefulness: changes.Usefulness, PersonalInterest: changes.PersonalInterest, Tags: changes.Tags, CustomDescription: changes.CustomDescription,
 			DescriptionSource: changes.DescriptionSource, Notes: changes.Notes, Examples: changes.Examples,
 		})
 	})

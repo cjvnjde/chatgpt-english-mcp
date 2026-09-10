@@ -115,7 +115,7 @@ func (db *DB) InsertDictionarySnapshot(ctx context.Context, input DictionarySnap
 					SELECT id
 					FROM dictionary_snapshots
 					WHERE provider = ? AND normalized_term = ? AND dataset_version = ?
-					  AND parser_version = ? AND id <> ?
+					  AND id <> ?
 				)
 			  )
 		`,
@@ -124,7 +124,6 @@ func (db *DB) InsertDictionarySnapshot(ctx context.Context, input DictionarySnap
 			input.Provider,
 			input.NormalizedTerm,
 			input.DatasetVersion,
-			input.ParserVersion,
 			id,
 		); err != nil {
 			return nil, fmt.Errorf("refresh saved vocabulary lookups: %w", err)

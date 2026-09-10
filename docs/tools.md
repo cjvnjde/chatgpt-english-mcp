@@ -91,9 +91,9 @@ Definition `labels` may include Cambridge CEFR levels such as `B1`, alongside us
 
 The operation is idempotent by normalized term and selected meaning. `definition` must exactly match a definition returned by `dictionary_lookup`. Saving another definition for the same spelling creates another vocabulary item and independent learning card while reusing the same cached lookup. `context` is a short learner-facing distinction such as `"boating"`.
 
-For terms with dictionary data, callers should always pass `definition`. Omitting it preserves the legacy one-item-per-term behavior unless different non-empty contexts are supplied. Initial metadata is applied only when creating the same meaning; an existing item is never overwritten.
+For terms with dictionary data, callers should always pass `definition`. Omitting it preserves the legacy one-item-per-term behavior unless different non-empty contexts are supplied. A context-only meaning and a dictionary-selected meaning remain distinct even when their normalized identity text is identical. Initial metadata is applied only when creating the same meaning; an existing item is never overwritten.
 
-Dictionary-selected meanings retain the immutable lookup snapshot used when they were saved, preserving definition indices, part of speech, and pronunciation across refreshes. Legacy/context-only items can follow newer successful lookups. Re-saving a legacy item with an explicit definition can create a separate card; use metadata updates when preserving its existing identity and history.
+Dictionary-selected meanings retain the immutable lookup snapshot used when they were saved, preserving definition indices, part of speech, and pronunciation across refreshes. Legacy/context-only items can follow newer successful lookups, including parser upgrades within the same provider and dataset. Re-saving a legacy item with an explicit definition can create a separate card; use metadata updates when preserving its existing identity and history.
 
 Tags are trimmed, lowercased, deduplicated, and sorted. `descriptionSource.url`, when present, must be an absolute HTTP(S) URL and requires a non-empty custom description.
 

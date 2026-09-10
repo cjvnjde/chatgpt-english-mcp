@@ -156,13 +156,15 @@ To renew authentication, update `ANKIWEB_PASSWORD` in Dokploy Environment or `.e
 
 The first connection downloads an existing remote collection before projection. Empty-account bootstrap is handled separately. Required full downloads trigger another reconciliation. The worker refuses an ambiguous full upload: uploading a fresh or partial local collection could erase unrelated remote notes. Resolve such errors by syncing a complete account collection in an official Anki client, backing up both sides, and following the reported recovery instructions; do not delete worker state to bypass safety checks.
 
+Deleted managed-note IDs remain in worker state until AnkiWeb acceptance and convergence are confirmed. This lets reconciliation remove restored notes after a failed sync and full download even when their source fields or deck were edited remotely. Preserve pending-deletion state with the collection; downgrading to a worker that discards it reintroduces this recovery risk.
+
 Persisted account/source identity prevents accidental volume reuse. For a different account or source, use a separate volume and account rather than editing identity files. Deck and note-type IDs survive display-name changes. Incompatible note-type schema changes are refused rather than silently dropping notes; preserve a backup of both collection and mapping before any operator-led schema repair.
 
 If a manually added note has cards in both managed and unrelated decks, only its managed cards are removed. A tracked note converted to an incompatible type or expanded to multiple cards is refused with a backup and recovery message rather than deleting unrelated cards. Restore its one-card managed structure before retrying.
 
 Vocabulary tags are encoded as `vocab::u` followed by lowercase UTF-8 hex. This preserves tag identity despite Anki's whitespace and case-insensitive tag rules; the worker owns the full tag set on its managed notes.
 
-Rendered Anki fields use NFC Unicode and omit Anki-unsupported ASCII controls so unchanged content converges instead of triggering repeated repairs. Application text, source identity, and encoded tag identity remain unchanged. NUL-containing snapshots are still rejected before collection mutation.
+Rendered display text uses NFC Unicode and omits Anki-unsupported ASCII controls so unchanged content converges instead of triggering repeated repairs. Source-link destinations preserve their original Unicode spelling through HTML character references rather than normalizing URL paths or queries. Application text, source identity, and encoded tag identity remain unchanged. NUL-containing snapshots are still rejected before collection mutation. Managed deck names are compared using Anki's own normalization and case-insensitive identity rules, not raw configuration spelling.
 
 Snapshots with mismatched item digests are rejected before opening or changing the collection; a malformed empty snapshot cannot authorize deletion using a previous snapshot's digest.
 
