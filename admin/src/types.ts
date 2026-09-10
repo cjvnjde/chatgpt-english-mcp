@@ -20,11 +20,13 @@ export type Page = {
 export type Session = { owner: string; version: number };
 export type Vocabulary = {
   itemId: string;
+  revision: number;
   term: string;
   normalizedTerm: string;
   context?: string;
   status: string;
   usefulness: string;
+  personalInterest: "low" | "normal" | "high";
   tags: string[];
   notes: string[];
   examples: string[];

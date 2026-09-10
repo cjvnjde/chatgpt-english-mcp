@@ -69,6 +69,7 @@ type VocabularySense struct {
 
 type VocabularyItem struct {
 	ItemID            string                  `json:"itemId"`
+	EditRevision      int64                   `json:"-"`
 	Term              string                  `json:"term"`
 	NormalizedTerm    string                  `json:"normalizedTerm"`
 	Status            LearningStatus          `json:"status"`

@@ -1,5 +1,6 @@
 import os
 from importlib.metadata import version
+from threading import Event, Thread
 from urllib.parse import urlsplit
 
 from anki.collection import Collection
@@ -23,20 +24,39 @@ class AnkiAdapter:
         self.config = config
         self.store = store
         self.collection = Collection(str(config.collection_path))
-        os.chmod(config.collection_path, 0o600)
+        try:
+            os.chmod(config.collection_path, 0o600)
+        except Exception:
+            self.collection.close()
+            raise
         self.auth = None
 
     def close(self):
         self.collection.close()
 
     def call(self, operation):
+        self.store.check_stop()
+        finished = Event()
+
+        def cancel_on_stop():
+            while not finished.wait(0.1):
+                if self.store.stop_event is not None and self.store.stop_event.is_set():
+                    # Public pinned API; repeat to cover stop racing operation startup.
+                    self.collection.abort_sync()
+
+        monitor = Thread(target=cancel_on_stop, daemon=True)
+        monitor.start()
         try:
-            return operation()
+            result = operation()
+            self.store.check_stop()
+            return result
         except NetworkError:
+            self.store.check_stop()
             raise TransientError(
                 "AnkiWeb network request failed; retrying with bounded backoff"
             ) from None
         except SyncError as error:
+            self.store.check_stop()
             if error.kind is SyncErrorKind.AUTH:
                 self.auth = None
                 self.store.auth_path.unlink(missing_ok=True)
@@ -47,9 +67,13 @@ class AnkiAdapter:
                 "AnkiWeb rejected synchronization; check service availability and pinned client/server version before retrying"
             ) from None
         except AnkiException:
+            self.store.check_stop()
             raise WorkerError(
                 "Anki operation failed; back up the volume and check collection integrity/client version"
             ) from None
+        finally:
+            finished.set()
+            monitor.join()
 
     def authenticate(self, *, force=False):
         saved = None if force else load_json(self.store.auth_path)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -312,6 +314,114 @@ func TestDescriptionSourceRequiresDescriptionAndHTTPURL(t *testing.T) {
 		DescriptionSource: &domain.DescriptionSource{URL: "ftp://example.test/bank"},
 	})
 	assertApplicationError(t, err, apperr.InvalidArgument)
+}
+
+type interleavedUpdateStore struct {
+	Store
+	beforeUpdate func()
+}
+
+func (store interleavedUpdateStore) UpdateVocabulary(ctx context.Context, input storage.VocabularyUpdate) (domain.VocabularyItem, error) {
+	store.beforeUpdate()
+	return store.Store.UpdateVocabulary(ctx, input)
+}
+
+func TestDescriptionSourceValidatesCurrentTransactionalDescription(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "interleaved.sqlite")
+	first, err := storage.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	second, err := storage.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	clearer := NewService(second, "owner", storage.SourceVersion{})
+	description := "Original description"
+	saved, err := clearer.Save(ctx, "bank", InitialValues{
+		CustomDescription: &description,
+		DescriptionSource: &domain.DescriptionSource{Title: "Original source"},
+		Notes:             []string{"Keep me"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleared domain.VocabularyItem
+	writer := NewService(interleavedUpdateStore{Store: first, beforeUpdate: func() {
+		empty := ""
+		cleared, err = clearer.Update(ctx, saved.ItemID, "", UpdateChanges{CustomDescription: &empty})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}}, "owner", storage.SourceVersion{})
+	// The first service has already read the old description when the second
+	// service clears it, before the first storage transaction starts.
+	_, err = writer.Update(ctx, saved.ItemID, "", UpdateChanges{
+		DescriptionSource: &domain.DescriptionSource{Title: "Stale attribution"},
+	})
+	assertApplicationError(t, err, apperr.InvalidArgument)
+	current, err := clearer.Get(ctx, saved.ItemID, "")
+	if err != nil || !reflect.DeepEqual(current, cleared) || current.DescriptionSource != nil {
+		t.Fatalf("invalid attribution committed or unrelated metadata changed: %#v, %v", current, err)
+	}
+}
+
+func TestVocabularyUpdateRevisionRejectsStaleWritersAndStaysOffWire(t *testing.T) {
+	service := newTestService(t, "owner")
+	ctx := context.Background()
+	saved, err := service.Save(ctx, "bank", InitialValues{Notes: []string{"original"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := saved.EditRevision
+	tags := []string{"first"}
+	first, err := service.Update(ctx, saved.ItemID, "", UpdateChanges{ExpectedRevision: &revision, Tags: &tags})
+	if err != nil || first.EditRevision <= revision || !equalValues(first.Notes, saved.Notes) {
+		t.Fatalf("first writer = %#v, %v", first, err)
+	}
+	notes := []string{"second"}
+	_, err = service.Update(ctx, saved.ItemID, "", UpdateChanges{ExpectedRevision: &revision, Notes: &notes})
+	assertApplicationError(t, err, apperr.Conflict)
+	current, err := service.Get(ctx, saved.ItemID, "")
+	if err != nil || !reflect.DeepEqual(current, first) {
+		t.Fatalf("stale writer mutated current item: %#v, %v", current, err)
+	}
+	// MCP updates do not provide an admin precondition, but must invalidate it.
+	mcp, err := service.Update(ctx, saved.ItemID, "", UpdateChanges{Notes: &notes})
+	if err != nil || mcp.EditRevision <= first.EditRevision {
+		t.Fatalf("MCP update = %#v, %v", mcp, err)
+	}
+	_, err = service.Update(ctx, saved.ItemID, "", UpdateChanges{ExpectedRevision: &first.EditRevision, Tags: &tags})
+	assertApplicationError(t, err, apperr.Conflict)
+	for _, value := range []any{saved, mcp, ListResult{Items: []domain.VocabularyItem{mcp}}} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire any
+		if err := json.Unmarshal(encoded, &wire); err != nil {
+			t.Fatal(err)
+		}
+		assertNoRevision := func(item map[string]any) {
+			t.Helper()
+			for _, key := range []string{"revision", "editRevision", "EditRevision", "expectedRevision"} {
+				if _, exists := item[key]; exists {
+					t.Fatalf("admin revision leaked into MCP JSON: %s", encoded)
+				}
+			}
+		}
+		object := wire.(map[string]any)
+		if items, ok := object["items"].([]any); ok {
+			for _, item := range items {
+				assertNoRevision(item.(map[string]any))
+			}
+		} else {
+			assertNoRevision(object)
+		}
+	}
 }
 
 func TestVocabularyIsOwnerScoped(t *testing.T) {

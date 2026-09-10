@@ -16,12 +16,22 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/apperr"
+	"english-learning-mcp/internal/domain"
 	"english-learning-mcp/internal/mcpserver"
 	"english-learning-mcp/internal/storage"
 	"english-learning-mcp/internal/vocabulary"
 )
 
 const EndpointPath = "/admin/api/"
+
+type vocabularyResponse struct {
+	domain.VocabularyItem
+	Revision int64 `json:"revision"`
+}
+
+func adminVocabulary(item domain.VocabularyItem) vocabularyResponse {
+	return vocabularyResponse{VocabularyItem: item, Revision: item.EditRevision}
+}
 
 // NewHandler is mounted only on the external listener. An empty token disables it.
 func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token string, logger *slog.Logger) http.Handler {
@@ -115,27 +125,44 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 		return store.AdminSuggestions(r.Context(), owner, limit, offset)
 	})
 	handle("GET /admin/api/vocabulary/{id}", func(w http.ResponseWriter, r *http.Request) (any, error) {
-		return service.Get(r.Context(), r.PathValue("id"), "")
+		item, err := service.Get(r.Context(), r.PathValue("id"), "")
+		return adminVocabulary(item), err
 	})
 	handle("POST /admin/api/vocabulary", func(w http.ResponseWriter, r *http.Request) (any, error) {
 		var input mcpserver.VocabularySaveInput
 		if err := decode(w, r, &input); err != nil {
 			return nil, err
 		}
-		return service.Save(r.Context(), input.Term, vocabulary.InitialValues{
+		result, err := service.Save(r.Context(), input.Term, vocabulary.InitialValues{
 			Status: input.Status, Usefulness: input.Usefulness, PersonalInterest: input.PersonalInterest, Tags: input.Tags, CustomDescription: input.CustomDescription,
 			DescriptionSource: input.DescriptionSource, Notes: input.Notes, Examples: input.Examples, Context: input.Context, Definition: input.Definition,
 		})
+		return struct {
+			vocabularyResponse
+			Created bool `json:"created"`
+		}{vocabularyResponse: adminVocabulary(result.VocabularyItem), Created: result.Created}, err
 	})
 	handle("PATCH /admin/api/vocabulary/{id}", func(w http.ResponseWriter, r *http.Request) (any, error) {
-		var changes mcpserver.VocabularyUpdateChanges
+		var changes struct {
+			mcpserver.VocabularyUpdateChanges
+			ExpectedRevision json.RawMessage `json:"expectedRevision"`
+		}
 		if err := decode(w, r, &changes); err != nil {
 			return nil, err
 		}
-		return service.Update(r.Context(), r.PathValue("id"), "", vocabulary.UpdateChanges{
-			Status: changes.Status, Usefulness: changes.Usefulness, PersonalInterest: changes.PersonalInterest, Tags: changes.Tags, CustomDescription: changes.CustomDescription,
+		if len(changes.ExpectedRevision) == 0 {
+			return nil, apperr.New(apperr.PreconditionRequired, "expectedRevision is required")
+		}
+		var revision int64
+		if err := json.Unmarshal(changes.ExpectedRevision, &revision); err != nil || revision <= 0 {
+			return nil, apperr.New(apperr.InvalidArgument, "expectedRevision must be a positive integer")
+		}
+		item, err := service.Update(r.Context(), r.PathValue("id"), "", vocabulary.UpdateChanges{
+			ExpectedRevision: &revision,
+			Status:           changes.Status, Usefulness: changes.Usefulness, PersonalInterest: changes.PersonalInterest, Tags: changes.Tags, CustomDescription: changes.CustomDescription,
 			DescriptionSource: changes.DescriptionSource, Notes: changes.Notes, Examples: changes.Examples,
 		})
+		return adminVocabulary(item), err
 	})
 	handle("DELETE /admin/api/vocabulary/{id}", func(w http.ResponseWriter, r *http.Request) (any, error) {
 		err := service.Delete(r.Context(), r.PathValue("id"))
@@ -206,6 +233,10 @@ func writeError(w http.ResponseWriter, err error, logger *slog.Logger) {
 		status, message = http.StatusNotFound, "Record not found"
 	case errors.Is(err, storage.ErrAdminQuery):
 		status, message = http.StatusBadRequest, "Invalid filter, sort column, date, or page size"
+	case appErr.Code == apperr.PreconditionRequired:
+		status, message = http.StatusPreconditionRequired, appErr.Message
+	case appErr.Code == apperr.Conflict:
+		status, message = http.StatusConflict, appErr.Message
 	case appErr.Code == apperr.InvalidArgument:
 		status, message = http.StatusBadRequest, appErr.Message
 	default:

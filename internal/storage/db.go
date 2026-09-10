@@ -68,9 +68,13 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	}
 	// Reapply connection-local settings after replacement connections, including
 	// those discarded when a transaction's context is canceled.
-	for _, pragma := range []string{"foreign_keys(ON)", "busy_timeout(5000)", "synchronous(NORMAL)"} {
+	for _, pragma := range []string{"foreign_keys(ON)", "busy_timeout(5000)", "synchronous(FULL)"} {
 		query.Add("_pragma", pragma)
 	}
+	// URI shorthand settings run after _pragma; they must not weaken durability
+	// when database/sql opens a replacement connection.
+	query.Del("_synchronous")
+	query.Del("_sync")
 	// Reserve the writer before reading a mutation's snapshot. A deferred
 	// read-to-write upgrade can fail immediately despite busy_timeout when
 	// another connection has committed. ReadOnly transactions remain deferred.
@@ -105,7 +109,7 @@ func (db *DB) configure(ctx context.Context) error {
 		"PRAGMA foreign_keys = ON",
 		"PRAGMA journal_mode = WAL",
 		"PRAGMA busy_timeout = 5000",
-		"PRAGMA synchronous = NORMAL",
+		"PRAGMA synchronous = FULL",
 	}
 	for _, statement := range pragmas {
 		if _, err := db.sql.ExecContext(ctx, statement); err != nil {

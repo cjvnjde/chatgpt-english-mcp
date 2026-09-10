@@ -13,6 +13,11 @@ import (
 	"english-learning-mcp/internal/usefulness"
 )
 
+var (
+	ErrEditConflict             = errors.New("vocabulary edit revision conflicts with current item")
+	ErrInvalidDescriptionSource = errors.New("description source requires a non-empty custom description")
+)
+
 type SourceVersion struct {
 	Provider       string
 	ParserVersion  int
@@ -43,6 +48,7 @@ type VocabularyCreate struct {
 type VocabularyUpdate struct {
 	OwnerKey             string
 	ItemID               string
+	ExpectedRevision     *int64
 	Status               *domain.LearningStatus
 	Usefulness           *domain.Usefulness
 	PersonalInterest     *domain.PersonalInterest
@@ -175,6 +181,35 @@ func (db *DB) SaveVocabulary(
 }
 
 func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (domain.VocabularyItem, error) {
+	transaction, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.VocabularyItem{}, fmt.Errorf("begin vocabulary update: %w", err)
+	}
+	defer transaction.Rollback()
+
+	query := vocabularySelect + " WHERE v.owner_key = ? AND v.id = ?"
+	current, err := scanVocabularyItem(transaction.QueryRowContext(ctx, query, input.OwnerKey, input.ItemID))
+	if err != nil {
+		return domain.VocabularyItem{}, err
+	}
+	if input.ExpectedRevision != nil && *input.ExpectedRevision != current.EditRevision {
+		return domain.VocabularyItem{}, ErrEditConflict
+	}
+	description, source := current.CustomDescription, current.DescriptionSource
+	if input.CustomDescription != nil {
+		description = *input.CustomDescription
+		if description == "" && !input.SetDescriptionSource {
+			input.SetDescriptionSource = true
+			input.DescriptionSource = nil
+		}
+	}
+	if input.SetDescriptionSource {
+		source = input.DescriptionSource
+	}
+	if source != nil && strings.TrimSpace(description) == "" {
+		return domain.VocabularyItem{}, ErrInvalidDescriptionSource
+	}
+
 	assignments := make([]string, 0, 11)
 	arguments := make([]any, 0, 13)
 	if input.Status != nil {
@@ -185,19 +220,8 @@ func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (dom
 		if !input.Usefulness.Valid() {
 			return domain.VocabularyItem{}, fmt.Errorf("invalid vocabulary usefulness hint %q", *input.Usefulness)
 		}
-		var normalizedTerm string
-		err := db.sql.QueryRowContext(ctx,
-			"SELECT normalized_term FROM vocabulary_items WHERE owner_key = ? AND id = ?",
-			input.OwnerKey, input.ItemID,
-		).Scan(&normalizedTerm)
-		if errors.Is(err, sql.ErrNoRows) {
-			return domain.VocabularyItem{}, ErrNotFound
-		}
-		if err != nil {
-			return domain.VocabularyItem{}, fmt.Errorf("read vocabulary term for usefulness update: %w", err)
-		}
 		assignments = append(assignments, "usefulness_hint = ?", "usefulness = ?")
-		arguments = append(arguments, *input.Usefulness, usefulness.Estimate(normalizedTerm, *input.Usefulness))
+		arguments = append(arguments, *input.Usefulness, usefulness.Estimate(current.NormalizedTerm, *input.Usefulness))
 	}
 	if input.PersonalInterest != nil {
 		if !input.PersonalInterest.Valid() {
@@ -246,12 +270,6 @@ func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (dom
 		return domain.VocabularyItem{}, fmt.Errorf("vocabulary update has no changes")
 	}
 
-	transaction, err := db.sql.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.VocabularyItem{}, fmt.Errorf("begin vocabulary update: %w", err)
-	}
-	defer transaction.Rollback()
-
 	assignments = append(assignments, "updated_at = ?")
 	arguments = append(arguments, TimeString(input.Now), input.OwnerKey, input.ItemID)
 	result, err := transaction.ExecContext(ctx, `
@@ -270,7 +288,6 @@ func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (dom
 		return domain.VocabularyItem{}, ErrNotFound
 	}
 
-	query := vocabularySelect + " WHERE v.owner_key = ? AND v.id = ?"
 	item, err := scanVocabularyItem(transaction.QueryRowContext(ctx, query, input.OwnerKey, input.ItemID))
 	if err != nil {
 		return domain.VocabularyItem{}, err
@@ -415,7 +432,7 @@ const vocabularySelect = `
 		v.id, v.term, v.normalized_term, v.learning_status, v.usefulness, v.personal_interest, v.tags_json,
 		v.custom_description, v.description_source_json, v.notes_json,
 		v.examples_json, v.context, v.selected_entry_index, v.selected_definition_index,
-		v.selected_definition_json, v.created_at, v.updated_at,
+		v.selected_definition_json, v.created_at, v.updated_at, v.edit_revision,
 		snapshot.id, snapshot.provider, snapshot.normalized_term,
 		snapshot.parser_version, snapshot.dataset_version, snapshot.data_json,
 		snapshot.status, snapshot.source_url, snapshot.fetched_at,
@@ -463,6 +480,7 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		&selectedDefinitionJSON,
 		&createdAt,
 		&updatedAt,
+		&item.EditRevision,
 		&snapshotID,
 		&provider,
 		&snapshotTerm,

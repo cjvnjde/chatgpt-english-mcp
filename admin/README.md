@@ -49,7 +49,7 @@ The build contains only HTML, CSS, and JavaScript. Client navigation uses URL ha
 
 | View | Capabilities |
 | --- | --- |
-| Vocabulary | Create words and meanings, inspect/edit status, description, notes, examples, tags, source, and usefulness hints; archive items or delete with typed confirmation. |
+| Vocabulary | Create words and meanings, inspect/edit status, description, notes, examples, tags, source, usefulness hints, and independent personal interest; archive items or delete with typed confirmation. |
 | Next suggestions | Preview words ranked by current next-draw probability, with selection reasons, learning groups, usefulness, due dates, and last-shown times; open words in the editor. |
 | Reviews / Comments | Search by word, ID, comment, or any stored field; exact-column filters, ratings, dates, pagination; full before/after FSRS state and submitted/effective ratings. Comments stays restricted to commented reviews when optional filters are cleared. |
 | Presentations | Inspect when a card was shown, selection kind, due date, and review token; follow links to cards and reviews. |
@@ -60,6 +60,14 @@ The build contains only HTML, CSS, and JavaScript. Client navigation uses URL ha
 Review and presentation tables remain immutable, as required by the existing database triggers. Cache, scheduler, and system tables are inspectable but not directly writable. Vocabulary writes use the existing service so validation, sense identity, usefulness inference, and card creation/deletion stay consistent. Term/sense identity is fixed after creation; create a new meaning when needed. The database stores review comments and ratings, not answer transcripts. Deleting a word removes its cards; historical records are retained and may no longer have a resolvable word label.
 
 Notes, examples, and tags are edited as separate entries; notes and examples preserve multiline values, and commas within a tag are kept literally. An empty array clears a list. Usefulness is inferred from offline evidence and the optional hint, so the result can differ from the selected hint. For existing items, an empty hint selector preserves the current hint; the existing service has no operation to clear it to automatic.
+
+Personal interest directly sets the learner's low/normal/high priority independently of inferred usefulness. It affects selection weights, not FSRS scheduling or Anki content.
+
+Dirty drafts require explicit confirmation before closing, changing views, opening review history, or signing out. Reloading or leaving the page requests the browser's unsaved-changes confirmation. Drafts are kept in memory, not persisted across a confirmed reload.
+
+The editor sends only changed fields with the loaded `expectedRevision`. If another writer changes the item, a 409 keeps the draft intact and pauses saving. **Load latest and merge draft** preserves local-only edits, adopts untouched remote fields, and requires a choice for fields changed on both sides. Description and attribution merge together. A changed usefulness hint requires an explicit choice because the saved hint is not returned by the vocabulary API. Explicit discard loads the latest saved item instead.
+
+Admin vocabulary items include a `revision`. `PATCH /admin/api/vocabulary/{id}` requires a positive integer `expectedRevision`; missing, invalid, and stale values return 428, 400, and 409 respectively. MCP clients and Anki snapshots do not include this admin precondition.
 
 Search covers stored columns, plus the linked vocabulary term for history/cards. Exact filters match one selected column; date boundaries use UTC and the end day is inclusive. Table timestamps display in the browser's time zone. Learning cards initially sort by earliest due date. Database lists cover all owners; suggestions, analytics, and vocabulary mutations use the configured owner.
 

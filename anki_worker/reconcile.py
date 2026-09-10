@@ -10,7 +10,7 @@ MODEL_NAME = "English MCP Vocabulary"
 
 
 def refuse_schema(store, reason):
-    backup = store.backup()
+    backup = store.recovery_backup()
     raise WorkerError(
         reason
         + f"; backup: {backup}. Restore the managed note type/card structure in Anki and sync again; do not delete the worker state"
@@ -27,6 +27,7 @@ def pending_name(store, key):
 
 
 def ensure_structure(collection, store):
+    store.check_stop()
     state = store.state
     deck = (
         collection.decks.get(state["deckId"], default=False)
@@ -145,6 +146,7 @@ def reconcile(collection, store, snapshot):
         )
     )
     for nid, mid in collection.db.all("select id, mid from notes"):
+        store.check_stop()
         if (
             nid not in tracked
             and nid not in pending_deletes
@@ -174,6 +176,7 @@ def reconcile(collection, store, snapshot):
     # Exceptional tracked/shared notes are refused before any note/card mutation.
     owned = pending_deletes | {nid for nids in by_source.values() for nid in nids}
     for nid in owned & cards_by_note.keys():
+        store.check_stop()
         if len(cards_by_note[nid]) > 1:
             refuse_schema(
                 store,
@@ -189,6 +192,7 @@ def reconcile(collection, store, snapshot):
     }
     keep = set()
     for source, item in snapshot.items.items():
+        store.check_stop()
         candidates = by_source.get(source, [])
         preferred = mapping.get(source)
         nid = preferred if preferred in candidates else min(candidates, default=None)
@@ -199,6 +203,9 @@ def reconcile(collection, store, snapshot):
             note.tags = desired_tags
             collection.add_note(note, deck_id)
             nid = int(note.id)
+            if preferred is not None and preferred != nid:
+                pending_deletes.add(preferred)
+            state["pendingDeletes"] = sorted(pending_deletes)
             # Durable identity precedes every remote upload. A crash before this
             # write is recovered above from the private model's SourceID field.
             mapping[source] = nid
@@ -221,21 +228,31 @@ def reconcile(collection, store, snapshot):
                 collection.set_deck([cards[0].id], deck_id)
                 changed = True
             counts["updated"] += int(changed)
-            mapping[source] = nid
+            if preferred != nid:
+                if preferred is not None:
+                    pending_deletes.add(preferred)
+                state["pendingDeletes"] = sorted(pending_deletes)
+                mapping[source] = nid
+                store.save()
         keep.add(nid)
 
     # Persist every owned deletion before mutating Anki, including duplicates
     # that cannot fit in the canonical source-to-note mapping.
-    state["pendingDeletes"] = sorted(owned - keep)
+    state["pendingDeletes"] = sorted((owned | pending_deletes) - keep)
     store.save()
     for nid, note in all_notes.items():
+        store.check_stop()
         if nid in keep:
             continue
         cards = cards_by_note[nid]
         managed_cards = [
             card.id for card in cards if card.did == deck_id or card.odid == deck_id
         ]
-        if nid in owned or (managed_cards and len(managed_cards) == len(cards)):
+        if (
+            nid in owned
+            or nid in pending_deletes
+            or (managed_cards and len(managed_cards) == len(cards))
+        ):
             collection.remove_notes([nid])
             counts["deleted"] += 1
         elif managed_cards:

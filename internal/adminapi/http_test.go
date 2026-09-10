@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -45,11 +46,11 @@ func TestAdminAuthorizationAndVocabularyLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := item["itemId"].(string)
-	changed := adminRequest(handler, "PATCH", "/vocabulary/"+id, `{"status":"learning","notes":["Updated note"]}`, testToken)
+	changed := adminRequest(handler, "PATCH", "/vocabulary/"+id, fmt.Sprintf(`{"expectedRevision":%.0f,"status":"learning","notes":["Updated note"]}`, item["revision"]), testToken)
 	if changed.Code != 200 || !strings.Contains(changed.Body.String(), "Updated note") {
 		t.Fatalf("update: %s", changed.Body.String())
 	}
-	for _, input := range []string{`{"status":"invalid"}`, `{"unsupported":true}`, `{"status":"new"} {}`, `{"notes":"wrong type"}`} {
+	for _, input := range []string{`{"expectedRevision":2,"status":"invalid"}`, `{"expectedRevision":2,"unsupported":true}`, `{"expectedRevision":2,"status":"new"} {}`, `{"expectedRevision":2,"notes":"wrong type"}`} {
 		if r := adminRequest(handler, "PATCH", "/vocabulary/"+id, input, testToken); r.Code != 400 {
 			t.Fatalf("accepted invalid input %s: %d", input, r.Code)
 		}
@@ -212,7 +213,7 @@ func TestAdminPersonalInterestPersistsAndRejectsInvalidChangesAtomically(t *test
 	if created.Code != http.StatusOK {
 		t.Fatalf("create: %d %s", created.Code, created.Body.String())
 	}
-	var saved domain.VocabularyItem
+	var saved vocabularyResponse
 	if err := json.Unmarshal(created.Body.Bytes(), &saved); err != nil {
 		t.Fatal(err)
 	}
@@ -233,17 +234,21 @@ func TestAdminPersonalInterestPersistsAndRejectsInvalidChangesAtomically(t *test
 		}
 	}
 	checkInterest(domain.PersonalInterestHigh)
-	changed := adminRequest(handler, "PATCH", path, `{"personalInterest":"low"}`, testToken)
+	changed := adminRequest(handler, "PATCH", path, fmt.Sprintf(`{"expectedRevision":%d,"personalInterest":"low"}`, saved.Revision), testToken)
 	if changed.Code != http.StatusOK {
 		t.Fatalf("interest-only update: %d %s", changed.Code, changed.Body.String())
 	}
+	var updated vocabularyResponse
+	if err := json.Unmarshal(changed.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
 	checkInterest(domain.PersonalInterestLow)
-	rejected := adminRequest(handler, "PATCH", path, `{"personalInterest":"urgent","notes":["Must not persist"]}`, testToken)
+	rejected := adminRequest(handler, "PATCH", path, fmt.Sprintf(`{"expectedRevision":%d,"personalInterest":"urgent","notes":["Must not persist"]}`, updated.Revision), testToken)
 	if rejected.Code != http.StatusBadRequest {
 		t.Fatalf("invalid interest update: %d %s", rejected.Code, rejected.Body.String())
 	}
 	checkInterest(domain.PersonalInterestLow)
-	reset := adminRequest(handler, "PATCH", path, `{"personalInterest":"normal"}`, testToken)
+	reset := adminRequest(handler, "PATCH", path, fmt.Sprintf(`{"expectedRevision":%d,"personalInterest":"normal"}`, updated.Revision), testToken)
 	if reset.Code != http.StatusOK {
 		t.Fatalf("reset: %d %s", reset.Code, reset.Body.String())
 	}
@@ -266,6 +271,103 @@ func TestAdminInvalidPersonalInterestDoesNotCreateVocabulary(t *testing.T) {
 	}
 	if result.Total != 0 {
 		t.Fatalf("invalid save persisted vocabulary: %#v", result)
+	}
+}
+
+func TestAdminVocabularyRevisionPreconditions(t *testing.T) {
+	store, handler := testHandler(t)
+	decodeItem := func(response *httptest.ResponseRecorder) vocabularyResponse {
+		t.Helper()
+		if response.Code != http.StatusOK {
+			t.Fatalf("vocabulary response: %d %s", response.Code, response.Body.String())
+		}
+		var item vocabularyResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &item); err != nil {
+			t.Fatal(err)
+		}
+		if item.Revision <= 0 {
+			t.Fatalf("missing positive admin revision: %s", response.Body.String())
+		}
+		return item
+	}
+	saved := decodeItem(adminRequest(handler, "POST", "/vocabulary",
+		`{"term":"bank","customDescription":"Keep description","notes":["Keep note"],"tags":["keep"]}`, testToken))
+	path := "/vocabulary/" + saved.ItemID
+	loaded := decodeItem(adminRequest(handler, "GET", path, "", testToken))
+	if loaded.Revision != saved.Revision {
+		t.Fatalf("GET revision %d differs from POST %d", loaded.Revision, saved.Revision)
+	}
+	baseline := adminRequest(handler, "GET", path, "", testToken).Body.String()
+	for _, tc := range []struct {
+		body   string
+		status int
+	}{
+		{`{"notes":["must not persist"]}`, http.StatusPreconditionRequired},
+		{`{"expectedRevision":null,"notes":["must not persist"]}`, http.StatusBadRequest},
+		{`{"expectedRevision":0,"notes":["must not persist"]}`, http.StatusBadRequest},
+		{`{"expectedRevision":-1,"notes":["must not persist"]}`, http.StatusBadRequest},
+		{`{"expectedRevision":1.5,"notes":["must not persist"]}`, http.StatusBadRequest},
+		{`{"expectedRevision":"1","notes":["must not persist"]}`, http.StatusBadRequest},
+		{`{"expectedRevision":9223372036854775808,"notes":["must not persist"]}`, http.StatusBadRequest},
+	} {
+		response := adminRequest(handler, "PATCH", path, tc.body, testToken)
+		if response.Code != tc.status {
+			t.Fatalf("precondition %s returned %d: %s", tc.body, response.Code, response.Body.String())
+		}
+		if current := adminRequest(handler, "GET", path, "", testToken).Body.String(); current != baseline {
+			t.Fatalf("rejected precondition mutated vocabulary: %s", current)
+		}
+	}
+	first := decodeItem(adminRequest(handler, "PATCH", path,
+		fmt.Sprintf(`{"expectedRevision":%d,"tags":["winner"]}`, loaded.Revision), testToken))
+	if first.Revision <= loaded.Revision || first.CustomDescription != loaded.CustomDescription ||
+		len(first.Notes) != 1 || first.Notes[0] != loaded.Notes[0] {
+		t.Fatalf("partial edit lost metadata or did not advance revision: %#v", first)
+	}
+	baseline = adminRequest(handler, "GET", path, "", testToken).Body.String()
+	stale := adminRequest(handler, "PATCH", path,
+		fmt.Sprintf(`{"expectedRevision":%d,"notes":["loser"],"customDescription":""}`, loaded.Revision), testToken)
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale writer returned %d: %s", stale.Code, stale.Body.String())
+	}
+	if current := adminRequest(handler, "GET", path, "", testToken).Body.String(); current != baseline {
+		t.Fatalf("stale edit changed metadata: %s", current)
+	}
+	mcp := vocabulary.NewService(store, "default", storage.SourceVersion{Provider: "cambridge", ParserVersion: 1})
+	notes := []string{"MCP edit"}
+	if _, err := mcp.Update(context.Background(), saved.ItemID, "", vocabulary.UpdateChanges{Notes: &notes}); err != nil {
+		t.Fatal(err)
+	}
+	baseline = adminRequest(handler, "GET", path, "", testToken).Body.String()
+	stale = adminRequest(handler, "PATCH", path,
+		fmt.Sprintf(`{"expectedRevision":%d,"tags":["stale admin"]}`, first.Revision), testToken)
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("MCP did not invalidate admin draft: %d %s", stale.Code, stale.Body.String())
+	}
+	if current := adminRequest(handler, "GET", path, "", testToken).Body.String(); current != baseline {
+		t.Fatalf("stale admin overwrote MCP edit: %s", current)
+	}
+	fresh := decodeItem(adminRequest(handler, "GET", path, "", testToken))
+	merged := decodeItem(adminRequest(handler, "PATCH", path,
+		fmt.Sprintf(`{"expectedRevision":%d,"tags":["merged"]}`, fresh.Revision), testToken))
+	if len(merged.Notes) != 1 || merged.Notes[0] != "MCP edit" || merged.Revision <= fresh.Revision {
+		t.Fatalf("fresh partial merge lost MCP metadata: %#v", merged)
+	}
+	if response := adminRequest(handler, "DELETE", path, "", testToken); response.Code != http.StatusOK {
+		t.Fatalf("delete: %d", response.Code)
+	}
+	recreated := decodeItem(adminRequest(handler, "POST", "/vocabulary", `{"term":"bank","notes":["replacement"]}`, testToken))
+	if recreated.ItemID == saved.ItemID {
+		t.Fatal("recreation reused the deleted item's identity")
+	}
+	stale = adminRequest(handler, "PATCH", path,
+		fmt.Sprintf(`{"expectedRevision":%d,"notes":["old identity"]}`, merged.Revision), testToken)
+	if stale.Code != http.StatusNotFound {
+		t.Fatalf("old identity was accepted after recreation: %d %s", stale.Code, stale.Body.String())
+	}
+	replacement := decodeItem(adminRequest(handler, "GET", "/vocabulary/"+recreated.ItemID, "", testToken))
+	if replacement.Revision != recreated.Revision || len(replacement.Notes) != 1 || replacement.Notes[0] != "replacement" {
+		t.Fatalf("stale old identity changed replacement: %#v", replacement)
 	}
 }
 

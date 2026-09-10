@@ -12,7 +12,7 @@ export default function Modal(props: {
   onMount(() => dialog.showModal());
   onCleanup(() => {
     dialog.close();
-    previous?.focus();
+    if (previous?.isConnected) previous.focus();
   });
   return (
     <dialog

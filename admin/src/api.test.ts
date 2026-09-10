@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { createAPI } from "./api.ts";
+import { APIError, createAPI } from "./api.ts";
 
 test("auth is sent in a header and private requests never use cookies, redirects, or cache", async () => {
   const fakeFetch = (async (input, init) => {
@@ -62,4 +62,31 @@ test("SQLite export returns the binary response intact", async () => {
   );
   const blob = await api<Blob>("/database", {}, "blob");
   assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), bytes);
+});
+
+test("stale edit failures preserve the session and expose a conflict without retrying", async () => {
+  let requests = 0;
+  let invalidated = false;
+  const api = createAPI(
+    "token",
+    () => {
+      invalidated = true;
+    },
+    async () => {
+      requests++;
+      return Response.json(
+        { error: "Vocabulary changed; reload before editing" },
+        { status: 409 },
+      );
+    },
+  );
+  await assert.rejects(
+    api("/vocabulary/word-one", {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: 4, personalInterest: "high" }),
+    }),
+    (error: unknown) => error instanceof APIError && error.status === 409,
+  );
+  assert.equal(requests, 1);
+  assert.equal(invalidated, false);
 });

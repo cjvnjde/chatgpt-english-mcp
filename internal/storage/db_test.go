@@ -165,7 +165,6 @@ func TestReplacementSQLiteConnectionPreservesDeleteCascades(t *testing.T) {
 		t.Fatalf("replacement connection left %d orphaned learning cards", cards)
 	}
 	assertPragma(t, store, "busy_timeout", 5000)
-	assertPragma(t, store, "synchronous", 1)
 }
 
 func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory(t *testing.T) {

@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from urllib.error import HTTPError, URLError
@@ -235,7 +236,10 @@ def unique_object(pairs):
     return result
 
 
-def fetch_snapshot(config):
+def fetch_snapshot(config, *, check_stop=None):
+    if check_stop is not None:
+        check_stop()
+    deadline = time.monotonic() + 60
     request = Request(
         config.source_url,
         headers={
@@ -247,9 +251,20 @@ def fetch_snapshot(config):
         with build_opener(NoRedirect()).open(request, timeout=30) as response:
             if response.status != 200:
                 raise WorkerError("Snapshot endpoint returned an unexpected status")
-            body = response.read(64 * 1024 * 1024 + 1)
-            if len(body) > 64 * 1024 * 1024:
-                raise WorkerError("Snapshot exceeds the 64 MiB safety limit")
+            body = bytearray()
+            while True:
+                if check_stop is not None:
+                    check_stop()
+                if time.monotonic() >= deadline:
+                    raise TransientError(
+                        "Snapshot transport exceeded the bounded request deadline"
+                    )
+                block = response.read1(64 * 1024)
+                if not block:
+                    break
+                body.extend(block)
+                if len(body) > 64 * 1024 * 1024:
+                    raise WorkerError("Snapshot exceeds the 64 MiB safety limit")
         payload = json.loads(body, object_pairs_hook=unique_object)
     except HTTPError as error:
         if error.code in (408, 429, 500, 502, 503, 504):

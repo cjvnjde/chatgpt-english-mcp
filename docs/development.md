@@ -27,9 +27,11 @@ Both MCP handlers reject foreign browser origins while allowing same-origin and 
 ## Test and build
 
 ```sh
-go test ./...
+go test -race ./...
 go build ./cmd/english-learning-mcp
 ```
+
+CI runs the Go race suite and production build, Anki worker and dictionary-builder tests, and admin tests and production build on every push and pull request. Toolchains and action revisions are pinned in `.github/workflows/ci.yml`; Python dependencies are hash-locked in `anki_worker/requirements.txt` and `.github/requirements-builders.txt`, and the admin uses `npm ci`.
 
 ## Offline frequency datasets
 
@@ -38,7 +40,7 @@ go build ./cmd/english-learning-mcp
 Refresh the checked-in assets with:
 
 ```sh
-uv run --no-project --with msgpack scripts/build_usefulness.py
+uv run --no-project --with-requirements .github/requirements-builders.txt scripts/build_usefulness.py
 ```
 
 This maintenance command needs network access; ordinary builds and inference do not download frequency data. It downloads pinned, checksummed inputs, preserves source rank order, resolves normalization collisions to the best rank, and recreates `assets/ranks.bin.gz`, `assets/manifest.json`, `revision.go`, and verbatim upstream license files. Do not hand-edit those outputs. Before changing an input pin, verify its upstream release or dataset revision and update its checksum. The manifest records exact inputs, counts, and the decoded content checksum.
@@ -46,8 +48,8 @@ This maintenance command needs network access; ordinary builds and inference do 
 Expression assets have their own reproducible builder:
 
 ```sh
-uv run --no-project --with msgpack scripts/build_expressions.py --cache-dir /path/to/expression-sources
-uv run --offline --no-project --with msgpack scripts/build_expressions.py --offline --cache-dir /path/to/expression-sources
+uv run --no-project --with-requirements .github/requirements-builders.txt scripts/build_expressions.py --cache-dir /path/to/expression-sources
+uv run --offline --no-project --with-requirements .github/requirements-builders.txt scripts/build_expressions.py --offline --cache-dir /path/to/expression-sources
 ```
 
 The first command downloads missing pinned inputs; the second requires cached Python dependencies and source inputs, and disables network access in both `uv` and the builder. The cached sources total roughly 2.9 GB, including the complete supported Kaikki raw export; processing streams the corpus and retains only English multiword records. Ordinary application builds need only the checked-in compressed assets, not these caches. The current expression index contains 218,249 canonical entries, 169,565 explicit aliases, and 2,321 genuine WordNet exception forms.
@@ -57,7 +59,7 @@ The first command downloads missing pinned inputs; the second requires cached Py
 Run the builder regressions without loading the source corpus:
 
 ```sh
-uv run --offline --no-project --with msgpack python -m unittest discover -s scripts -p 'test_*.py'
+uv run --offline --no-project --with-requirements .github/requirements-builders.txt python -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 The builder retains unrestricted senses, collapses only unambiguous pure form/alternative entries, ignores false or unclear MAGPIE annotations, and uses only contiguous valid observed spans as aliases. Form-chain traversal stops at intermediate entries with independent lexical or usage evidence rather than bypassing them. Source POS gates first-verb inflection: a noun phrase such as `bank holiday` cannot become `banked holiday` merely because `bank` is also a verb. No regular inflections are fabricated. Corpus observations and tagged counts are attestation heuristics, not phrase-frequency ranks; the source `common` tag is deliberately not a positive-frequency signal.
@@ -94,7 +96,7 @@ Unexpected internal causes are logged server-side and replaced with a safe `INTE
 
 ## Storage behavior
 
-SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchronous=NORMAL`, and one open connection per handle. Writable transactions use `BEGIN IMMEDIATE`, reserving the writer before reading their snapshot so competing handles cannot invalidate a later write upgrade. Read-only transactions remain deferred. Connection-local pragmas and the write-lock policy are reapplied by the driver whenever a connection is replaced. Filesystem names are URI-escaped; other explicit local `file:` URI parameters are retained. Vocabulary writes hydrate their return values inside the write transaction, so corrupt stored JSON cannot produce a committed write followed by an error. Important invariants include:
+SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchronous=FULL`, and one open connection per handle. FULL syncs committed WAL writes before acknowledging them, trading write latency for power-loss durability when the filesystem and storage honor synchronization. Writable transactions use `BEGIN IMMEDIATE`, reserving the writer before reading their snapshot so competing handles cannot invalidate a later write upgrade. Read-only transactions remain deferred. Connection-local pragmas and the write-lock policy are reapplied by the driver whenever a connection is replaced. Filesystem names are URI-escaped; explicit local `file:` URI parameters cannot weaken these durability settings. Vocabulary writes validate coupled description/source metadata and hydrate return values inside the write transaction, so concurrent changes or corrupt stored JSON cannot produce a committed invalid write. Important invariants include:
 
 - one vocabulary item per owner, normalized term, and sense key;
 - one active dictionary snapshot per provider, term, dataset version, and parser version;
@@ -102,6 +104,8 @@ SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchro
 - immutable review-attempt and presentation-event rows, retained after vocabulary deletion;
 - unique, rotating review tokens;
 - automatic learning-card creation for new or reactivated items.
+
+Migration `015` adds an integer edit revision and a trigger that advances it only when editable vocabulary metadata changes, including MCP writes and usefulness recalculation. Admin PATCH requires a positive `expectedRevision`: missing preconditions return 428, malformed values return 400, and stale revisions return 409 without mutation. Revision comparison and the update share the writer transaction. Successful admin vocabulary responses expose `revision`; MCP and Anki export shapes are unchanged. Scheduler and presentation activity do not invalidate drafts.
 
 `learning_next` is a mutating, non-destructive, non-idempotent operation. Candidate selection, vocabulary hydration, and presentation insertion share one SQLite transaction and connection. Each committed selection records owner/item/card IDs, exercise mode, review token, issuance and due timestamps, and selection kind. The response exposes the event ID and UTC issuance time; issuing an item does not modify FSRS scheduling state or rotate its review token.
 

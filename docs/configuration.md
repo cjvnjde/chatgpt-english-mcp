@@ -27,8 +27,9 @@ All bearer tokens must use HTTP bearer-token characters; embedded whitespace and
 |---|---|---|
 | `CONTROL_PLANE_API_KEY` | none | Required credential used by the tunnel client. It is not sent to the MCP server. |
 | `CONTROL_PLANE_TUNNEL_ID` | none | Required tunnel identifier. |
-| `TUNNEL_CLIENT_VERSION` | `v0.0.13` | Tunnel-client Git tag built into the image. |
 | `IMAGE_TAG` | `latest` | Optional tag for the locally built image. |
+
+The image builds tunnel client `v0.0.13` from immutable commit `4b5267f823be0b046bb883aacb51603cfde3a0ea`. Update its pin in `Dockerfile` when upgrading; there is no runtime version override.
 
 ## Generate the direct-client token
 

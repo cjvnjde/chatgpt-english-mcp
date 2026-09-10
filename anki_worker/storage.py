@@ -9,7 +9,7 @@ from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import WorkerError
+from .config import StopRequested, WorkerError
 
 
 def now():
@@ -52,7 +52,9 @@ def load_json(path, default=None):
 
 
 class Store:
-    def __init__(self, config):
+    BACKUP_LIMIT = 5
+
+    def __init__(self, config, *, stop_event=None):
         self.config = config
         self.directory = config.collection_path.parent
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -60,6 +62,12 @@ class Store:
         self.auth_path = self.directory / "worker-auth.json"
         self.status_path = self.directory / "worker-status.json"
         self.state = None
+        self.stop_event = stop_event
+        self.recovery_path = self.directory / "worker-recovery.json"
+
+    def check_stop(self):
+        if self.stop_event is not None and self.stop_event.is_set():
+            raise StopRequested()
 
     @contextmanager
     def lock(self):
@@ -150,26 +158,120 @@ class Store:
         atomic_json(self.status_path, previous)
         return previous
 
-    def backup(self):
-        destination = (
-            self.directory
-            / "backups"
-            / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    def recovery_backup(self):
+        incident = load_json(self.recovery_path)
+        if incident is not None and not isinstance(incident, dict):
+            raise WorkerError(
+                "Recovery backup identity is malformed; restore the matching recovery record"
+            )
+        if incident is None:
+            incident = {
+                "backup": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+            }
+            atomic_json(self.recovery_path, incident)
+        name = incident.get("backup")
+        if not isinstance(name, str) or not re.fullmatch(r"\d{8}T\d{6}\.\d{6}Z", name):
+            raise WorkerError(
+                "Recovery backup identity is malformed; restore the matching recovery record"
+            )
+        destination = self.directory / "backups" / name
+        if not (destination / "complete.json").exists():
+            self.backup(name=name)
+        else:
+            self.prune_backups()
+        self.status(recoveryBackup=str(destination), recoveryActive=True)
+        return destination
+
+    def finish_recovery(self):
+        self.recovery_path.unlink(missing_ok=True)
+        self.sync_directory(self.directory)
+        # Keep the last useful backup location in operator-visible status.
+        self.status(recoveryActive=False)
+
+    @staticmethod
+    def sync_directory(path):
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def prune_backups(self):
+        root = self.directory / "backups"
+        incident = load_json(self.recovery_path, {})
+        protected = incident.get("backup")
+        completed = sorted(
+            path
+            for path in root.iterdir()
+            if path.is_dir()
+            and not path.is_symlink()
+            and re.fullmatch(r"\d{8}T\d{6}\.\d{6}Z", path.name)
         )
-        destination.mkdir(parents=True, mode=0o700)
-        if self.config.collection_path.exists():
-            with closing(
-                sqlite3.connect(
-                    self.config.collection_path.absolute().as_uri() + "?mode=ro",
-                    uri=True,
-                )
-            ) as source:
-                target_path = destination / self.config.collection_path.name
-                with closing(sqlite3.connect(target_path)) as target:
-                    source.backup(target)
-                os.chmod(target_path, 0o600)
-        for path in (self.state_path, self.auth_path, self.status_path):
-            if path.exists():
-                shutil.copyfile(path, destination / path.name)
-                os.chmod(destination / path.name, 0o600)
+        excess = len(completed) - self.BACKUP_LIMIT
+        for path in completed:
+            if excess <= 0:
+                break
+            if path.name != protected:
+                self.check_stop()
+                shutil.rmtree(path)
+                excess -= 1
+        self.sync_directory(root)
+
+    def backup(self, *, name=None):
+        self.check_stop()
+        root = self.directory / "backups"
+        root.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(root, 0o700)
+        # An interrupted staging copy is never a completed recovery baseline.
+        for path in root.iterdir():
+            if re.fullmatch(r"\.partial-\d{8}T\d{6}\.\d{6}Z", path.name):
+                shutil.rmtree(path)
+        name = name or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        destination = root / name
+        temporary = root / (".partial-" + name)
+        temporary.mkdir(mode=0o700)
+        try:
+            if self.config.collection_path.exists():
+                with closing(
+                    sqlite3.connect(
+                        self.config.collection_path.absolute().as_uri() + "?mode=ro",
+                        uri=True,
+                    )
+                ) as source:
+                    target_path = temporary / self.config.collection_path.name
+                    descriptor = os.open(
+                        target_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                    )
+                    os.close(descriptor)
+                    with closing(sqlite3.connect(target_path)) as target:
+                        source.backup(
+                            target,
+                            pages=256,
+                            progress=lambda status, remaining, total: self.check_stop(),
+                        )
+            for path in (self.state_path, self.auth_path, self.status_path):
+                self.check_stop()
+                if path.exists():
+                    target_path = temporary / path.name
+                    descriptor = os.open(
+                        target_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                    )
+                    with (
+                        path.open("rb") as source,
+                        os.fdopen(descriptor, "wb") as target,
+                    ):
+                        while block := source.read(1024 * 1024):
+                            self.check_stop()
+                            target.write(block)
+            for path in temporary.iterdir():
+                with path.open("rb") as stream:
+                    os.fsync(stream.fileno())
+            atomic_json(temporary / "complete.json", {"completedAt": now()})
+            self.check_stop()
+            os.rename(temporary, destination)
+            self.sync_directory(root)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+        self.prune_backups()
         return destination

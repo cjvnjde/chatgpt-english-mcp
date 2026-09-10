@@ -1,9 +1,9 @@
 import argparse
 import json
-import time
+import signal
 from datetime import datetime, timezone
 
-from .config import Config, TransientError, WorkerError
+from .config import Config, StopRequested, TransientError, WorkerError
 from .storage import Store, load_json
 from .worker import Worker
 
@@ -31,6 +31,7 @@ def main():
     )
     parser.add_argument("command", choices=("run", "once", "status", "login"))
     args = parser.parse_args()
+    previous_handlers = {}
     try:
         config = Config.from_env()
         if args.command == "status":
@@ -42,6 +43,10 @@ def main():
                 "Anki synchronization is disabled; set ANKI_SYNC_ENABLED=true"
             )
         worker = Worker(config)
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(
+                signum, lambda signum, frame: worker.request_stop()
+            )
         if args.command == "login":
             print(json.dumps(worker.login()))
             return 0
@@ -56,12 +61,15 @@ def main():
                 print(json.dumps({"healthy": False, "error": str(error)}), flush=True)
                 if not isinstance(error, TransientError):
                     delay = max(delay, 300)
-            time.sleep(delay)
+            worker.wait(delay)
+    except StopRequested:
+        worker.store.status(healthy=False, phase="stopped", error=None)
+        return 0
     except WorkerError as error:
         print(json.dumps({"healthy": False, "error": str(error)}), flush=True)
         return 1
     except KeyboardInterrupt:
-        return 130
+        return 0
     except Exception:  # noqa: BLE001 - CLI boundary must not print credentials from third-party exceptions.
         print(
             json.dumps(
@@ -73,6 +81,9 @@ def main():
             flush=True,
         )
         return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 if __name__ == "__main__":

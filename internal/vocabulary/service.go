@@ -60,6 +60,7 @@ type InitialValues struct {
 }
 
 type UpdateChanges struct {
+	ExpectedRevision  *int64 `json:"-"`
 	Status            *domain.LearningStatus
 	Usefulness        *domain.Usefulness
 	PersonalInterest  *domain.PersonalInterest
@@ -182,13 +183,14 @@ func (service *Service) Update(
 	if err != nil {
 		return domain.VocabularyItem{}, err
 	}
-	update, err := normalizeUpdateChanges(changes, current)
+	update, err := normalizeUpdateChanges(changes)
 	if err != nil {
 		return domain.VocabularyItem{}, err
 	}
 	update.OwnerKey = service.ownerKey
 	update.ItemID = current.ItemID
 	update.Now = service.now().UTC()
+	update.ExpectedRevision = changes.ExpectedRevision
 
 	item, err := service.store.UpdateVocabulary(ctx, update)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -196,6 +198,12 @@ func (service *Service) Update(
 	}
 	if errors.Is(err, storage.ErrAmbiguous) {
 		return domain.VocabularyItem{}, apperr.New(apperr.InvalidArgument, "term matches multiple saved senses; use itemId")
+	}
+	if errors.Is(err, storage.ErrEditConflict) {
+		return domain.VocabularyItem{}, apperr.New(apperr.Conflict, "the vocabulary item has changed; reload it before editing")
+	}
+	if errors.Is(err, storage.ErrInvalidDescriptionSource) {
+		return domain.VocabularyItem{}, apperr.New(apperr.InvalidArgument, "descriptionSource requires a non-empty customDescription")
 	}
 	if err != nil {
 		return domain.VocabularyItem{}, apperr.Wrap(apperr.InternalError, "failed to update the vocabulary item", err)
@@ -433,7 +441,7 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 	}, nil
 }
 
-func normalizeUpdateChanges(input UpdateChanges, current domain.VocabularyItem) (storage.VocabularyUpdate, error) {
+func normalizeUpdateChanges(input UpdateChanges) (storage.VocabularyUpdate, error) {
 	if input.Status == nil && input.Usefulness == nil && input.PersonalInterest == nil && input.Tags == nil &&
 		input.CustomDescription == nil && input.DescriptionSource == nil && input.Notes == nil && input.Examples == nil {
 		return storage.VocabularyUpdate{}, apperr.New(apperr.InvalidArgument, "changes must contain at least one field")
@@ -483,28 +491,17 @@ func normalizeUpdateChanges(input UpdateChanges, current domain.VocabularyItem) 
 		update.Examples = &examples
 	}
 
-	effectiveDescription := current.CustomDescription
 	if input.CustomDescription != nil {
 		description, err := normalizeDescription(input.CustomDescription)
 		if err != nil {
 			return storage.VocabularyUpdate{}, err
 		}
 		update.CustomDescription = &description
-		effectiveDescription = description
-		if description == "" && input.DescriptionSource == nil {
-			update.SetDescriptionSource = true
-		}
 	}
 	if input.DescriptionSource != nil {
 		source, err := normalizeDescriptionSource(input.DescriptionSource)
 		if err != nil {
 			return storage.VocabularyUpdate{}, err
-		}
-		if source != nil && effectiveDescription == "" {
-			return storage.VocabularyUpdate{}, apperr.New(
-				apperr.InvalidArgument,
-				"descriptionSource requires a non-empty customDescription",
-			)
 		}
 		update.SetDescriptionSource = true
 		update.DescriptionSource = source

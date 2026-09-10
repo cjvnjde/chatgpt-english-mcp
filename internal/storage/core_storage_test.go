@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/usefulness"
 )
 
 func TestConcurrentReviewHandlesKeepOneImmutableAttempt(t *testing.T) {
@@ -93,16 +94,26 @@ func TestContextSenseMigrationPreservesIdentityAndLearningHistory(t *testing.T) 
 		SenseKey: oldKey, Context: contextValue, CustomDescription: "My river example.",
 		Notes: []string{"Keep my note."}, Tags: []string{"nature"}, Now: now,
 	}
-	_, before, err := oldStore.SaveVocabulary(ctx, input)
+	beforeID := insertContextMigrationVocabulary(t, legacy, input)
+	initialCard, err := scanLearningCard(legacy.QueryRowContext(ctx,
+		"SELECT "+learningCardColumns+" FROM learning_cards card WHERE vocabulary_item_id = ?", beforeID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	presentation, err := oldStore.NextLearningItem(ctx, "owner", now)
+	presented, err := legacy.ExecContext(ctx, `
+		INSERT INTO learning_presentations(owner_key, vocabulary_item_id, learning_card_id,
+			exercise_mode, review_token, shown_at, due_at, selection_kind)
+		VALUES ('owner', ?, ?, 'production', ?, ?, ?, 'new')
+	`, beforeID, initialCard.CardID, initialCard.ReviewToken, TimeString(now), TimeString(initialCard.DueAt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	presentationID, err := presented.LastInsertId()
 	if err != nil {
 		t.Fatal(err)
 	}
 	reviewInput := RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: presentation.Card.ReviewToken,
+		OwnerKey: "owner", ReviewToken: initialCard.ReviewToken,
 		Rating: domain.ReviewRatingGood, Comment: "A useful river context.", Now: now.Add(time.Minute),
 	}
 	attempt, _, err := oldStore.RecordReview(ctx, reviewInput, coreStorageReviewSchedule)
@@ -111,20 +122,14 @@ func TestContextSenseMigrationPreservesIdentityAndLearningHistory(t *testing.T) 
 	}
 	legacyInput := input
 	legacyInput.Term, legacyInput.NormalizedTerm, legacyInput.SenseKey = "legacy", "legacy", "legacy"
-	_, legacyItem, err := oldStore.SaveVocabulary(ctx, legacyInput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	legacyID := insertContextMigrationVocabulary(t, legacy, legacyInput)
 	index := 0
 	definition := domain.DictionaryDefinition{Definition: contextValue}
 	definitionInput := input
 	definitionInput.Term, definitionInput.NormalizedTerm = "shore", "shore"
 	definitionInput.SelectedEntryIndex, definitionInput.SelectedDefinitionIndex = &index, &index
 	definitionInput.SelectedDefinition = &definition
-	_, definitionItem, err := oldStore.SaveVocabulary(ctx, definitionInput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	definitionID := insertContextMigrationVocabulary(t, legacy, definitionInput)
 	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -134,17 +139,21 @@ func TestContextSenseMigrationPreservesIdentityAndLearningHistory(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	loaded, err := store.VocabularyByID(ctx, "owner", before.ItemID)
-	if err != nil || !reflect.DeepEqual(loaded, before) {
-		t.Fatalf("migration changed vocabulary content: %#v error=%v; want %#v", loaded, err, before)
+	loaded, err := store.VocabularyByID(ctx, "owner", beforeID)
+	if err != nil || loaded.Term != input.Term || loaded.NormalizedTerm != input.NormalizedTerm ||
+		loaded.Status != input.Status || loaded.Context != contextValue || loaded.CustomDescription != input.CustomDescription ||
+		!reflect.DeepEqual(loaded.Notes, input.Notes) || !reflect.DeepEqual(loaded.Tags, input.Tags) ||
+		loaded.CreatedAt != TimeString(now) || loaded.UpdatedAt != TimeString(now) ||
+		loaded.Lookup != nil || loaded.Sense != nil {
+		t.Fatalf("migration changed vocabulary content: %#v error=%v", loaded, err)
 	}
 	card, err := scanLearningCard(store.sql.QueryRowContext(ctx,
-		"SELECT "+learningCardColumns+" FROM learning_cards card WHERE vocabulary_item_id = ?", before.ItemID))
+		"SELECT "+learningCardColumns+" FROM learning_cards card WHERE vocabulary_item_id = ?", beforeID))
 	if err != nil || card != attempt.After {
 		t.Fatalf("migration changed card identity or schedule: %#v error=%v; want %#v", card, err, attempt.After)
 	}
 	var presentationToken string
-	if err := store.sql.QueryRowContext(ctx, "SELECT review_token FROM learning_presentations WHERE id = ?", presentation.PresentationID).Scan(&presentationToken); err != nil || presentationToken != reviewInput.ReviewToken {
+	if err := store.sql.QueryRowContext(ctx, "SELECT review_token FROM learning_presentations WHERE id = ?", presentationID).Scan(&presentationToken); err != nil || presentationToken != reviewInput.ReviewToken {
 		t.Fatalf("migration changed presentation history: token=%q error=%v", presentationToken, err)
 	}
 	replayed, duplicate, err := store.RecordReview(ctx, reviewInput, nil)
@@ -153,18 +162,18 @@ func TestContextSenseMigrationPreservesIdentityAndLearningHistory(t *testing.T) 
 	}
 	input.SenseKey = "context:" + oldKey
 	created, saved, err := store.SaveVocabulary(ctx, input)
-	if err != nil || created || saved.ItemID != before.ItemID {
+	if err != nil || created || saved.ItemID != beforeID {
 		t.Fatalf("resaving migrated context created another sense: id=%q created=%t error=%v", saved.ItemID, created, err)
 	}
 	definitionInput.Term, definitionInput.NormalizedTerm = "bank", "bank"
 	created, selected, err := store.SaveVocabulary(ctx, definitionInput)
-	if err != nil || !created || selected.ItemID == before.ItemID || selected.Sense == nil {
+	if err != nil || !created || selected.ItemID == beforeID || selected.Sense == nil {
 		t.Fatalf("identical-text definition did not coexist with context: %#v created=%t error=%v", selected, created, err)
 	}
 	for _, fixture := range []struct {
 		id  string
 		key string
-	}{{legacyItem.ItemID, "legacy"}, {definitionItem.ItemID, oldKey}} {
+	}{{legacyID, "legacy"}, {definitionID, oldKey}} {
 		var key string
 		if err := store.sql.QueryRowContext(ctx, "SELECT sense_key FROM vocabulary_items WHERE id = ?", fixture.id).Scan(&key); err != nil || key != fixture.key {
 			t.Fatalf("migration changed non-context identity %q: key=%q error=%v", fixture.id, key, err)
@@ -176,20 +185,15 @@ func TestContextSenseMigrationConflictRollsBackWithoutLosingVocabulary(t *testin
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "context-conflict.sqlite")
 	legacy := openLegacyDatabase(t, path, 13)
-	oldStore := &DB{sql: legacy}
 	contextValue := "a river bank"
 	digest := sha256.Sum256([]byte(domain.NormalizeTerm(contextValue)))
 	oldKey := fmt.Sprintf("%x", digest)
 	ids := make(map[string]string)
 	for _, key := range []string{oldKey, "context:" + oldKey} {
-		_, item, err := oldStore.SaveVocabulary(ctx, VocabularyCreate{
+		ids[key] = insertContextMigrationVocabulary(t, legacy, VocabularyCreate{
 			OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", Status: domain.LearningStatusNew,
 			SenseKey: key, Context: contextValue, CustomDescription: key, Now: time.Now(),
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ids[key] = item.ItemID
 	}
 	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
@@ -227,4 +231,37 @@ func coreStorageReviewSchedule(card LearningCard, now time.Time, rating domain.R
 	card.LastReviewAt = now
 	card.LastRating = rating
 	return card, 0, nil
+}
+
+// Historical fixtures use their original SQL schema, never current hydration.
+func insertContextMigrationVocabulary(t *testing.T, database *sql.DB, input VocabularyCreate) string {
+	t.Helper()
+	id, err := NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, err := encodeStringList(input.Notes, "fixture notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags, err := encodeStringList(input.Tags, "fixture tags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, err := encodeOptionalDefinition(input.SelectedDefinition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.ExecContext(context.Background(), `
+		INSERT INTO vocabulary_items(id, owner_key, term, normalized_term, created_at, updated_at,
+			learning_status, custom_description, notes_json, tags_json, sense_key, context,
+			selected_entry_index, selected_definition_index, selected_definition_json, usefulness)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, input.OwnerKey, input.Term, input.NormalizedTerm, TimeString(input.Now), TimeString(input.Now),
+		input.Status, input.CustomDescription, notes, tags, input.SenseKey, input.Context,
+		input.SelectedEntryIndex, input.SelectedDefinitionIndex, definition, usefulness.Estimate(input.NormalizedTerm, input.Usefulness))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

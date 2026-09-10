@@ -8,12 +8,14 @@ import (
 type Code string
 
 const (
-	InvalidArgument Code = "INVALID_ARGUMENT"
-	NotFound        Code = "NOT_FOUND"
-	StaleLookup     Code = "STALE_LOOKUP"
-	UpstreamError   Code = "UPSTREAM_ERROR"
-	Unauthorized    Code = "UNAUTHORIZED"
-	InternalError   Code = "INTERNAL_ERROR"
+	InvalidArgument      Code = "INVALID_ARGUMENT"
+	NotFound             Code = "NOT_FOUND"
+	StaleLookup          Code = "STALE_LOOKUP"
+	UpstreamError        Code = "UPSTREAM_ERROR"
+	Unauthorized         Code = "UNAUTHORIZED"
+	InternalError        Code = "INTERNAL_ERROR"
+	Conflict             Code = "CONFLICT"
+	PreconditionRequired Code = "PRECONDITION_REQUIRED"
 )
 
 type Error struct {

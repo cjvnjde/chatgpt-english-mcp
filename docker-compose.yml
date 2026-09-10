@@ -4,8 +4,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        TUNNEL_CLIENT_VERSION: ${TUNNEL_CLIENT_VERSION:-v0.0.13}
     restart: unless-stopped
     environment:
       SQLITE_PATH: /app/data/english-mcp.sqlite
@@ -67,6 +65,7 @@ services:
       context: .
       dockerfile: anki_worker/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 2m
     depends_on:
       - english-learning-mcp
     environment:

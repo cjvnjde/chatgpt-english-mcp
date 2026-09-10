@@ -12,6 +12,10 @@ class TransientError(WorkerError):
     pass
 
 
+class StopRequested(Exception):
+    """Cooperative shutdown, not a failed synchronization."""
+
+
 def secret(name, *, required=True):
     value = os.environ.get(name, "")
     filename = os.environ.get(name + "_FILE", "")

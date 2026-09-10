@@ -138,6 +138,8 @@ func TestUsefulnessRefreshRetainsOriginalHintsAcrossRevisionsAndRestarts(t *test
 				owner = "another-owner"
 			}
 			actual, err := store.VocabularyByID(ctx, owner, expected.ItemID)
+			// Inference changes invalidate admin drafts, but preserve vocabulary content.
+			actual.EditRevision = expected.EditRevision
 			if err != nil || !reflect.DeepEqual(actual, expected) {
 				t.Fatalf("revision cycle %d item = %#v, error %v; want %#v", cycle, actual, err, expected)
 			}

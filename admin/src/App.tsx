@@ -19,6 +19,7 @@ import Inspector from "./components/Inspector";
 import RecordTable from "./components/RecordTable";
 import Suggestions from "./components/Suggestions";
 import VocabularyEditor from "./components/VocabularyEditor";
+import type { LeaveGuard } from "./vocabularyDraft";
 
 type Route = { view: string; column?: string; value?: string };
 function readRoute(): Route {
@@ -176,10 +177,30 @@ function Workspace(props: {
   authNotice: string;
 }) {
   const [route, setRoute] = createSignal(readRoute());
+  let editorGuard: LeaveGuard | undefined;
+  let currentHash = location.hash;
+  const requestLeave: LeaveGuard = (leave) => {
+    if (editorGuard) editorGuard(leave);
+    else leave();
+  };
   const onHash = () => {
-    setEditor(undefined);
-    setInspected(undefined);
-    setRoute(readRoute());
+    const nextHash = location.hash;
+    if (nextHash === currentHash) return;
+    const nextRoute = readRoute();
+    // A hash/back event already changed the address. Restore it while the
+    // owner decides; the draft and current workspace stay mounted.
+    history.replaceState(
+      history.state,
+      "",
+      `${location.pathname}${location.search}${currentHash}`,
+    );
+    requestLeave(() => {
+      currentHash = nextHash;
+      location.hash = nextHash;
+      setEditor(undefined);
+      setInspected(undefined);
+      setRoute(nextRoute);
+    });
   };
   window.addEventListener("hashchange", onHash);
   onCleanup(() => window.removeEventListener("hashchange", onHash));
@@ -187,7 +208,7 @@ function Workspace(props: {
   const [tables, { refetch }] = createResource(revision, () =>
     props.api<Table[]>("/tables"),
   );
-  const [editor, setEditor] = createSignal<{ id?: string; hint?: string }>();
+  const [editor, setEditor] = createSignal<{ id?: string }>();
   const [inspected, setInspected] = createSignal<{ row: Row; table: string }>();
   const [notice, setNotice] = createSignal("");
   const [exporting, setExporting] = createSignal(false);
@@ -231,15 +252,18 @@ function Workspace(props: {
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(noticeTimer));
   const navigate = (view: string, column?: string, value?: string) => {
-    setEditor(undefined);
-    setInspected(undefined);
-    const p = new URLSearchParams({ view });
-    if (column) {
-      p.set("column", column);
-      p.set("value", value || "");
-    }
-    location.hash = p.toString();
-    setRoute({ view, column, value });
+    requestLeave(() => {
+      setEditor(undefined);
+      setInspected(undefined);
+      const p = new URLSearchParams({ view });
+      if (column) {
+        p.set("column", column);
+        p.set("value", value || "");
+      }
+      currentHash = `#${p.toString()}`;
+      location.hash = currentHash;
+      setRoute({ view, column, value });
+    });
   };
   const allTables = () => (tables.error ? [] : tables() || []);
   const tableName = () =>
@@ -254,7 +278,6 @@ function Workspace(props: {
     )
       setEditor({
         id: String(row.id),
-        hint: row.usefulness_hint ? String(row.usefulness_hint) : undefined,
       });
     else setInspected({ row, table: tableName() });
   };
@@ -462,7 +485,9 @@ function Workspace(props: {
           <VocabularyEditor
             api={props.api}
             id={value.id}
-            hint={value.hint}
+            registerGuard={(guard) => {
+              editorGuard = guard;
+            }}
             close={() => setEditor(undefined)}
             saved={(message) => {
               if (editor() === value) setEditor(undefined);

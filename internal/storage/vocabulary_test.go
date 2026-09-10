@@ -93,6 +93,7 @@ func TestVocabularyUsefulnessPersistsWithoutReplacingExistingMetadata(t *testing
 	want := saved
 	want.Usefulness = high
 	want.UpdatedAt = TimeString(now.Add(time.Hour))
+	want.EditRevision++
 	if err != nil || !reflect.DeepEqual(updated, want) {
 		t.Fatalf("usefulness-only update = %#v, error %v; want %#v", updated, err, want)
 	}
@@ -107,6 +108,7 @@ func TestVocabularyUsefulnessPersistsWithoutReplacingExistingMetadata(t *testing
 	})
 	want.Notes = notes
 	want.UpdatedAt = TimeString(now.Add(2 * time.Hour))
+	want.EditRevision++
 	if err != nil || !reflect.DeepEqual(updated, want) {
 		t.Fatalf("metadata update did not preserve usefulness: %#v, error %v", updated, err)
 	}
@@ -184,6 +186,7 @@ func TestVocabularyPersonalInterestPersistsWithoutChangingLearningState(t *testi
 	})
 	want := saved
 	want.PersonalInterest, want.UpdatedAt = high, TimeString(now.Add(time.Hour))
+	want.EditRevision++
 	if err != nil || !reflect.DeepEqual(updated, want) {
 		t.Fatalf("interest-only update = %#v, error %v; want %#v", updated, err, want)
 	}
@@ -202,6 +205,7 @@ func TestVocabularyPersonalInterestPersistsWithoutChangingLearningState(t *testi
 		OwnerKey: "owner", ItemID: saved.ItemID, Notes: &notes, Now: now.Add(2 * time.Hour),
 	})
 	want.Notes, want.UpdatedAt = notes, TimeString(now.Add(2*time.Hour))
+	want.EditRevision++
 	if err != nil || !reflect.DeepEqual(updated, want) {
 		t.Fatalf("omitted interest update = %#v, error %v; want %#v", updated, err, want)
 	}
@@ -469,6 +473,20 @@ func TestVocabularyMetadataMigrationsPreserveVocabularyAndLearningState(t *testi
 			item.PersonalInterest != domain.PersonalInterestNormal {
 			t.Fatalf("migrated %s = %#v, error %v", fixture.id, item, err)
 		}
+		notes := []string{"migrated edit"}
+		edited, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+			OwnerKey: fixture.owner, ItemID: fixture.id, ExpectedRevision: &item.EditRevision,
+			Notes: &notes, Now: now,
+		})
+		if err != nil || edited.EditRevision <= item.EditRevision {
+			t.Fatalf("migrated item cannot be revision-edited: %#v, %v", edited, err)
+		}
+		if _, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+			OwnerKey: fixture.owner, ItemID: fixture.id, ExpectedRevision: &item.EditRevision,
+			Notes: &item.Notes, Now: now,
+		}); !errors.Is(err, ErrEditConflict) {
+			t.Fatalf("migrated item accepted stale revision: %v", err)
+		}
 		low := domain.UsefulnessLow
 		if _, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
 			OwnerKey: fixture.owner, ItemID: fixture.id, Usefulness: &low, Now: now.Add(time.Hour),
@@ -563,5 +581,116 @@ func TestVocabularyWritesRollBackWhenStoredDataCannotBeRead(t *testing.T) {
 	}
 	if storedStatus != domain.LearningStatusNew || updatedAt != saved.UpdatedAt {
 		t.Fatalf("failed update persisted status %q at %q", storedStatus, updatedAt)
+	}
+}
+
+func TestVocabularyRevisionIgnoresNoOpAndPresentationWrites(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	_, saved, err := store.SaveVocabulary(ctx, VocabularyCreate{
+		OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", Status: domain.LearningStatusNew,
+		Notes: []string{"original"}, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noOp, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+		OwnerKey: "owner", ItemID: saved.ItemID, ExpectedRevision: &saved.EditRevision,
+		Status: &saved.Status, Notes: &saved.Notes, Now: now.Add(time.Minute),
+	})
+	if err != nil || noOp.EditRevision != saved.EditRevision {
+		t.Fatalf("identical metadata invalidated revision: %#v, %v", noOp, err)
+	}
+	if _, err := store.NextLearningItem(ctx, "owner", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	tags := []string{"after presentation"}
+	updated, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+		OwnerKey: "owner", ItemID: saved.ItemID, ExpectedRevision: &saved.EditRevision,
+		Tags: &tags, Now: now.Add(2 * time.Minute),
+	})
+	if err != nil || updated.EditRevision <= saved.EditRevision || !reflect.DeepEqual(updated.Notes, saved.Notes) {
+		t.Fatalf("presentation invalidated draft or partial edit lost metadata: %#v, %v", updated, err)
+	}
+	// Metadata writers outside UpdateVocabulary must also invalidate drafts.
+	if _, err := store.sql.ExecContext(ctx,
+		"UPDATE vocabulary_items SET personal_interest = 'high' WHERE id = ?", saved.ItemID); err != nil {
+		t.Fatal(err)
+	}
+	notes := []string{"stale edit"}
+	if _, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+		OwnerKey: "owner", ItemID: saved.ItemID, ExpectedRevision: &updated.EditRevision,
+		Notes: &notes, Now: now.Add(3 * time.Minute),
+	}); !errors.Is(err, ErrEditConflict) {
+		t.Fatalf("outside metadata writer did not invalidate revision: %v", err)
+	}
+	current, err := store.VocabularyByID(ctx, "owner", saved.ItemID)
+	if err != nil || current.PersonalInterest != domain.PersonalInterestHigh ||
+		!reflect.DeepEqual(current.Notes, saved.Notes) || current.EditRevision <= updated.EditRevision {
+		t.Fatalf("stale writer changed outside edit: %#v, %v", current, err)
+	}
+}
+
+func TestVocabularyConcurrentRevisionWritersHaveOneWinner(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "writers.sqlite")
+	first, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	second, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	_, saved, err := first.SaveVocabulary(ctx, VocabularyCreate{
+		OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", Status: domain.LearningStatusNew,
+		CustomDescription: "preserved", Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		item domain.VocabularyItem
+		err  error
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	for index, store := range []*DB{first, second} {
+		go func(index int, store *DB) {
+			<-start
+			notes := []string{[]string{"first", "second"}[index]}
+			item, err := store.UpdateVocabulary(ctx, VocabularyUpdate{
+				OwnerKey: "owner", ItemID: saved.ItemID, ExpectedRevision: &saved.EditRevision,
+				Notes: &notes, Now: now.Add(time.Minute),
+			})
+			results <- result{item, err}
+		}(index, store)
+	}
+	close(start)
+	var winner domain.VocabularyItem
+	wins, conflicts := 0, 0
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			winner = result.item
+			wins++
+		} else if errors.Is(result.err, ErrEditConflict) {
+			conflicts++
+		} else {
+			t.Fatalf("concurrent update failed unexpectedly: %v", result.err)
+		}
+	}
+	current, err := first.VocabularyByID(ctx, "owner", saved.ItemID)
+	if err != nil || wins != 1 || conflicts != 1 || !reflect.DeepEqual(current, winner) ||
+		current.CustomDescription != saved.CustomDescription || current.EditRevision <= saved.EditRevision {
+		t.Fatalf("revision race: wins=%d conflicts=%d current=%#v winner=%#v err=%v", wins, conflicts, current, winner, err)
 	}
 }

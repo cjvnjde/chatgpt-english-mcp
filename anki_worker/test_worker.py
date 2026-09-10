@@ -1,6 +1,9 @@
 import hashlib
 import json
+import os
+import signal
 import tempfile
+import time
 import unittest
 from contextlib import closing
 from copy import deepcopy
@@ -8,15 +11,16 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from pathlib import Path
+from threading import Event, Thread
 from unittest.mock import patch
 
 from anki.collection import Collection
 from anki.errors import SyncError, SyncErrorKind
 from anki.sync import SyncOutput
 
-from .__main__ import inspect_status
+from .__main__ import inspect_status, main
 from .adapter import AnkiAdapter
-from .config import Config, TransientError, WorkerError
+from .config import Config, StopRequested, TransientError, WorkerError
 from .reconcile import FIELDS, MODEL_NAME, reconcile
 from .rendering import BACK, CSS, FRONT, render
 from .snapshot import source_id, unique_object, validate_snapshot
@@ -236,6 +240,38 @@ class ReconciliationTests(RealCollectionCase):
         self.apply(item)
         self.assertEqual(self.managed_note().id, canonical.id)
         self.assertEqual(len(self.managed_note().cards()), 1)
+
+    def test_missing_canonical_stays_owned_at_each_mapping_commit(self):
+        for use_duplicate in (False, True):
+            with self.subTest(use_duplicate=use_duplicate):
+                self.apply(vocabulary())
+                old = self.managed_note()
+                replacement = None
+                if use_duplicate:
+                    replacement = self.collection.new_note(old.note_type())
+                    replacement.fields = list(old.fields)
+                    self.collection.add_note(replacement, self.store.state["deckId"])
+                self.collection.remove_notes([old.id])
+                save = self.store.save
+
+                def interrupted_save(save=save, old=old, replacement=replacement):
+                    save()
+                    persisted = load_json(self.store.state_path)
+                    current = next(iter(persisted["notes"].values()))
+                    if current != old.id:
+                        self.assertIn(old.id, persisted["pendingDeletes"])
+                        if replacement is not None:
+                            self.assertEqual(current, replacement.id)
+                        raise OSError("interrupted immediately after mapping commit")
+
+                with (
+                    patch.object(self.store, "save", side_effect=interrupted_save),
+                    self.assertRaisesRegex(OSError, "mapping commit"),
+                ):
+                    self.apply(vocabulary())
+                self.store.load()
+                self.apply(vocabulary())
+                self.assertIn(old.id, self.store.state["pendingDeletes"])
 
     def test_crash_gap_recovered_deletion_is_durable_before_note_removal(self):
         self.apply(vocabulary())
@@ -555,6 +591,23 @@ class AdapterTests(RealCollectionCase):
         self.assertNotIn("private-auth-key", str(caught.exception))
         self.assertNotIn("secret", str(caught.exception))
 
+    def test_stop_aborts_active_adapter_operation_without_retry(self):
+        adapter = self.open_adapter()
+        self.store.stop_event = Event()
+        aborted = Event()
+
+        def active_operation():
+            self.store.stop_event.set()
+            self.assertTrue(aborted.wait(2), "active operation was not cancelled")
+
+        with (
+            patch.object(adapter.collection, "abort_sync", side_effect=aborted.set),
+            self.assertRaises(StopRequested),
+        ):
+            adapter.call(active_operation)
+        adapter.close()
+        self.assertIsNone(adapter.collection.db)
+
 
 class ControlledAdapter:
     def __init__(self, config, store, script):
@@ -716,6 +769,89 @@ class WorkerCycleTests(unittest.TestCase):
             self.assertEqual(restored.get_note(note.id)["Back"], "Unrelated answer")
         self.assertEqual(load_json(backup / store.state_path.name), store.state)
 
+    def test_repeated_refusal_reuses_baseline_until_converged(self):
+        self.worker.once()
+        baseline = None
+        for _ in range(8):
+            self.script["sync"] = ["upload"]
+            with self.assertRaisesRegex(WorkerError, "Unsafe full upload refused"):
+                self.worker.once()
+            status = load_json(self.worker.store.status_path)
+            self.assertTrue(status["recoveryActive"])
+            if baseline is None:
+                baseline = status["recoveryBackup"]
+            self.assertEqual(status["recoveryBackup"], baseline)
+        root = Path(baseline).parent
+        self.assertEqual(list(root.iterdir()), [Path(baseline)])
+        self.script["sync"] = [WorkerError("still cannot recover")]
+        with self.assertRaises(WorkerError):
+            self.worker.once()
+        self.assertTrue(self.worker.store.recovery_path.exists())
+        self.assertTrue(self.worker.once()["healthy"])
+        status = load_json(self.worker.store.status_path)
+        self.assertFalse(status["recoveryActive"])
+        self.assertEqual(status["recoveryBackup"], baseline)
+        self.assertFalse(self.worker.store.recovery_path.exists())
+
+    def test_retention_protects_oldest_unresolved_baseline(self):
+        self.worker.once()
+        store = self.worker.store
+        baseline = store.recovery_backup()
+        for _ in range(8):
+            newest = store.backup()
+        completed = set(baseline.parent.iterdir())
+        self.assertEqual(len(completed), Store.BACKUP_LIMIT)
+        self.assertIn(baseline, completed)
+        self.assertIn(newest, completed)
+        self.assertEqual(store.recovery_backup(), baseline)
+        for backup in completed:
+            self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
+            for path in backup.iterdir():
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        store.finish_recovery()
+        for _ in range(Store.BACKUP_LIMIT):
+            store.backup()
+        self.assertFalse(baseline.exists())
+
+    def test_interrupted_backup_never_becomes_completed_baseline(self):
+        self.worker.once()
+        store = self.worker.store
+
+        def interrupted_completion(path, payload):
+            if path.name == "complete.json":
+                raise OSError("interrupted backup completion")
+            atomic_json(path, payload)
+
+        with (
+            patch(
+                "anki_worker.storage.atomic_json", side_effect=interrupted_completion
+            ),
+            self.assertRaisesRegex(OSError, "interrupted backup"),
+        ):
+            store.recovery_backup()
+        incident = load_json(store.recovery_path)
+        root = store.directory / "backups"
+        self.assertEqual(list(root.iterdir()), [])
+        partial = root / (".partial-" + incident["backup"])
+        partial.mkdir()
+        (partial / "interrupted-copy").write_bytes(b"partial")
+        baseline = store.recovery_backup()
+        self.assertEqual(baseline.name, incident["backup"])
+        self.assertFalse(partial.exists())
+        with (
+            patch(
+                "anki_worker.storage.atomic_json", side_effect=interrupted_completion
+            ),
+            self.assertRaises(OSError),
+        ):
+            store.backup()
+        self.assertEqual(list(root.iterdir()), [baseline])
+        self.assertEqual(store.recovery_backup(), baseline)
+        with closing(
+            Collection(str(baseline / self.config.collection_path.name))
+        ) as restored:
+            self.assertEqual(restored.note_count(), 1)
+
     def test_failed_export_never_opens_or_mutates_collection(self):
         self.worker.once()
         before = self.config.collection_path.read_bytes()
@@ -831,6 +967,52 @@ class WorkerCycleTests(unittest.TestCase):
             self.assertEqual(
                 collection.get_note(unrelated.id)["Back"], "Unrelated answer"
             )
+
+    def test_recreated_note_retains_missing_identity_through_failed_sync_and_restore(
+        self,
+    ):
+        self.worker.once()
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            old_id = next(iter(self.worker.store.state["notes"].values()))
+            note = collection.get_note(old_id)
+            note["SourceID"] = "edited remote identity"
+            collection.update_note(note)
+            other = collection.decks.id("Remote unrelated")
+            collection.set_deck([note.cards()[0].id], other)
+            unrelated = add_basic(collection, other)
+            remote_backup = (
+                self.worker.store.backup() / self.config.collection_path.name
+            )
+            collection.remove_notes([old_id])
+        self.script["sync"] = [
+            "accepted",
+            TransientError("offline"),
+            TransientError("offline"),
+            TransientError("offline"),
+        ]
+        with self.assertRaises(TransientError):
+            self.worker.once()
+        persisted = load_json(self.worker.store.state_path)
+        self.assertNotEqual(next(iter(persisted["notes"].values())), old_id)
+        self.assertIn(old_id, persisted["pendingDeletes"])
+
+        def restore(adapter):
+            self.assertIn(old_id, load_json(adapter.store.state_path)["pendingDeletes"])
+            adapter.collection.close()
+            adapter.store.config.collection_path.write_bytes(remote_backup.read_bytes())
+            adapter.collection = Collection(str(adapter.store.config.collection_path))
+
+        self.script["sync"] = ["download", "accepted"]
+        self.script["download"] = restore
+        self.assertTrue(self.worker.once()["healthy"])
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            canonical = next(iter(self.worker.store.state["notes"].values()))
+            self.assertEqual(set(collection.find_notes("")), {canonical, unrelated.id})
+            self.assertNotIn(old_id, collection.find_notes(""))
+            self.assertEqual(
+                collection.get_note(unrelated.id)["Back"], "Unrelated answer"
+            )
+        self.assertNotIn("pendingDeletes", load_json(self.worker.store.state_path))
 
     def test_deleted_duplicate_stays_owned_after_remote_identity_edit(self):
         self.worker.once()
@@ -973,6 +1155,94 @@ class WorkerCycleTests(unittest.TestCase):
             lastSuccess=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         )
         self.assertFalse(inspect_status(self.config)["healthy"])
+
+    def test_stop_at_sync_boundary_closes_collection_and_starts_no_more_work(self):
+        adapters = []
+
+        def create(config, store):
+            adapter = ControlledAdapter(config, store, self.script)
+            adapters.append(adapter)
+            return adapter
+
+        def stop(adapter):
+            self.worker.request_stop()
+            return "accepted"
+
+        self.worker.adapter_factory = create
+        self.script["sync"] = [stop, "must not run"]
+        with self.assertRaises(StopRequested):
+            self.worker.once()
+        self.assertEqual(self.script["sync"], ["must not run"])
+        self.assertIsNone(adapters[0].collection.db)
+        self.assertEqual(load_json(self.worker.store.status_path)["phase"], "stopped")
+        with self.assertRaises(StopRequested):
+            self.worker.once()
+        self.assertEqual(len(adapters), 1)
+        with closing(Collection(str(self.config.collection_path))) as collection:
+            self.assertEqual(collection.note_count(), 0)
+
+    def test_stop_interrupts_backoff_before_retry(self):
+        attempts = []
+
+        def offline():
+            attempts.append(1)
+            raise TransientError("offline")
+
+        self.worker.sleep = lambda delay: self.worker.request_stop()
+        with self.assertRaises(StopRequested):
+            self.worker.retry(offline)
+        self.assertEqual(attempts, [1])
+
+    def test_cli_signals_interrupt_idle_wait_after_real_collection_cleanup(self):
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(signal=signum):
+                worker = Worker(
+                    self.config,
+                    adapter_factory=self.worker.adapter_factory,
+                    fetch=self.worker.fetch,
+                )
+                adapters = []
+                factory = worker.adapter_factory
+
+                def create(config, store, factory=factory, adapters=adapters):
+                    adapter = factory(config, store)
+                    adapters.append(adapter)
+                    return adapter
+
+                worker.adapter_factory = create
+                waiting = Event()
+                wait = worker.wait
+
+                def idle(delay, adapters=adapters, waiting=waiting, wait=wait):
+                    self.assertIsNone(adapters[-1].collection.db)
+                    waiting.set()
+                    wait(300)
+
+                def interrupt(waiting=waiting, signum=signum):
+                    if waiting.wait(5):
+                        os.kill(os.getpid(), signum)
+
+                worker.wait = idle
+                sender = Thread(target=interrupt)
+                sender.start()
+                started = time.monotonic()
+                try:
+                    with (
+                        patch("sys.argv", ["anki_worker", "run"]),
+                        patch(
+                            "anki_worker.__main__.Config.from_env",
+                            return_value=self.config,
+                        ),
+                        patch("anki_worker.__main__.Worker", return_value=worker),
+                        patch("builtins.print"),
+                    ):
+                        self.assertEqual(main(), 0)
+                finally:
+                    sender.join(timeout=6)
+                self.assertFalse(sender.is_alive())
+                self.assertLess(time.monotonic() - started, 5)
+                self.assertEqual(len(adapters), 1)
+                self.assertTrue(worker.stop_event.is_set())
 
 
 if __name__ == "__main__":

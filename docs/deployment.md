@@ -90,6 +90,10 @@ docker compose up -d --build
 
 Migrations run transactionally. Startup fails rather than silently continuing if an applied migration is missing, newer than the executable, or has a different checksum.
 
+Container base images and the Dockerfile frontend are pinned by digest. The tunnel source is pinned by commit, admin dependencies use the lockfile, and all Python worker dependencies are pinned with hashes. Upgrade these inputs together in source and rebuild rather than expecting mutable image tags or environment overrides to change them.
+
+Migration `015` adds vocabulary edit revisions without changing MCP or Anki export schemas. Redeploy the Go service and admin assets together: admin PATCH now requires `expectedRevision`, and stale edits must be reloaded or merged.
+
 ## Security checklist
 
 - Expose only HTTPS to direct clients.
@@ -148,6 +152,8 @@ docker compose run --rm anki-worker once
 docker compose up -d anki-worker
 ```
 
+The worker handles SIGTERM and SIGINT, interrupts polling/backoff waits, checks for shutdown between reconciliation stages, and closes the collection and releases its lock before exiting. Snapshot transport is bounded and active Anki network operations receive an abort request. Compose gives it a two-minute stop grace period; use normal stop/redeploy rather than SIGKILL so this cleanup can complete.
+
 To renew authentication, update `ANKIWEB_PASSWORD` in Dokploy Environment or `.env`. Stop the worker, run `docker compose run --rm anki-worker login` with the updated environment, then recreate it with `docker compose up -d anki-worker` or redeploy in Dokploy. A container restart alone does not load changed environment values. Authentication failures remain unhealthy rather than repeatedly attempting rapid logins. Treat the reusable authentication state in the volume as a password.
 
 ### Backup and recovery
@@ -156,11 +162,13 @@ To renew authentication, update `ANKIWEB_PASSWORD` in Dokploy Environment or `.e
 
 The first connection downloads an existing remote collection before projection. Empty-account bootstrap is handled separately. Required full downloads trigger another reconciliation. The worker refuses an ambiguous full upload: uploading a fresh or partial local collection could erase unrelated remote notes. Resolve such errors by syncing a complete account collection in an official Anki client, backing up both sides, and following the reported recovery instructions; do not delete worker state to bypass safety checks.
 
-Deleted managed-note IDs remain in worker state until AnkiWeb acceptance and convergence are confirmed. This lets reconciliation remove restored notes after a failed sync and full download even when their source fields or deck were edited remotely. Preserve pending-deletion state with the collection; downgrading to a worker that discards it reintroduces this recovery risk.
+Deleted and superseded managed-note IDs remain in worker state until AnkiWeb acceptance and convergence are confirmed. Replacing a missing canonical note records the old ID and new mapping together, so a later full download cannot silently restore an untracked duplicate even when source fields or decks were edited remotely. Preserve pending-deletion state with the collection; downgrading to a worker that discards it reintroduces this recovery risk.
 
 Persisted account/source identity prevents accidental volume reuse. For a different account or source, use a separate volume and account rather than editing identity files. Deck and note-type IDs survive display-name changes. Incompatible note-type schema changes are refused rather than silently dropping notes; preserve a backup of both collection and mapping before any operator-led schema repair.
 
 If a manually added note has cards in both managed and unrelated decks, only its managed cards are removed. A tracked note converted to an incompatible type or expanded to multiple cards is refused with a backup and recovery message rather than deleting unrelated cards. Restore its one-card managed structure before retrying.
+
+One completed backup is retained as the baseline for each unresolved recovery incident and reused across polling attempts. `recovery.json` and the status fields `recoveryActive` and `recoveryBackup` identify that incident; successful convergence clears it. Backups are published only after their collection and metadata are complete, with at most five completed backups retained and the active baseline protected from pruning. Interrupted staging directories are discarded on the next backup. These bounded local recovery snapshots are not a substitute for external volume backups.
 
 Vocabulary tags are encoded as `vocab::u` followed by lowercase UTF-8 hex. This preserves tag identity despite Anki's whitespace and case-insensitive tag rules; the worker owns the full tag set on its managed notes.
 
@@ -170,7 +178,7 @@ Snapshots with mismatched item digests are rejected before opening or changing t
 
 ### Version upgrades and live verification
 
-The worker image pins Python `3.14.7` and `anki==26.8.1`. The package was selected from [official PyPI metadata](https://pypi.org/project/anki/26.8.1/) and Python from the [official image manifest](https://github.com/docker-library/official-images/blob/master/library/python). Version-specific synchronization operations are isolated in the adapter.
+The worker image pins Python `3.14.7` by image digest and `anki==26.8.1` plus every transitive Python dependency by version and hash. The package was selected from [official PyPI metadata](https://pypi.org/project/anki/26.8.1/) and Python from the [official image manifest](https://github.com/docker-library/official-images/blob/master/library/python). Version-specific synchronization operations are isolated in the adapter.
 
 Before upgrading, stop and back up the worker, verify the new stable package/runtime combination, run the local behavior checks, then exercise a disposable AnkiWeb account. Local collection tests and controlled sync doubles do not prove live protocol compatibility. Live checks need real disposable-account credentials and outbound access; never use a production account to test full-sync recovery.
 
