@@ -95,7 +95,46 @@ export function vocabularyPatch(base: Draft, draft: Draft, revision: number) {
   return { ...vocabularyChanges(base, draft), expectedRevision: revision };
 }
 
-export type DraftConflict = { field: keyof Draft; remote: Draft[keyof Draft] };
+const descriptionFields = [
+  "customDescription",
+  "sourceTitle",
+  "sourceURL",
+] as const;
+type DescriptionField = (typeof descriptionFields)[number];
+type IndependentField = Exclude<keyof Draft, DescriptionField>;
+const independentFields = fields.filter(
+  (field): field is IndependentField =>
+    !descriptionFields.some((key) => key === field),
+);
+const description = (draft: Draft) => ({
+  customDescription: draft.customDescription,
+  sourceTitle: draft.sourceTitle,
+  sourceURL: draft.sourceURL,
+});
+const sameDescription = (a: Draft, b: Draft) =>
+  descriptionFields.every((field) => same(a[field], b[field]));
+
+export type DraftConflict =
+  | { field: "description"; remote: Pick<Draft, DescriptionField> }
+  | { field: IndependentField; remote: Draft[IndependentField] };
+
+export const conflictLabel = (conflict: DraftConflict) =>
+  conflict.field === "description"
+    ? "Description and source"
+    : fieldLabels[conflict.field];
+export const conflictValue = (draft: Draft, conflict: DraftConflict) =>
+  conflict.field === "description" ? description(draft) : draft[conflict.field];
+
+export function resolveDraftConflict(
+  draft: Draft,
+  conflict: DraftConflict,
+  useRemote: boolean,
+): Draft {
+  if (!useRemote) return draft;
+  return conflict.field === "description"
+    ? { ...draft, ...conflict.remote }
+    : { ...draft, [conflict.field]: conflict.remote };
+}
 export function mergeDraft(
   base: Draft,
   local: Draft,
@@ -103,7 +142,13 @@ export function mergeDraft(
 ): { draft: Draft; conflicts: DraftConflict[] } {
   const draft = { ...remote };
   const conflicts: DraftConflict[] = [];
-  for (const field of fields) {
+  if (!sameDescription(base, local)) {
+    Object.assign(draft, description(local));
+    if (!sameDescription(base, remote) && !sameDescription(local, remote)) {
+      conflicts.push({ field: "description", remote: description(remote) });
+    }
+  }
+  for (const field of independentFields) {
     if (same(base[field], local[field])) continue;
     Object.assign(draft, { [field]: local[field] });
     // A changed hint cannot be compared to the API's computed usefulness. Ask
@@ -118,4 +163,8 @@ export function mergeDraft(
   return { draft, conflicts };
 }
 
-export type LeaveGuard = (leave: () => void) => void;
+// A guard may return a cleanup that dismisses a superseded confirmation.
+export type LeaveGuard = (
+  leave: () => void,
+  cancel?: () => void,
+) => void | (() => void);

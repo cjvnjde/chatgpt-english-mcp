@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { APIError, createAPI } from "./api";
 import { createAuth } from "./auth";
+import { createHashNavigation } from "./hashNavigation";
 import type { Row, Session, Table } from "./types";
 import { label } from "./format";
 import Analytics from "./components/Analytics";
@@ -178,32 +179,17 @@ function Workspace(props: {
 }) {
   const [route, setRoute] = createSignal(readRoute());
   let editorGuard: LeaveGuard | undefined;
-  let currentHash = location.hash;
-  const requestLeave: LeaveGuard = (leave) => {
-    if (editorGuard) editorGuard(leave);
-    else leave();
+  const requestLeave: LeaveGuard = (leave, cancel) => {
+    if (editorGuard) return editorGuard(leave, cancel);
+    leave();
   };
-  const onHash = () => {
-    const nextHash = location.hash;
-    if (nextHash === currentHash) return;
-    const nextRoute = readRoute();
-    // A hash/back event already changed the address. Restore it while the
-    // owner decides; the draft and current workspace stay mounted.
-    history.replaceState(
-      history.state,
-      "",
-      `${location.pathname}${location.search}${currentHash}`,
-    );
-    requestLeave(() => {
-      currentHash = nextHash;
-      location.hash = nextHash;
-      setEditor(undefined);
-      setInspected(undefined);
-      setRoute(nextRoute);
-    });
-  };
-  window.addEventListener("hashchange", onHash);
-  onCleanup(() => window.removeEventListener("hashchange", onHash));
+  const navigation = createHashNavigation(window, requestLeave, () => {
+    setEditor(undefined);
+    setInspected(undefined);
+    setRoute(readRoute());
+  });
+  window.addEventListener("hashchange", navigation.onHash);
+  onCleanup(() => window.removeEventListener("hashchange", navigation.onHash));
   const [revision, setRevision] = createSignal(0);
   const [tables, { refetch }] = createResource(revision, () =>
     props.api<Table[]>("/tables"),
@@ -252,18 +238,12 @@ function Workspace(props: {
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(noticeTimer));
   const navigate = (view: string, column?: string, value?: string) => {
-    requestLeave(() => {
-      setEditor(undefined);
-      setInspected(undefined);
-      const p = new URLSearchParams({ view });
-      if (column) {
-        p.set("column", column);
-        p.set("value", value || "");
-      }
-      currentHash = `#${p.toString()}`;
-      location.hash = currentHash;
-      setRoute({ view, column, value });
-    });
+    const p = new URLSearchParams({ view });
+    if (column) {
+      p.set("column", column);
+      p.set("value", value || "");
+    }
+    navigation.navigate(`#${p.toString()}`);
   };
   const allTables = () => (tables.error ? [] : tables() || []);
   const tableName = () =>
@@ -362,7 +342,7 @@ function Workspace(props: {
           </button>
           <small>Owner</small>
           <code>{props.session.owner}</code>
-          <button onClick={props.signOut}>Sign out</button>
+          <button onClick={() => requestLeave(props.signOut)}>Sign out</button>
         </div>
       </aside>
       <main id="main" class="main-content" tabIndex={-1}>

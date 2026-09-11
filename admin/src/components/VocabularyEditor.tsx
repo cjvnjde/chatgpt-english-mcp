@@ -3,9 +3,11 @@ import { APIError, type API } from "../api";
 import type { Vocabulary } from "../types";
 import { date, pretty } from "../format";
 import {
+  conflictLabel,
+  conflictValue,
   draftDirty,
-  fieldLabels,
   mergeDraft,
+  resolveDraftConflict,
   vocabularyChanges,
   vocabularyDraft,
   vocabularyPatch,
@@ -25,12 +27,29 @@ export default function VocabularyEditor(props: {
   registerGuard: (guard: LeaveGuard | undefined) => void;
 }) {
   const [busy, setBusy] = createSignal(false);
-  const [pendingLeave, setPendingLeave] = createSignal<() => void>();
+  const [pendingLeave, setPendingLeave] = createSignal<{
+    leave: () => void;
+    cancel?: () => void;
+  }>();
   let dirty = () => false;
-  const requestLeave: LeaveGuard = (leave) => {
-    if (busy()) return;
-    if (dirty()) setPendingLeave(() => leave);
-    else leave();
+  const requestLeave: LeaveGuard = (leave, cancel) => {
+    if (busy()) {
+      cancel?.();
+      return;
+    }
+    if (dirty()) {
+      const pending = { leave, cancel };
+      setPendingLeave(pending);
+      return () => {
+        if (pendingLeave() === pending) setPendingLeave(undefined);
+      };
+    }
+    leave();
+  };
+  const keepEditing = () => {
+    const pending = pendingLeave();
+    setPendingLeave(undefined);
+    pending?.cancel?.();
   };
   props.registerGuard(requestLeave);
   const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -99,10 +118,7 @@ export default function VocabularyEditor(props: {
         )}
       </Show>
       <Show when={pendingLeave()}>
-        <Modal
-          title="Unsaved vocabulary changes"
-          close={() => setPendingLeave(undefined)}
-        >
+        <Modal title="Unsaved vocabulary changes" close={keepEditing}>
           <div class="dialog-body">
             <p>
               Your draft has not been saved. Keep editing, or discard it to
@@ -110,15 +126,15 @@ export default function VocabularyEditor(props: {
             </p>
           </div>
           <footer class="dialog-footer">
-            <button autofocus onClick={() => setPendingLeave(undefined)}>
+            <button autofocus onClick={keepEditing}>
               Keep editing
             </button>
             <button
               class="danger"
               onClick={() => {
-                const leave = pendingLeave();
+                const pending = pendingLeave();
                 setPendingLeave(undefined);
-                leave?.();
+                pending?.leave();
               }}
             >
               Discard draft and continue
@@ -231,7 +247,7 @@ function Editor(props: {
     }
   };
   const resolve = (conflict: DraftConflict, useRemote: boolean) => {
-    if (useRemote) change(conflict.field, conflict.remote);
+    setDraft((current) => resolveDraftConflict(current, conflict, useRemote));
     setConflicts((current) =>
       current.filter((entry) => entry.field !== conflict.field),
     );
@@ -297,12 +313,13 @@ function Editor(props: {
         <For each={conflicts()}>
           {(conflict) => (
             <section
-              class="alert"
-              aria-label={`${fieldLabels[conflict.field]} conflict`}
+              class="alert draft-conflict"
+              aria-label={`${conflictLabel(conflict)} conflict`}
             >
-              <strong>{fieldLabels[conflict.field]} needs your decision</strong>
+              <strong>{conflictLabel(conflict)} needs your decision</strong>
               <div>
-                Your draft: <pre>{pretty(draft()[conflict.field])}</pre>
+                Your draft:{" "}
+                <pre>{pretty(conflictValue(draft(), conflict))}</pre>
               </div>
               <div>
                 Latest saved value:{" "}
@@ -314,10 +331,10 @@ function Editor(props: {
               </div>
               <div class="toolbar">
                 <button type="button" onClick={() => resolve(conflict, false)}>
-                  Use my {fieldLabels[conflict.field].toLowerCase()}
+                  Use my {conflictLabel(conflict).toLowerCase()}
                 </button>
                 <button type="button" onClick={() => resolve(conflict, true)}>
-                  Keep latest {fieldLabels[conflict.field].toLowerCase()}
+                  Keep latest {conflictLabel(conflict).toLowerCase()}
                 </button>
               </div>
             </section>

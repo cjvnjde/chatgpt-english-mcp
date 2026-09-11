@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   draftDirty,
   mergeDraft,
+  resolveDraftConflict,
   vocabularyChanges,
   vocabularyDraft,
   vocabularyPatch,
@@ -62,7 +63,7 @@ test("reverting list edits clears dirty state and does not send replacement list
   );
 });
 
-test("three-way merge keeps local-only fields and remote-only fields including source subfields", () => {
+test("three-way merge keeps unrelated fields but conflicts on the description/source tuple", () => {
   const base = vocabularyDraft(item);
   const local = { ...base, notes: ["My note"], sourceTitle: "My attribution" };
   const remote = vocabularyDraft({
@@ -76,19 +77,75 @@ test("three-way merge keeps local-only fields and remote-only fields including s
     },
   });
   const merged = mergeDraft(base, local, remote);
-  assert.deepEqual(merged.conflicts, []);
+  assert.deepEqual(merged.conflicts, [
+    {
+      field: "description",
+      remote: {
+        customDescription: "Original meaning",
+        sourceTitle: "Original source",
+        sourceURL: "https://example.com/new",
+      },
+    },
+  ]);
   assert.equal(merged.draft.status, "learning");
   assert.equal(merged.draft.personalInterest, "high");
   assert.deepEqual(vocabularyPatch(remote, merged.draft, 5), {
     notes: ["My note"],
     descriptionSource: {
       title: "My attribution",
-      url: "https://example.com/new",
+      url: "https://example.com/old",
     },
     expectedRevision: 5,
   });
   assert.deepEqual(local.notes, ["My note"]);
   assert.equal(local.sourceURL, "https://example.com/old");
+});
+
+test("description and attribution can only resolve together", () => {
+  const base = vocabularyDraft(item);
+  const local = {
+    ...base,
+    sourceTitle: "Local source",
+    notes: ["Keep my note"],
+  };
+  const remote = { ...base, customDescription: "Remote meaning" };
+  const merged = mergeDraft(base, local, remote);
+  assert.equal(merged.conflicts.length, 1);
+  assert.equal(merged.conflicts[0].field, "description");
+  const keepLocal = resolveDraftConflict(
+    merged.draft,
+    merged.conflicts[0],
+    false,
+  );
+  assert.equal(keepLocal.customDescription, base.customDescription);
+  assert.equal(keepLocal.sourceTitle, "Local source");
+  const keepRemote = resolveDraftConflict(
+    merged.draft,
+    merged.conflicts[0],
+    true,
+  );
+  assert.equal(keepRemote.customDescription, "Remote meaning");
+  assert.equal(keepRemote.sourceTitle, base.sourceTitle);
+  assert.deepEqual(keepRemote.notes, ["Keep my note"]);
+});
+
+test("a one-sided or identical description/source update merges without a conflict", () => {
+  const base = vocabularyDraft(item);
+  const updated = {
+    ...base,
+    customDescription: "Updated",
+    sourceTitle: "New source",
+    sourceURL: "",
+  };
+  for (const [local, remote] of [
+    [base, updated],
+    [updated, base],
+    [updated, updated],
+  ]) {
+    const merged = mergeDraft(base, local, remote);
+    assert.deepEqual(merged.conflicts, []);
+    assert.deepEqual(merged.draft, updated);
+  }
 });
 
 test("same-field conflicts retain the draft until an explicit local or remote resolution", () => {

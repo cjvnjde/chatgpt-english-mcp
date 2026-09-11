@@ -200,7 +200,7 @@
     text-align: center;
   }
   .nav-section {
-    color: #708095;
+    color: var(--muted);
     font-size: 0.75rem;
     font-weight: 650;
     text-transform: uppercase;
@@ -766,10 +766,26 @@
   }
   .editor-fields {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 18px;
     border: 0;
     margin: 0;
     min-width: 0;
+  }
+  .editor-fields > .alert {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .editor-fields > .draft-conflict {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  }
+  .draft-conflict > strong,
+  .draft-conflict > .toolbar {
+    grid-column: 1 / -1;
+  }
+  .editor-fields > .alert button {
+    margin-left: 0;
   }
   .item-heading {
     display: flex;

@@ -138,7 +138,8 @@ export default function Analytics(props: {
             <details>
               <summary>Effective scheduling ratings</summary>
               <p class="muted">
-                The scheduler can adjust a submitted rating for review timing.
+                New reviews use the submitted rating unchanged. Historical reviews
+                may retain a different effective rating from an older policy.
               </p>
               <For each={safe()!.effectiveRatings}>
                 {(r) => (
