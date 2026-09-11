@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/domain"
@@ -208,7 +210,13 @@ func decode(w http.ResponseWriter, r *http.Request, target any) error {
 	if err != nil || mediaType != "application/json" {
 		return apperr.New(apperr.InvalidArgument, "Content-Type must be application/json")
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil || !utf8.Valid(body) {
+		return apperr.New(apperr.InvalidArgument, "Request must contain valid UTF-8 JSON (maximum 1 MiB)")
+	}
+	// encoding/json silently replaces malformed UTF-8. Check the bounded raw
+	// body first so invalid bytes cannot collapse distinct saved identities.
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return apperr.New(apperr.InvalidArgument, "Request must be a valid JSON object with supported fields (maximum 1 MiB)")

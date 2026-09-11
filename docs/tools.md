@@ -31,6 +31,8 @@ A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulne
 
 Every item also returns `personalInterest`: personal priority, independent of general usefulness and recall quality. Existing items default to `normal`. Set `high` for “interesting” or “learn sooner,” `low` for “not interesting” or “less important,” and `normal` to reset. Low interest reduces selection weight but never excludes an otherwise eligible item.
 
+Vocabulary text must be valid UTF-8 without NUL (`U+0000`) characters, including terms, context, descriptions, attribution, tags, notes, and examples. Invalid text is rejected rather than silently changed or allowed to block Anki snapshot validation.
+
 ## `dictionary_lookup`
 
 ```ts
@@ -93,7 +95,7 @@ The operation is idempotent by normalized term and selected meaning. `definition
 
 For terms with dictionary data, callers should always pass `definition`. Omitting it preserves the legacy one-item-per-term behavior unless different non-empty contexts are supplied. A context-only meaning and a dictionary-selected meaning remain distinct even when their normalized identity text is identical. Initial metadata is applied only when creating the same meaning; an existing item is never overwritten.
 
-Dictionary-selected meanings retain the immutable lookup snapshot used when they were saved, preserving definition indices, part of speech, and pronunciation across refreshes. Legacy/context-only items can follow newer successful lookups, including parser upgrades within the same provider and dataset. Re-saving a legacy item with an explicit definition can create a separate card; use metadata updates when preserving its existing identity and history.
+Dictionary-selected meanings retain the immutable lookup snapshot used when they were saved, preserving definition indices, part of speech, and pronunciation across refreshes. Retrying an existing selected meaning returns that saved item with `created: false`, even if a dictionary refresh or parser upgrade no longer exposes its original definition; genuinely new meanings still require a matching current lookup. Legacy/context-only items can follow newer successful lookups, including parser upgrades within the same provider and dataset. Re-saving a legacy item with an explicit definition can create a separate card; use metadata updates when preserving its existing identity and history.
 
 Tags are trimmed, lowercased, deduplicated, and sorted. `descriptionSource.url`, when present, must be an absolute HTTP(S) URL and requires a non-empty custom description.
 
@@ -183,6 +185,7 @@ This removes the vocabulary item and its learning card. It does not remove cache
 
 // Output
 {
+  itemId: string; // exact saved meaning for vocabulary_get/update
   presentationId: number; // integer identifying the persisted presentation event
   shownAt: string; // server issuance time, RFC3339Nano in UTC
   reviewToken: string;
@@ -207,7 +210,7 @@ This removes the vocabulary item and its learning card. It does not remove cache
 }
 ```
 
-The tool returns exactly one non-archived item. Non-empty saved `context` is returned independently of dictionary coverage. `latestComment` is the latest non-empty comment, so it can predate a newer uncommented review; use its timestamp rather than assuming it describes the latest attempt. `comments` is included only when `includeComments` is true. Pass `reviewToken` unchanged to `learning_review` after the learner answers.
+The tool returns exactly one non-archived item. Use its `itemId` for follow-up vocabulary reads or edits; term and teaching content may be identical across separately saved meanings. Non-empty saved `context` is returned independently of dictionary coverage. `latestComment` is the latest non-empty comment, so it can predate a newer uncommented review; use its timestamp rather than assuming it describes the latest attempt. `comments` is included only when `includeComments` is true. Pass `reviewToken` unchanged to `learning_review` after the learner answers.
 
 Selection starts with all FSRS-new and due cards, applying a global adaptive cooldown for the owner's last three presentation events less than 30 minutes old. When too few candidates remain, it readmits older eligible cards for variety without reintroducing the latest active presentation when alternatives exist. A sole unshown candidate or one last shown at least 30 minutes ago keeps priority over cooldown relaxation. With only one eligible card, it may repeat.
 

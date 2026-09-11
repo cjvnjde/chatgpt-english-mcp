@@ -28,9 +28,15 @@ func NormalizeContext(value string) string {
 	return NormalizeWhitespace(value)
 }
 
+// ValidText is shared by persisted vocabulary fields and term validation.
+// NUL is not representable in the downstream Anki vocabulary snapshot.
+func ValidText(value string) bool {
+	return utf8.ValidString(value) && !strings.ContainsRune(value, '\x00')
+}
+
 func ValidTerm(value string) bool {
 	length := utf8.RuneCountInString(value)
-	return utf8.ValidString(value) && length >= 1 && length <= 200
+	return ValidText(value) && length >= 1 && length <= 200
 }
 
 func Preview(value string, limit int) string {

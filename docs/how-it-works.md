@@ -39,7 +39,6 @@ flowchart TD
     Select -->|"append issuance event"| History
     Select -->|"one item, content, review token"| Tutor
     Tutor -->|"answer-quality rating and token"| Review["learning_review"]
-    History -->|"unique-presentation timing"| Review
     Review --> FSRS["FSRS scheduler"]
     FSRS --> Cards
 ```
@@ -241,7 +240,7 @@ Every active vocabulary item has one production-recall card. The card stores FSR
 
 Review tokens prevent duplicate attempts. Retrying the same token with the same rating and comment returns the original result with `duplicate: true`; reusing it with different data is rejected.
 
-Each committed `learning_next` selection also appends an immutable presentation event, atomically with selecting and reading the item. It records the owner, vocabulary and card IDs, exercise mode, current `reviewToken`, server issuance time (`shownAt`), scheduled due time at issuance, and selection kind (`new`, `due`, or `early`). The response exposes the event's `presentationId` and its UTC `shownAt`.
+Each committed `learning_next` selection also appends an immutable presentation event, atomically with selecting and reading the item. It records the owner, vocabulary and card IDs, exercise mode, current `reviewToken`, server issuance time (`shownAt`), scheduled due time at issuance, and selection kind (`new`, `due`, or `early`). The response exposes the event's `presentationId`, its UTC `shownAt`, and the selected vocabulary `itemId` for exact follow-up reads or edits.
 
 A presentation means the server issued an item, not that a learner saw it or answered it. Delivery may fail after the event commits. Retrying `learning_next` records a fresh presentation and may choose another item; it does not retry the same presentation idempotently. Multiple presentations before a review share the card's pending `reviewToken`. An accepted review rotates that token, so the saved token links presentations to the eventual review attempt without implying a separate attempt for every presentation.
 
@@ -364,7 +363,7 @@ When multiple surviving candidates belong to the chosen pool, this permits a wei
 
 “Oldest” compares each card's latest **event ID**, not its timestamp; ties use ascending card ID. This preserves issuance order even when events share a timestamp. Archived/deleted items' retained events can still occupy positions in the owner's last-three-event window; the latest active presentation is the greatest event ID among the loaded cards.
 
-The implementation treats a negative elapsed interval after a backward clock change as recent when its ID is in the window. The recency weight clamps that interval to zero. This differs from review timing, where a negative interval supplies no boost.
+The implementation treats a negative elapsed interval after a backward clock change as recent when its ID is in the window. The recency weight clamps that interval to zero. Review grades are independent of presentation timing.
 
 ### 3. Prioritize learning steps, otherwise choose new versus mature review
 

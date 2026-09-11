@@ -688,6 +688,22 @@ func TestSelectedSenseKeepsOriginalEntryAcrossDictionaryRefresh(t *testing.T) {
 		loaded.Lookup.Entries[loaded.Sense.EntryIndex].Definitions[loaded.Sense.DefinitionIndex].Definition != "an institution" {
 		t.Fatalf("refresh changed selected meaning: %#v, error %v", loaded, err)
 	}
+	for _, parser := range []int{12, 13} {
+		service.currentSource.ParserVersion = parser
+		replayed, err := service.Save(ctx, "bank", InitialValues{Definition: "an institution"})
+		if err != nil || replayed.Created || replayed.ItemID != saved.ItemID ||
+			replayed.Lookup == nil || replayed.Lookup.LookupID != original.ID ||
+			replayed.EditRevision != saved.EditRevision || replayed.UpdatedAt != saved.UpdatedAt {
+			t.Fatalf("parser %d rejected or changed an existing sense retry: %#v, error %v", parser, replayed, err)
+		}
+	}
+	items, err := service.List(ctx, ListOptions{})
+	if err != nil || len(items.Items) != 1 {
+		t.Fatalf("retries created extra items: %#v, error %v", items, err)
+	}
+	// A genuinely new identity must still require a valid current lookup.
+	_, err = service.Save(ctx, "bank", InitialValues{Definition: "a nonexistent definition"})
+	assertApplicationError(t, err, apperr.InvalidArgument)
 }
 
 func TestMalformedUTF8DoesNotCreateOrMutateVocabulary(t *testing.T) {

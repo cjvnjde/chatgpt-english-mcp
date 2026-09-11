@@ -159,8 +159,9 @@ includeComments: true. It returns one production-recall item. For a short daily
 lesson, review at most five scheduled items unless the learner explicitly asks
 to continue. Do not select scheduled material with vocabulary_list.
 Each call records a fresh server-issued presentation; retrying it may choose
-another item. Keep the current item and reviewToken while awaiting the answer
-rather than calling learning_next to retrieve the same presentation.
+another item. Keep the returned itemId and reviewToken while awaiting the answer
+rather than calling learning_next to retrieve the same presentation. Use itemId
+for follow-up vocabulary_get or vocabulary_update calls on this exact meaning.
 
 The server weights usefulness only within new introductions, not due reviews
 or learning/relearning steps. Selectable due learning steps take priority;
@@ -403,10 +404,10 @@ revealing part of it in the initial question. Rewrite or blank out revealing
 examples. Do not show selected vocabulary in advance.
 
 Normally use the compact definition and example from learning_next. Use
-vocabulary_get only when additional dictionary information is needed for
-accurate feedback or a distinction. If multiple meanings make a term-only
-request ambiguous, use vocabulary_list to find the corresponding itemId;
-do not use it to choose a different review item.
+vocabulary_get with its returned itemId only when additional dictionary
+information is needed for accurate feedback or a distinction. Use that same
+itemId for vocabulary_update; do not guess from the term or use vocabulary_list
+to choose a different review item.
 
 # Ratings
 

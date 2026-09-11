@@ -1,10 +1,14 @@
 package mcpserver
 
 import (
+	"bytes"
 	"crypto/subtle"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -36,8 +40,35 @@ func newHTTPHandler(
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle(EndpointPath, middleware(http.NewCrossOriginProtection().Handler(streamableHandler)))
+	mux.Handle(EndpointPath, middleware(http.NewCrossOriginProtection().Handler(requireUTF8JSON(streamableHandler))))
 	return mux
+}
+
+// Validate raw JSON bytes before the SDK's decoder can silently replace invalid
+// UTF-8 in a vocabulary term or metadata. Keep the SDK's existing size limit.
+func requireUTF8JSON(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.Body != nil {
+			body := http.MaxBytesReader(w, r.Body, mcp.DefaultMaxRequestBodyBytes)
+			defer body.Close()
+			content, err := io.ReadAll(body)
+			if err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				} else {
+					http.Error(w, "Unable to read request body", http.StatusBadRequest)
+				}
+				return
+			}
+			if !utf8.Valid(content) {
+				http.Error(w, "Request must contain valid UTF-8 JSON", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(content))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func requireBearerToken(token string, next http.Handler) http.Handler {

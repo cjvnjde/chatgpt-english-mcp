@@ -45,6 +45,7 @@ type ReviewFeedback struct {
 }
 
 type NextResult struct {
+	ItemID           string                  `json:"itemId"`
 	PresentationID   int64                   `json:"presentationId"`
 	ShownAt          string                  `json:"shownAt"`
 	ReviewToken      string                  `json:"reviewToken"`
@@ -103,6 +104,7 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 
 	definition, example := tutoringContent(candidate.Vocabulary)
 	result := NextResult{
+		ItemID:           candidate.Vocabulary.ItemID,
 		PresentationID:   candidate.PresentationID,
 		ShownAt:          storage.TimeString(candidate.ShownAt),
 		ReviewToken:      candidate.Card.ReviewToken,

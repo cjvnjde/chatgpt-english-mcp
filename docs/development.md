@@ -154,6 +154,25 @@ Migration `014` separates context-only sense keys from dictionary-definition key
 
 All new errors exposed to callers should use a stable `apperr` code and avoid leaking internal details.
 
+## Text validation and existing NUL data
+
+Vocabulary service writes reject NUL (`U+0000`) in all caller-supplied exported text. The admin API and both MCP HTTP listeners also reject malformed raw UTF-8 before JSON decoding can replace it with `U+FFFD`; valid replacement characters remain allowed. Existing request-size limits remain 1 MiB for admin writes and 4 MiB for MCP requests. Normal whitespace and Unicode content are preserved under existing normalization rules.
+
+If a pre-upgrade record already contains NUL, the Anki worker continues to reject the complete snapshot rather than silently omit the item (which would authorize a remote deletion). Back up the database first and identify affected records with the admin raw inspector or a read-only query such as:
+
+```sql
+SELECT id, term FROM vocabulary_items
+WHERE instr(term, char(0)) > 0 OR instr(context, char(0)) > 0
+   OR instr(custom_description, char(0)) > 0
+   OR EXISTS (SELECT 1 FROM json_each(notes_json) WHERE instr(value, char(0)) > 0)
+   OR EXISTS (SELECT 1 FROM json_each(examples_json) WHERE instr(value, char(0)) > 0)
+   OR EXISTS (SELECT 1 FROM json_each(tags_json) WHERE instr(value, char(0)) > 0)
+   OR instr(json_extract(description_source_json, '$.title'), char(0)) > 0
+   OR instr(json_extract(description_source_json, '$.url'), char(0)) > 0;
+```
+
+Repair editable metadata explicitly through `vocabulary_update` or the admin editor, then retry the snapshot. Term/context identity is immutable: preserve the original export/history and deliberately create the corrected meaning before deleting the invalid item. Archiving alone does not repair an export because archived items are exported too. These fixes never rewrite existing records or immutable history automatically.
+
 ## Anki integration
 
 The optional private endpoint returns a complete owner-scoped snapshot from one SQLite read transaction. Its metadata includes schema version, stable namespace and owner, item count, explicit completeness, and a SHA-256 snapshot digest. The worker validates the entire snapshot and verifies the digest against its items before opening or changing Anki state. Digest verification matches Go's compact JSON encoding, including HTML-sensitive characters and Unicode line separators; it detects content mismatch, not the authenticity of an untrusted server. The worker never uses the paginated MCP list as a deletion authority.

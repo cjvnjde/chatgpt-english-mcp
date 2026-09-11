@@ -69,6 +69,35 @@ func TestAuthenticatedHTTPHandlerRequiresBearerToken(t *testing.T) {
 	}
 }
 
+func TestHTTPHandlersRejectMalformedUTF8AndOversizedBodies(t *testing.T) {
+	for _, authenticated := range []bool{false, true} {
+		server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+		handler := NewHTTPHandler(server, nil)
+		if authenticated {
+			handler = NewAuthenticatedHTTPHandler(server, "test-token", nil)
+		}
+		prefix := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"`
+		for _, test := range []struct {
+			name   string
+			status int
+		}{
+			{string([]byte{0xff}), http.StatusBadRequest},
+			{strings.Repeat("x", mcp.DefaultMaxRequestBodyBytes), http.StatusRequestEntityTooLarge},
+			{"valid replacement �", http.StatusOK},
+		} {
+			request := httptest.NewRequest(http.MethodPost, EndpointPath, strings.NewReader(prefix+test.name+`","version":"1.0.0"}}}`))
+			request.Header.Set("Accept", "application/json, text/event-stream")
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer test-token")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Errorf("authenticated=%t: status=%d want=%d body=%s", authenticated, response.Code, test.status, response.Body.String())
+			}
+		}
+	}
+}
+
 func TestHTTPHandlerAllowsTunnelRequestWithoutAuthentication(t *testing.T) {
 	handler := NewHTTPHandler(
 		mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil),
