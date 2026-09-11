@@ -2,11 +2,15 @@ import { createMemo, createResource, For, Show } from "solid-js";
 import type { API } from "../api";
 import type { AnalyticsData } from "../types";
 import { display } from "../format";
+import { activityDays, wordsNeedingAttention } from "../dashboard";
 
 export default function Analytics(props: {
   api: API;
   revision: number;
   open: (id: string) => void;
+  overview: boolean;
+  create: () => void;
+  navigate: (view: string, column?: string, value?: string) => void;
 }) {
   const [data, { refetch }] = createResource(
     () => props.revision,
@@ -27,33 +31,34 @@ export default function Analytics(props: {
             100,
         ) + "%"
       : "—";
-  const days = createMemo(() =>
-    Array.from({ length: 30 }, (_, i) => {
-      const d = new Date();
-      d.setUTCDate(d.getUTCDate() - 29 + i);
-      const day = d.toISOString().slice(0, 10);
-      return (
-        safe()?.activity.find((x) => x.day === day) || {
-          day,
-          reviews: 0,
-          recalled: 0,
-        }
-      );
-    }),
-  );
+  const days = createMemo(() => activityDays(safe()?.activity || []));
+  const today = () => days().at(-1)!;
+  const activeDays = () => days().filter((day) => day.reviews > 0).length;
+  const activityPeak = () => Math.max(1, ...days().map((day) => day.reviews));
+  const attention = () => wordsNeedingAttention(safe()?.difficult || []);
   return (
     <>
       <div class="page-heading">
         <div>
-          <h1>Learning overview</h1>
+          <span class="eyebrow">
+            {props.overview ? "Your workspace" : "Learning insights"}
+          </span>
+          <h1>{props.overview ? "Overview" : "Learning analytics"}</h1>
           <p>
             Vocabulary and review activity for{" "}
             {safe()?.owner || "your configured owner"}.
           </p>
         </div>
-        <button disabled={data.loading} onClick={() => void refetch()}>
-          Refresh
-        </button>
+        <div class="toolbar">
+          <button disabled={data.loading} onClick={() => void refetch()}>
+            Refresh
+          </button>
+          <Show when={props.overview}>
+            <button class="primary" onClick={props.create}>
+              + Add word
+            </button>
+          </Show>
+        </div>
       </div>
       <Show when={data.error}>
         <div class="alert error" role="alert">
@@ -67,6 +72,69 @@ export default function Analytics(props: {
         </div>
       </Show>
       <Show when={safe() && !data.loading}>
+        <Show when={props.overview}>
+          <section class="overview-focus" aria-label="Today in your vocabulary">
+            <div>
+              <span class="eyebrow">Today · UTC</span>
+              <h2>
+                {safe()!.due[0]?.count
+                  ? `${safe()!.due[0].count.toLocaleString()} cards are due for review.`
+                  : total()
+                    ? "You’re up to date on due reviews."
+                    : "Start with a word worth remembering."}
+              </h2>
+              <p>
+                {total()
+                  ? "See what the scheduler may suggest next, or give a difficult word a little more context."
+                  : "Add your first word or expression. Your learning activity will appear here."}
+              </p>
+              <button
+                class="primary"
+                onClick={() =>
+                  total() ? props.navigate("suggestions") : props.create()
+                }
+              >
+                {total()
+                  ? "Explore next suggestions →"
+                  : "Add your first word →"}
+              </button>
+              <small>
+                Reviews happen with your connected tutor. This workspace is for
+                managing and exploring.
+              </small>
+            </div>
+            <div class="today-summary">
+              <strong>{today().reviews.toLocaleString()}</strong>
+              <span>reviews today</span>
+              <small>
+                {activeDays()} active {activeDays() === 1 ? "day" : "days"} in
+                the last 30
+              </small>
+            </div>
+          </section>
+          <div class="overview-links" aria-label="Workspace shortcuts">
+            <button
+              onClick={() =>
+                props.navigate("vocabulary_items", "owner_key", safe()!.owner)
+              }
+            >
+              <span>Browse your vocabulary</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+            <button
+              onClick={() =>
+                props.navigate("comments", "owner_key", safe()!.owner)
+              }
+            >
+              <span>Read tutor comments</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+            <button onClick={() => props.navigate("analytics")}>
+              <span>Explore learning analytics</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+        </Show>
         <div class="stats">
           <div>
             <span>Vocabulary</span>
@@ -89,68 +157,71 @@ export default function Analytics(props: {
             <small>Share of submitted ratings</small>
           </div>
         </div>
-        <div class="analytics-grid">
-          <section class="panel chart-panel">
-            <h2>Vocabulary by status</h2>
-            <For each={["new", "learning", "learned", "archived"]}>
-              {(state) => {
-                const count = () =>
-                  safe()!.statuses.find((r) => r.label === state)?.count || 0;
-                return (
-                  <div class="bar-row">
-                    <span class="badge" data-value={state}>
-                      {state}
-                    </span>
-                    <meter
-                      min="0"
-                      max={Math.max(total(), 1)}
-                      value={count()}
-                      aria-label={`${state} vocabulary`}
-                    />
-                    <strong>{count()}</strong>
-                  </div>
-                );
-              }}
-            </For>
-          </section>
-          <section class="panel chart-panel">
-            <h2>Submitted ratings</h2>
-            <For each={["again", "hard", "good", "easy"]}>
-              {(rating) => {
-                const count = () =>
-                  safe()!.ratings.find((r) => r.label === rating)?.count || 0;
-                return (
-                  <div class="bar-row">
-                    <span class="badge" data-value={rating}>
-                      {rating}
-                    </span>
-                    <meter
-                      min="0"
-                      max={Math.max(reviews(), 1)}
-                      value={count()}
-                      aria-label={`${rating} ratings`}
-                    />
-                    <strong>{count()}</strong>
-                  </div>
-                );
-              }}
-            </For>
-            <details>
-              <summary>Effective scheduling ratings</summary>
-              <p class="muted">
-                New reviews use the submitted rating unchanged. Historical reviews
-                may retain a different effective rating from an older policy.
-              </p>
-              <For each={safe()!.effectiveRatings}>
-                {(r) => (
-                  <p>
-                    {r.label}: {r.count}
-                  </p>
-                )}
+        <Show when={!props.overview}>
+          <div class="analytics-grid">
+            <section class="panel chart-panel">
+              <h2>Vocabulary by status</h2>
+              <For each={["new", "learning", "learned", "archived"]}>
+                {(state) => {
+                  const count = () =>
+                    safe()!.statuses.find((r) => r.label === state)?.count || 0;
+                  return (
+                    <div class="bar-row">
+                      <span class="badge" data-value={state}>
+                        {state}
+                      </span>
+                      <meter
+                        min="0"
+                        max={Math.max(total(), 1)}
+                        value={count()}
+                        aria-label={`${state} vocabulary`}
+                      />
+                      <strong>{count()}</strong>
+                    </div>
+                  );
+                }}
               </For>
-            </details>
-          </section>
-        </div>
+            </section>
+            <section class="panel chart-panel">
+              <h2>Submitted ratings</h2>
+              <For each={["again", "hard", "good", "easy"]}>
+                {(rating) => {
+                  const count = () =>
+                    safe()!.ratings.find((r) => r.label === rating)?.count || 0;
+                  return (
+                    <div class="bar-row">
+                      <span class="badge" data-value={rating}>
+                        {rating}
+                      </span>
+                      <meter
+                        min="0"
+                        max={Math.max(reviews(), 1)}
+                        value={count()}
+                        aria-label={`${rating} ratings`}
+                      />
+                      <strong>{count()}</strong>
+                    </div>
+                  );
+                }}
+              </For>
+              <details>
+                <summary>Effective scheduling ratings</summary>
+                <p class="muted">
+                  New reviews use the submitted rating unchanged. Historical
+                  reviews may retain a different effective rating from an older
+                  policy.
+                </p>
+                <For each={safe()!.effectiveRatings}>
+                  {(r) => (
+                    <p>
+                      {r.label}: {r.count}
+                    </p>
+                  )}
+                </For>
+              </details>
+            </section>
+          </div>
+        </Show>
         <section class="panel chart-panel">
           <h2>
             Review activity <span class="muted">Last 30 days · UTC</span>
@@ -161,12 +232,18 @@ export default function Analytics(props: {
                 <div
                   title={`${day.day}: ${day.reviews} reviews, ${day.recalled} good/easy`}
                 >
-                  <meter
-                    min="0"
-                    max={Math.max(1, ...days().map((x) => x.reviews))}
-                    value={day.reviews}
-                    aria-label={`${day.day}: ${day.reviews} reviews`}
-                  />
+                  <div
+                    class="activity-track"
+                    role="img"
+                    aria-label={`${day.day}: ${day.reviews} reviews, ${day.recalled} good/easy`}
+                  >
+                    <span
+                      class="activity-fill"
+                      style={{
+                        height: `${(day.reviews / activityPeak()) * 100}%`,
+                      }}
+                    />
+                  </div>
                   <small>{day.day.slice(8)}</small>
                 </div>
               )}
@@ -199,14 +276,22 @@ export default function Analytics(props: {
           </details>
         </section>
         <section class="panel chart-panel">
-          <h2>Words to watch</h2>
+          <h2>Words needing attention</h2>
           <p class="muted">
-            Active items with the most lapses, then consecutive failures and
-            difficulty.
+            Words with recorded lapses or consecutive failures. Open one to add
+            a helpful note or example.
           </p>
           <Show
-            when={safe()!.difficult.length}
-            fallback={<div class="empty">No active learning cards yet.</div>}
+            when={attention().length}
+            fallback={
+              <div class="empty">
+                <h2>No struggling words right now</h2>
+                <p>
+                  Words with recorded lapses or repeated failures will appear
+                  here.
+                </p>
+              </div>
+            }
           >
             <div class="table-scroll">
               <table>
@@ -219,7 +304,11 @@ export default function Analytics(props: {
                   </tr>
                 </thead>
                 <tbody>
-                  <For each={safe()!.difficult}>
+                  <For
+                    each={
+                      props.overview ? attention().slice(0, 5) : attention()
+                    }
+                  >
                     {(r) => (
                       <tr>
                         <td>

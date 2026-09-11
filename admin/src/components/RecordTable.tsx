@@ -10,14 +10,19 @@ import {
 import type { API } from "../api";
 import type { Page, Row, Table } from "../types";
 import { date, display, download, label } from "../format";
+import {
+  dateFilterColumn,
+  filterOptions,
+  quickFilterColumn,
+} from "../tableFilters";
+import DateRangePicker from "./DateRangePicker";
 
 const preferred: Record<string, string[]> = {
   vocabulary_items: [
     "term",
-    "context",
     "learning_status",
+    "personal_interest",
     "usefulness",
-    "custom_description",
     "tags_json",
     "updated_at",
   ],
@@ -77,7 +82,8 @@ export default function RecordTable(props: {
     ...tableColumns(),
   ]);
   const [columns, setColumns] = createSignal(
-    preferred[props.table.name] || allColumns().slice(0, 6),
+    preferred[props.table.name]?.filter((c) => allColumns().includes(c)) ||
+      allColumns().slice(0, 6),
   );
   const [search, setSearch] = createSignal("");
   const [query, setQuery] = createSignal("");
@@ -95,6 +101,41 @@ export default function RecordTable(props: {
   const [limit, setLimit] = createSignal(50);
   const [offset, setOffset] = createSignal(0);
   const [schema, setSchema] = createSignal(false);
+  const [advanced, setAdvanced] = createSignal(false);
+  const [draftColumn, setDraftColumn] = createSignal(
+    props.initialFilter?.column || "",
+  );
+  const [draftValue, setDraftValue] = createSignal(
+    props.initialFilter?.value || "",
+  );
+  const [compact, setCompact] = createSignal(false);
+  const quickColumn = () => quickFilterColumn(props.table.name);
+  const filtersActive = () =>
+    !!(query() || column() || from() || to() || comments());
+  const clearFilters = () =>
+    change(() => {
+      setSearch("");
+      setQuery("");
+      setColumn("");
+      setValue("");
+      setDraftColumn("");
+      setDraftValue("");
+      setFrom("");
+      setTo("");
+      setComments(false);
+    });
+  const setExact = (nextColumn: string, nextValue: string) =>
+    change(() => {
+      setColumn(nextColumn);
+      setValue(nextValue);
+      setDraftColumn(nextColumn);
+      setDraftValue(nextValue);
+    });
+  const sortBy = (key: string) =>
+    change(() => {
+      setDirection(sort() === key && direction() === "asc" ? "desc" : "asc");
+      setSort(key);
+    });
   const params = createMemo(() => {
     const p = new URLSearchParams({
       q: query(),
@@ -119,16 +160,7 @@ export default function RecordTable(props: {
       fn();
     });
   };
-  const dateFilter = () =>
-    props.table.columns.some((c) =>
-      [
-        "reviewed_at",
-        "shown_at",
-        "created_at",
-        "fetched_at",
-        "applied_at",
-      ].includes(c.name),
-    );
+  const dateFilter = () => dateFilterColumn(tableColumns());
   createEffect(() => {
     if (
       !page.error &&
@@ -158,6 +190,11 @@ export default function RecordTable(props: {
     <>
       <div class="page-heading">
         <div>
+          <span class="eyebrow">
+            {props.table.name === "vocabulary_items"
+              ? "Your collection"
+              : "Explore records"}
+          </span>
           <h1>{props.commentsOnly ? "Comments" : label(props.table.name)}</h1>
           <p>
             {props.commentsOnly
@@ -181,48 +218,81 @@ export default function RecordTable(props: {
         </div>
       </div>
       <div class="panel">
-        <div class="table-tools">
+        <div class="table-tools primary-tools">
           <form
             class="search"
             onSubmit={(e) => {
               e.preventDefault();
-              change(() => setQuery(search()));
+              change(() => setQuery(search().trim()));
             }}
           >
             <input
+              type="search"
               aria-label="Search all fields or word"
-              placeholder="Search all fields or word…"
+              placeholder="Search words or any stored field…"
+              maxlength="500"
               value={search()}
               onInput={(e) => setSearch(e.currentTarget.value)}
             />
             <button type="submit">Search</button>
           </form>
-          <label>
-            Filter by
-            <select
-              value={column()}
-              onChange={(e) =>
-                change(() => {
-                  setColumn(e.currentTarget.value);
-                  setValue("");
-                })
+          <Show when={dateFilter()}>
+            {(field) => (
+              <DateRangePicker
+                field={label(field()).replace(/ at$/, "")}
+                value={{ from: from(), to: to() }}
+                change={(range) =>
+                  change(() => {
+                    setFrom(range.from);
+                    setTo(range.to);
+                  })
+                }
+              />
+            )}
+          </Show>
+          <button
+            classList={{ selected: advanced() }}
+            aria-expanded={advanced()}
+            aria-controls="advanced-filters"
+            onClick={() => {
+              setDraftColumn(column());
+              setDraftValue(value());
+              setAdvanced(!advanced());
+            }}
+          >
+            Filters & tools{" "}
+            <span aria-hidden="true">{advanced() ? "−" : "+"}</span>
+          </button>
+        </div>
+        <div class="table-tools quick-tools">
+          <Show when={quickColumn()}>
+            <div
+              class="filter-pills"
+              aria-label={
+                quickColumn() === "rating" ? "Rating filters" : "Status filters"
               }
             >
-              <option value="">All records</option>
-              <For each={tableColumns()}>
-                {(c) => <option value={c}>{label(c)}</option>}
+              <button
+                aria-pressed={column() !== quickColumn()}
+                onClick={() => {
+                  if (column() === quickColumn()) setExact("", "");
+                }}
+              >
+                {quickColumn() === "rating" ? "All ratings" : "All statuses"}
+              </button>
+              <For each={filterOptions(quickColumn())}>
+                {(option) => (
+                  <button
+                    aria-pressed={
+                      column() === quickColumn() && value() === option
+                    }
+                    onClick={() => setExact(quickColumn(), option)}
+                  >
+                    {label(option)}
+                  </button>
+                )}
               </For>
-            </select>
-          </label>
-          <Show when={column()}>
-            <label>
-              Exact value
-              <input
-                value={value()}
-                onInput={(e) => change(() => setValue(e.currentTarget.value))}
-                placeholder="Value to match"
-              />
-            </label>
+            </div>
           </Show>
           <Show
             when={props.table.name === "review_attempts" && !props.commentsOnly}
@@ -234,115 +304,216 @@ export default function RecordTable(props: {
                 onChange={(e) =>
                   change(() => setComments(e.currentTarget.checked))
                 }
-              />{" "}
+              />
               With comments
             </label>
           </Show>
+          <span class="spacer" />
+          <span class="scope-label">
+            {column() === "owner_key" ? `Owner: ${value()}` : "All owners"}
+          </span>
+          <button
+            class="density-toggle"
+            aria-pressed={compact()}
+            onClick={() => setCompact(!compact())}
+          >
+            Compact rows
+          </button>
         </div>
-        <div class="table-tools secondary-tools">
-          <Show when={dateFilter()}>
-            <label>
-              From (UTC)
-              <input
-                type="date"
-                value={from()}
-                onChange={(e) => change(() => setFrom(e.currentTarget.value))}
-              />
-            </label>
-            <label>
-              Through (UTC)
-              <input
-                type="date"
-                value={to()}
-                min={from()}
-                onChange={(e) => change(() => setTo(e.currentTarget.value))}
-              />
-            </label>
-          </Show>
-          <label>
-            Sort
-            <select
-              value={sort()}
-              onChange={(e) => change(() => setSort(e.currentTarget.value))}
+        <Show when={advanced()}>
+          <div class="advanced-filters" id="advanced-filters">
+            <form
+              class="exact-filter"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setExact(draftColumn(), draftColumn() ? draftValue() : "");
+              }}
             >
-              <For each={tableColumns()}>
-                {(c) => <option value={c}>{label(c)}</option>}
-              </For>
-            </select>
-          </label>
-          <label>
-            Order
-            <select
-              value={direction()}
-              onChange={(e) =>
-                change(() => setDirection(e.currentTarget.value))
-              }
-            >
-              <option value="desc">Descending</option>
-              <option value="asc">Ascending</option>
-            </select>
-          </label>
-          <details class="column-picker">
-            <summary>Columns</summary>
-            <div>
-              <For each={allColumns()}>
-                {(c) => (
-                  <label class="check">
-                    <input
-                      type="checkbox"
-                      checked={columns().includes(c)}
-                      disabled={columns().length === 1 && columns().includes(c)}
-                      onChange={(e) =>
-                        setColumns((previous) =>
-                          e.currentTarget.checked
-                            ? [...previous, c]
-                            : previous.length > 1
-                              ? previous.filter((x) => x !== c)
-                              : previous,
-                        )
-                      }
-                    />
-                    {label(c)}
-                  </label>
-                )}
-              </For>
+              <label>
+                Match field
+                <select
+                  value={draftColumn()}
+                  onChange={(e) => {
+                    setDraftColumn(e.currentTarget.value);
+                    setDraftValue(
+                      filterOptions(e.currentTarget.value)[0] || "",
+                    );
+                  }}
+                >
+                  <option value="">No field filter</option>
+                  <For each={tableColumns()}>
+                    {(c) => <option value={c}>{label(c)}</option>}
+                  </For>
+                </select>
+              </label>
+              <Show when={draftColumn()}>
+                <label>
+                  Exact value
+                  <Show
+                    when={filterOptions(draftColumn()).length}
+                    fallback={
+                      <input
+                        maxlength="500"
+                        value={draftValue()}
+                        onInput={(e) => setDraftValue(e.currentTarget.value)}
+                        placeholder="Value to match"
+                      />
+                    }
+                  >
+                    <select
+                      value={draftValue()}
+                      onChange={(e) => setDraftValue(e.currentTarget.value)}
+                    >
+                      <Show
+                        when={
+                          !filterOptions(draftColumn()).includes(draftValue())
+                        }
+                      >
+                        <option value={draftValue()}>
+                          {draftValue() || "Choose a value"}
+                        </option>
+                      </Show>
+                      <For each={filterOptions(draftColumn())}>
+                        {(option) => (
+                          <option value={option}>{label(option)}</option>
+                        )}
+                      </For>
+                    </select>
+                  </Show>
+                </label>
+              </Show>
+              <button type="submit">Apply filter</button>
+              <small>
+                One exact-field filter at a time; applying one replaces the
+                current field filter, including a quick status or rating filter.
+              </small>
+            </form>
+            <div class="table-tools secondary-tools">
+              <label>
+                Sort by
+                <select
+                  value={sort()}
+                  onChange={(e) => change(() => setSort(e.currentTarget.value))}
+                >
+                  <For each={tableColumns()}>
+                    {(c) => <option value={c}>{label(c)}</option>}
+                  </For>
+                </select>
+              </label>
+              <label>
+                Order
+                <select
+                  value={direction()}
+                  onChange={(e) =>
+                    change(() => setDirection(e.currentTarget.value))
+                  }
+                >
+                  <option value="desc">Descending</option>
+                  <option value="asc">Ascending</option>
+                </select>
+              </label>
+              <details class="column-picker">
+                <summary>Columns</summary>
+                <div>
+                  <For each={allColumns()}>
+                    {(c) => (
+                      <label class="check">
+                        <input
+                          type="checkbox"
+                          checked={columns().includes(c)}
+                          disabled={
+                            columns().length === 1 && columns().includes(c)
+                          }
+                          onChange={(e) =>
+                            setColumns((previous) =>
+                              e.currentTarget.checked
+                                ? [...previous, c]
+                                : previous.length > 1
+                                  ? previous.filter((x) => x !== c)
+                                  : previous,
+                            )
+                          }
+                        />
+                        {label(c)}
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </details>
+              <button
+                aria-expanded={schema()}
+                onClick={() => setSchema(!schema())}
+              >
+                {schema() ? "Hide schema" : "Schema"}
+              </button>
+              <button
+                disabled={!!page.error || !page() || page.loading}
+                onClick={() =>
+                  download(
+                    `${props.table.name}-page-${offset() / limit() + 1}.json`,
+                    {
+                      table: props.table.name,
+                      filters: Object.fromEntries(
+                        new URLSearchParams(params()),
+                      ),
+                      ...page(),
+                    },
+                  )
+                }
+              >
+                Export page
+              </button>
             </div>
-          </details>
-          <button onClick={() => setSchema(!schema())}>
-            {schema() ? "Hide schema" : "Schema"}
-          </button>
-          <button
-            disabled={!!page.error || !page() || page.loading}
-            onClick={() =>
-              download(
-                `${props.table.name}-page-${offset() / limit() + 1}.json`,
-                {
-                  table: props.table.name,
-                  filters: Object.fromEntries(new URLSearchParams(params())),
-                  ...page(),
-                },
-              )
-            }
-          >
-            Export page
-          </button>
-          <button
-            class="text-button"
-            onClick={() =>
-              change(() => {
-                setSearch("");
-                setQuery("");
-                setColumn("");
-                setValue("");
-                setFrom("");
-                setTo("");
-                setComments(false);
-              })
-            }
-          >
-            Clear filters
-          </button>
-        </div>
+          </div>
+        </Show>
+        <Show when={filtersActive()}>
+          <div class="active-filters" aria-label="Active filters">
+            <Show when={query()}>
+              <button
+                aria-label="Remove search filter"
+                onClick={() =>
+                  change(() => {
+                    setQuery("");
+                    setSearch("");
+                  })
+                }
+              >
+                Search: {query()} <span aria-hidden="true">×</span>
+              </button>
+            </Show>
+            <Show when={column()}>
+              <button
+                aria-label="Remove field filter"
+                onClick={() => setExact("", "")}
+              >
+                {label(column())}: {value() || "(empty)"}{" "}
+                <span aria-hidden="true">×</span>
+              </button>
+            </Show>
+            <Show when={from() || to()}>
+              <button
+                aria-label="Remove date filter"
+                onClick={() =>
+                  change(() => {
+                    setFrom("");
+                    setTo("");
+                  })
+                }
+              >
+                {label(dateFilter() || "Date")}: {from() || "Any"} →{" "}
+                {to() || "Any"} · UTC <span aria-hidden="true">×</span>
+              </button>
+            </Show>
+            <Show when={comments()}>
+              <button onClick={() => change(() => setComments(false))}>
+                With comments <span aria-hidden="true">×</span>
+              </button>
+            </Show>
+            <button class="text-button" onClick={clearFilters}>
+              Clear filters
+            </button>
+          </div>
+        </Show>
         <Show when={schema()}>
           <pre class="schema">{props.table.sql}</pre>
         </Show>
@@ -354,31 +525,91 @@ export default function RecordTable(props: {
         </Show>
         <Show when={page.loading}>
           <div class="loading" role="status">
-            Loading records…
+            {page.latest ? "Updating records…" : "Loading records…"}
           </div>
         </Show>
-        <Show when={!page.error && page() && !page.loading}>
+        <Show when={!page.error && page.latest}>
           <Show
-            when={page()!.rows.length}
+            when={page.latest!.rows.length}
             fallback={
               <div class="empty">
                 <h2>No records found</h2>
-                <p>Try another search or clear the filters.</p>
+                <p>
+                  {filtersActive()
+                    ? "Try a broader search or remove a filter."
+                    : props.table.name === "vocabulary_items"
+                      ? "Add a word or expression to start your collection."
+                      : "Records will appear here as you use your connected tutor."}
+                </p>
+                <Show
+                  when={filtersActive()}
+                  fallback={
+                    <Show when={props.table.name === "vocabulary_items"}>
+                      <button class="primary" onClick={props.create}>
+                        + Add word
+                      </button>
+                    </Show>
+                  }
+                >
+                  <button onClick={clearFilters}>Clear filters</button>
+                </Show>
               </div>
             }
           >
-            <div class="table-scroll">
+            <div
+              classList={{
+                "table-scroll": true,
+                "records-scroll": true,
+                "is-updating": page.loading,
+                compact: compact(),
+              }}
+              tabIndex={0}
+              aria-label="Records; scroll for more rows and columns"
+              aria-busy={page.loading}
+            >
               <table>
                 <thead>
                   <tr>
-                    <For each={columns()}>{(c) => <th>{label(c)}</th>}</For>
+                    <For each={columns()}>
+                      {(c) => (
+                        <th
+                          scope="col"
+                          aria-sort={
+                            sort() === c
+                              ? direction() === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : "none"
+                          }
+                        >
+                          <Show
+                            when={tableColumns().includes(c)}
+                            fallback={label(c)}
+                          >
+                            <button
+                              class="sort-heading"
+                              onClick={() => sortBy(c)}
+                            >
+                              {label(c)}
+                              <span aria-hidden="true">
+                                {sort() === c
+                                  ? direction() === "asc"
+                                    ? "↑"
+                                    : "↓"
+                                  : "↕"}
+                              </span>
+                            </button>
+                          </Show>
+                        </th>
+                      )}
+                    </For>
                     <th>
                       <span class="sr-only">Inspect</span>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  <For each={page()!.rows}>
+                  <For each={page.latest!.rows}>
                     {(row) => (
                       <tr>
                         <For each={columns()}>
@@ -399,6 +630,7 @@ export default function RecordTable(props: {
                                         "effective_rating",
                                         "selection_kind",
                                         "usefulness",
+                                        "personal_interest",
                                       ].includes(c),
                                     }}
                                     data-value={String(row[c])}
@@ -409,10 +641,22 @@ export default function RecordTable(props: {
                               >
                                 <button
                                   class="row-link"
+                                  disabled={page.loading}
                                   onClick={() => props.open(row)}
                                 >
                                   {cell(row, c)}
                                 </button>
+                                <Show
+                                  when={
+                                    c === "term" &&
+                                    row.context &&
+                                    !columns().includes("context")
+                                  }
+                                >
+                                  <small class="term-context">
+                                    {display(row.context)}
+                                  </small>
+                                </Show>
                               </Show>
                             </td>
                           )}
@@ -420,6 +664,7 @@ export default function RecordTable(props: {
                         <td>
                           <button
                             class="text-button"
+                            disabled={page.loading}
                             onClick={() => props.open(row)}
                             aria-label={`Inspect ${display(row.term || row._term || row.id)}`}
                           >
@@ -428,6 +673,7 @@ export default function RecordTable(props: {
                           <Show when={props.table.name === "vocabulary_items"}>
                             <button
                               class="text-button"
+                              disabled={page.loading}
                               onClick={() => props.inspect(row)}
                               aria-label={`Inspect raw ${display(row.term)}`}
                             >

@@ -9,6 +9,9 @@ export const labels: Record<string, string> = {
   sqlite_sequence: "SQLite sequences",
   _term: "Word",
   custom_description: "Description",
+  tags_json: "Tags",
+  notes_json: "Notes",
+  examples_json: "Examples",
   learning_status: "Status",
   effective_rating: "Effective rating",
 };

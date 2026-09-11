@@ -26,7 +26,7 @@ type Route = { view: string; column?: string; value?: string };
 function readRoute(): Route {
   const p = new URLSearchParams(location.hash.slice(1));
   return {
-    view: p.get("view") || "vocabulary_items",
+    view: p.get("view") || "dashboard",
     column: p.get("column") || undefined,
     value: p.get("value") || undefined,
   };
@@ -178,6 +178,7 @@ function Workspace(props: {
   authNotice: string;
 }) {
   const [route, setRoute] = createSignal(readRoute());
+  const [mobileMenu, setMobileMenu] = createSignal(false);
   let editorGuard: LeaveGuard | undefined;
   const requestLeave: LeaveGuard = (leave, cancel) => {
     if (editorGuard) return editorGuard(leave, cancel);
@@ -244,6 +245,7 @@ function Workspace(props: {
       p.set("value", value || "");
     }
     navigation.navigate(`#${p.toString()}`);
+    setMobileMenu(false);
   };
   const allTables = () => (tables.error ? [] : tables() || []);
   const tableName = () =>
@@ -269,6 +271,7 @@ function Workspace(props: {
     noticeTimer = setTimeout(() => setNotice(""), 6000);
   };
   const nav = [
+    { name: "Overview", view: "dashboard", icon: "⌂" },
     { name: "Vocabulary", view: "vocabulary_items", icon: "Aa" },
     { name: "Next suggestions", view: "suggestions", icon: "→" },
     { name: "Reviews", view: "review_attempts", icon: "↺" },
@@ -295,54 +298,72 @@ function Workspace(props: {
             <strong>English MCP</strong>
             <small>Admin workspace</small>
           </div>
-        </div>
-        <nav aria-label="Main navigation">
-          <For each={nav}>
-            {(n) => (
-              <button
-                classList={{ active: route().view === n.view }}
-                onClick={() => navigate(n.view)}
-                aria-current={route().view === n.view ? "page" : undefined}
-              >
-                <span class="nav-icon" aria-hidden="true">
-                  {n.icon}
-                </span>
-                {n.name}
-              </button>
-            )}
-          </For>
-        </nav>
-        <div class="nav-section">Database</div>
-        <nav aria-label="Database tables">
-          <For
-            each={allTables().filter(
-              (t) =>
-                ![
-                  "vocabulary_items",
-                  "review_attempts",
-                  "learning_presentations",
-                ].includes(t.name),
-            )}
+          <button
+            class="nav-menu-toggle"
+            aria-expanded={mobileMenu()}
+            aria-controls="workspace-navigation"
+            onClick={() => setMobileMenu(!mobileMenu())}
           >
-            {(t) => (
-              <button
-                classList={{ active: route().view === t.name }}
-                onClick={() => navigate(t.name)}
-                aria-current={route().view === t.name ? "page" : undefined}
-              >
-                {label(t.name)}
-                <small>{t.count.toLocaleString()}</small>
-              </button>
-            )}
-          </For>
-        </nav>
-        <div class="sidebar-bottom">
-          <button disabled={exporting()} onClick={() => void exportDatabase()}>
-            {exporting() ? "Exporting…" : "Export database"}
+            {mobileMenu() ? "Close menu" : "Menu"}
           </button>
-          <small>Owner</small>
-          <code>{props.session.owner}</code>
-          <button onClick={() => requestLeave(props.signOut)}>Sign out</button>
+        </div>
+        <div
+          id="workspace-navigation"
+          classList={{ "sidebar-navigation": true, expanded: mobileMenu() }}
+        >
+          <nav aria-label="Main navigation">
+            <For each={nav}>
+              {(n) => (
+                <button
+                  classList={{ active: route().view === n.view }}
+                  onClick={() => navigate(n.view)}
+                  aria-current={route().view === n.view ? "page" : undefined}
+                >
+                  <span class="nav-icon" aria-hidden="true">
+                    {n.icon}
+                  </span>
+                  {n.name}
+                </button>
+              )}
+            </For>
+          </nav>
+          <div class="nav-section">Database</div>
+          <nav aria-label="Database tables">
+            <For
+              each={allTables().filter(
+                (t) =>
+                  ![
+                    "vocabulary_items",
+                    "review_attempts",
+                    "learning_presentations",
+                  ].includes(t.name),
+              )}
+            >
+              {(t) => (
+                <button
+                  classList={{ active: route().view === t.name }}
+                  onClick={() => navigate(t.name)}
+                  aria-current={route().view === t.name ? "page" : undefined}
+                >
+                  {label(t.name)}
+                  <small>{t.count.toLocaleString()}</small>
+                </button>
+              )}
+            </For>
+          </nav>
+          <div class="sidebar-bottom">
+            <button
+              disabled={exporting()}
+              onClick={() => void exportDatabase()}
+            >
+              {exporting() ? "Exporting…" : "Export database"}
+            </button>
+            <small>Owner</small>
+            <code>{props.session.owner}</code>
+            <button onClick={() => requestLeave(props.signOut)}>
+              Sign out
+            </button>
+          </div>
         </div>
       </aside>
       <main id="main" class="main-content" tabIndex={-1}>
@@ -447,13 +468,21 @@ function Workspace(props: {
                   api={props.api}
                   revision={revision()}
                   open={(id) => setEditor({ id })}
+                  create={() => setEditor({})}
                 />
               </Match>
-              <Match when={route().view === "analytics"}>
+              <Match
+                when={
+                  route().view === "dashboard" || route().view === "analytics"
+                }
+              >
                 <Analytics
                   api={props.api}
                   revision={revision()}
+                  overview={route().view === "dashboard"}
                   open={(id) => setEditor({ id })}
+                  create={() => setEditor({})}
+                  navigate={navigate}
                 />
               </Match>
             </Switch>

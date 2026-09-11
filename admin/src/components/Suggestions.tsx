@@ -8,7 +8,8 @@ import {
 } from "solid-js";
 import type { API } from "../api";
 import type { Suggestion, SuggestionsPage } from "../types";
-import { date } from "../format";
+import { date, label } from "../format";
+import { chance, chanceWidth } from "../suggestionDisplay";
 
 const reasons: Record<Suggestion["reason"], string> = {
   new: "New word",
@@ -24,20 +25,11 @@ const pools: Record<Suggestion["pool"], string> = {
   learning: "Learning / relearning",
   review: "Review",
 };
-const percent = new Intl.NumberFormat(undefined, {
-  style: "percent",
-  maximumFractionDigits: 2,
-});
-function chance(probability: number) {
-  return probability > 0 && probability < 0.0001
-    ? `<${percent.format(0.0001)}`
-    : percent.format(probability);
-}
-
 export default function Suggestions(props: {
   api: API;
   revision: number;
   open: (id: string) => void;
+  create: () => void;
 }) {
   const [limit, setLimit] = createSignal(50);
   const [offset, setOffset] = createSignal(0);
@@ -50,6 +42,8 @@ export default function Suggestions(props: {
     (params) => props.api<SuggestionsPage>(`/suggestions?${params}`),
   );
   const safe = () => (page.error ? undefined : page());
+  const maximum = () =>
+    Math.max(0, ...(safe()?.rows.map((row) => row.probability) || []));
   createEffect(() => {
     const current = safe();
     if (current && !page.loading && offset() > 0 && !current.rows.length)
@@ -61,6 +55,7 @@ export default function Suggestions(props: {
     <>
       <div class="page-heading">
         <div>
+          <span class="eyebrow">A look ahead</span>
           <h1>Next suggestions</h1>
           <p>
             Words ranked by their chance of being suggested next. Selection is
@@ -72,16 +67,17 @@ export default function Suggestions(props: {
         </button>
       </div>
       <section
-        class="panel chart-panel"
+        class="suggestion-explainer"
         aria-label="How suggestions are selected"
       >
-        <p>
-          Read-only preview: opening this page does not present or review any
-          words. Chances change as words are shown, reviews are recorded, or
-          time passes. Refresh to see the latest state.
-        </p>
+        <span class="badge">Read-only preview</span>
+        <p>Exploring this list never presents a word or records a review.</p>
         <details>
-          <summary>How to read this order</summary>
+          <summary>How selection works</summary>
+          <p class="muted">
+            Chances change as words are shown, reviews are recorded, or time
+            passes. Refresh to see the latest state.
+          </p>
           <p class="muted">
             Due learning and relearning steps take priority. Otherwise, when
             both new words and due reviews are available, the scheduler gives
@@ -111,27 +107,43 @@ export default function Suggestions(props: {
       </Show>
       <Show when={safe() && !page.loading}>
         <section class="panel" aria-label="Suggested word ranking">
-          <div class="table-tools">
-            <p class="muted" role="status">
-              {safe()!.selectable.toLocaleString()} eligible for the next draw
-              {" · "}
-              {safe()!.total.toLocaleString()} active cards
-              {" · "}Owner: {safe()!.owner}
-              <br />
+          <div class="suggestion-summary" role="status">
+            <div>
+              <strong>{safe()!.selectable.toLocaleString()}</strong>
+              <span>eligible next</span>
+            </div>
+            <div>
+              <strong>{safe()!.total.toLocaleString()}</strong>
+              <span>active cards</span>
+            </div>
+            <div class="snapshot-info">
               <small>Snapshot: {date(safe()!.generatedAt)}</small>
-            </p>
+              <small>Owner: {safe()!.owner}</small>
+            </div>
           </div>
+          <Show when={safe()!.rows.length}>
+            <div class="probability-legend">
+              <span>
+                Bars compare chances on this page. Percentages are the actual
+                chance of the next draw.
+              </span>
+              <strong>Scale: 0–{chance(maximum())}</strong>
+            </div>
+          </Show>
           <Show
             when={safe()!.rows.length}
             fallback={
               <div class="empty">
                 <h2>No active words to suggest</h2>
                 <p>Add vocabulary or unarchive a word to start learning.</p>
+                <button class="primary" onClick={props.create}>
+                  + Add word
+                </button>
               </div>
             }
           >
             <div
-              class="table-scroll"
+              class="table-scroll suggestion-scroll"
               tabIndex={0}
               aria-label="Suggestions; scroll horizontally for more columns"
             >
@@ -141,45 +153,80 @@ export default function Suggestions(props: {
                     <th scope="col">Rank now</th>
                     <th scope="col">Word / meaning</th>
                     <th scope="col">Chance next</th>
-                    <th scope="col">Selection reason</th>
-                    <th scope="col">Learning group</th>
-                    <th scope="col">Usefulness</th>
-                    <th scope="col">Due</th>
-                    <th scope="col">Last shown</th>
+                    <th scope="col">Why this word</th>
+                    <th scope="col">Timing</th>
                   </tr>
                 </thead>
                 <tbody>
                   <For each={safe()!.rows}>
                     {(row, index) => (
-                      <tr>
-                        <td>
-                          {row.probability > 0
-                            ? safe()!.offset + index() + 1
-                            : "—"}
-                        </td>
-                        <td>
-                          <button
-                            class="row-link"
-                            onClick={() => props.open(row.vocabularyItemId)}
-                          >
-                            {row.term}
-                          </button>
-                          <Show when={row.context}>
-                            <br />
-                            <small>{row.context}</small>
-                          </Show>
-                        </td>
-                        <td>{chance(row.probability)}</td>
-                        <td>{reasons[row.reason]}</td>
-                        <td>{pools[row.pool]}</td>
-                        <td>
-                          <span class="badge" data-value={row.usefulness}>
-                            {row.usefulness}
-                          </span>
-                        </td>
-                        <td>{date(row.dueAt)}</td>
-                        <td>{date(row.lastShownAt)}</td>
-                      </tr>
+                      <>
+                        <Show
+                          when={
+                            row.probability === 0 &&
+                            (index() === 0 ||
+                              safe()!.rows[index() - 1].probability > 0)
+                          }
+                        >
+                          <tr class="group-divider">
+                            <td colspan="5">
+                              Not eligible right now{" "}
+                              <span>· 0% chance in this snapshot</span>
+                            </td>
+                          </tr>
+                        </Show>
+                        <tr classList={{ unavailable: row.probability === 0 }}>
+                          <td class="rank-cell">
+                            {row.probability > 0
+                              ? safe()!.offset + index() + 1
+                              : "—"}
+                          </td>
+                          <td>
+                            <button
+                              class="row-link"
+                              onClick={() => props.open(row.vocabularyItemId)}
+                            >
+                              {row.term}
+                            </button>
+                            <Show when={row.context}>
+                              <small class="term-context">{row.context}</small>
+                            </Show>
+                            <div class="word-meta">
+                              <span>{label(row.status)}</span>
+                              <span>· {label(row.usefulness)} usefulness</span>
+                            </div>
+                          </td>
+                          <td class="probability-cell">
+                            <strong>{chance(row.probability)}</strong>
+                            <div class="probability-track" aria-hidden="true">
+                              <span
+                                style={{
+                                  width: `${chanceWidth(row.probability, maximum())}%`,
+                                }}
+                              />
+                            </div>
+                          </td>
+                          <td>
+                            <span
+                              class="badge reason-badge"
+                              data-value={row.reason}
+                            >
+                              {reasons[row.reason]}
+                            </span>
+                            <small class="term-context">
+                              {pools[row.pool]}
+                            </small>
+                          </td>
+                          <td class="timing-cell">
+                            <span>Due {date(row.dueAt)}</span>
+                            <small>
+                              {row.lastShownAt
+                                ? `Last shown ${date(row.lastShownAt)}`
+                                : "Not shown yet"}
+                            </small>
+                          </td>
+                        </tr>
+                      </>
                     )}
                   </For>
                 </tbody>

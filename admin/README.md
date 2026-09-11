@@ -49,6 +49,7 @@ The build contains only HTML, CSS, and JavaScript. Client navigation uses URL ha
 
 | View | Capabilities |
 | --- | --- |
+| Overview | Default landing: due-card summary, today's review count (UTC), 30-day activity, owner-filtered vocabulary/comment shortcuts, and words with recorded lapses or consecutive failures. |
 | Vocabulary | Create words and meanings, inspect/edit status, description, notes, examples, tags, source, usefulness hints, and independent personal interest; archive items or delete with typed confirmation. |
 | Next suggestions | Preview words ranked by current next-draw probability, with selection reasons, learning groups, usefulness, due dates, and last-shown times; open words in the editor. |
 | Reviews / Comments | Search by word, ID, comment, or any stored field; exact-column filters, ratings, dates, pagination; full before/after FSRS state and submitted/effective ratings. Comments stays restricted to commented reviews when optional filters are cleared. |
@@ -69,13 +70,17 @@ The editor sends only changed fields with the loaded `expectedRevision`. If anot
 
 Admin vocabulary items include a `revision`. `PATCH /admin/api/vocabulary/{id}` requires a positive integer `expectedRevision`; missing, invalid, and stale values return 428, 400, and 409 respectively. MCP clients and Anki snapshots do not include this admin precondition.
 
-Search covers stored columns, plus the linked vocabulary term for history/cards. Exact filters match one selected column; date boundaries use UTC and the end day is inclusive. Table timestamps display in the browser's time zone. Learning cards initially sort by earliest due date. Database lists cover all owners; suggestions, analytics, and vocabulary mutations use the configured owner.
+Search covers stored columns, plus the linked vocabulary term for history/cards. Quick status/rating buttons apply one exact-column filter. **Filters & tools** contains the explicit field/value form (applied on submit, not every keystroke), sorting, columns, schema, and page export. Exact-field filters replace one another, including an owner filter; active filter chips and the owner-scope label show the current scope. Search, date, and comment constraints combine with the field filter. Clear filters never removes the Comments view's built-in restriction.
+
+The date-range picker has Today / Last 7 days / Last 30 days presets, a Monday-first calendar, and optional start/end fields in `YYYY-MM-DD` format. Ranges apply explicitly; Escape or Cancel discards the draft. Arrow keys move between calendar days, Home/End move within the week, and Page Up/Down change months. Date boundaries use UTC and the end day is inclusive; blank boundaries are open-ended. The picker names the timestamp it filters (e.g. Created for vocabulary, Reviewed for reviews), which is independent of the sort column. Table timestamps display in the browser's time zone.
+
+Click a stored-column heading to sort; compact rows and sticky headers help scan longer tables. Previously loaded records stay visible but cannot be opened while a new request is pending. Learning cards initially sort by earliest due date. Database lists cover all owners; overview, suggestions, analytics, and vocabulary mutations use the configured owner. On narrow screens, **Menu** expands navigation so the overview is visible without scrolling past database tools.
 
 ## Next suggestions
 
 The scheduler uses weighted random selection, not a fixed future queue. **Next suggestions** ranks active production cards by their probability of being chosen on the next `learning_next` call. It shares the actual scheduler's eligibility and weighting logic: cooldown and small-pool relaxation, due learning/relearning precedence, the 20% new / 80% mature-review mix when both pools remain available, and deterministic early-review fallback.
 
-Ranks are likelihood ranks, not future turn numbers. Equal probabilities are displayed by due date and then card ID. Cards with no chance in the current snapshot appear after selectable cards with a reason such as cooling down, not due yet, or waiting for due learning steps. Archived items and other owners' cards are excluded.
+Ranks are likelihood ranks, not future turn numbers. The percentage is the actual next-draw probability; probability bars are scaled relative to the highest chance on the current page, with a visible scale legend. Selection reasons and learning groups appear together, and 0%-chance rows are visually separated without changing their server order. Equal probabilities are displayed by due date and then card ID. Cards with no chance in the current snapshot appear after selectable cards with a reason such as cooling down, not due yet, or waiting for due learning steps. Archived items and other owners' cards are excluded.
 
 Opening, refreshing, or paging through the preview does not record a presentation or review, rotate review tokens, or change scheduling state. The view refreshes after an editor save; use **Refresh** after external MCP activity or as time passes. Every request takes a fresh snapshot, so independently loaded pages can shift as learning state changes.
 
@@ -119,4 +124,12 @@ go test ./...
 
 The integration tests use temporary SQLite databases and exercise authorization, vocabulary CRUD and card lifecycle, query validation, read-only tables, and an exported file's signature, integrity, migration metadata, and committed data. Suggestion tests cover probability and random-selection boundaries, cooldown and learning precedence, early fallback, pagination, owner isolation, and unchanged learning state after preview reads. Client tests cover credential handling, expired sessions, proxy misconfiguration, binary downloads, remembered sign-in restoration and validation, sign-out cleanup, temporary server failures, and blocked browser storage.
 
-For browser smoke checks of the built app, run `ADMIN_DEV_UPSTREAM=http://localhost:8081 npm run preview` and open `/admin/` on the printed URL. Exercise suggestion pagination, word editing, refresh, empty/error states, Comments filtering, and narrow-screen table scrolling. Browser interactions and Docker image execution are separate from `npm test`.
+An optional automated browser smoke suite exercises the overview, table filters, calendar mouse/keyboard controls, pagination, sorting, loading/error recovery, suggestions, empty states, and mobile navigation. It intercepts all admin API requests with fixtures and never accesses a real database. With Playwright available in your environment, start Vite (or preview) and run:
+
+```sh
+ADMIN_TEST_URL=http://localhost:5173/admin/ node tests/browser-smoke.mjs
+```
+
+If Playwright is installed outside `admin/`, set `ADMIN_PLAYWRIGHT_MODULE` to its absolute `index.mjs` path. `ADMIN_BROWSER_PATH` optionally selects a browser executable, and `ADMIN_SCREENSHOT_DIR` saves desktop/mobile captures. Playwright is not a runtime dependency and the suite is separate from `npm test`.
+
+For manual browser smoke checks of the built app, run `ADMIN_DEV_UPSTREAM=http://localhost:8081 npm run preview` and open `/admin/` on the printed URL. Exercise suggestion pagination, word editing, refresh, empty/error states, Comments filtering, and narrow-screen table scrolling. Browser interactions and Docker image execution are separate from `npm test`.
