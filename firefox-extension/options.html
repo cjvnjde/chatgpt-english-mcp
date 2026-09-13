@@ -11,7 +11,9 @@
 <body>
   <main>
     <form id="settingsForm" novalidate aria-label="English Dictionary settings">
-      <fieldset id="formFields" disabled aria-label="Connections and context">
+      <fieldset id="formFields" disabled aria-label="Connections and mode settings">
+        <h1>Settings</h1>
+        <h2>Connections</h2>
         <div class="field">
           <label for="aiUrl">API base URL</label>
           <input id="aiUrl" name="aiUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false">
@@ -19,16 +21,6 @@
         <div class="field">
           <label for="aiKey">API key</label>
           <div class="secret-input"><input id="aiKey" name="aiKey" type="password" autocomplete="off" spellcheck="false"><button type="button" data-reveal="aiKey" aria-pressed="false" aria-label="Show AI API key">Show</button></div>
-        </div>
-        <div class="models">
-          <div class="field">
-            <label for="model">Model</label>
-            <input id="model" name="model" type="text" list="modelList" autocomplete="off" spellcheck="false" aria-label="Deep model">
-          </div>
-          <div class="field">
-            <label for="quickModel">Quick model</label>
-            <input id="quickModel" name="quickModel" type="text" list="modelList" autocomplete="off" spellcheck="false">
-          </div>
         </div>
         <datalist id="modelList"></datalist>
         <div class="actions">
@@ -52,9 +44,54 @@
           <button id="cancelMcp" type="button" hidden aria-label="Cancel MCP test">Cancel</button>
         </div>
         <p id="mcpStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <p class="hint">API keys and bearer tokens are stored unencrypted in this Firefox profile's extension local storage, not synced or exposed to web pages. Anyone with access to the profile can read them.</p>
+        <fieldset class="mode-settings">
+          <legend>Deep · sidebar</legend>
+          <div class="models">
+            <div class="field">
+              <label for="model">Deep model</label>
+              <input id="model" name="model" type="text" list="modelList" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="thinkingLevel">Thinking effort</label>
+              <select id="thinkingLevel" name="thinkingLevel" aria-describedby="effortHelp"><option value="">Default (provider)</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="contextMode">Page context</label>
+            <select id="contextMode" name="contextMode"><option value="none">None</option><option value="surrounding">Surrounding paragraph (up to 2,400 characters)</option><option value="page">Larger page excerpt (up to 12,000 characters)</option></select>
+          </div>
+          <div class="field">
+            <div class="prompt-label"><label for="systemPrompt">System prompt</label><button type="button" data-reset="systemPrompt" aria-label="Reset Deep system prompt">Reset</button></div>
+            <textarea id="systemPrompt" name="systemPrompt" rows="10" maxlength="32000" aria-describedby="promptHelp"></textarea>
+          </div>
+        </fieldset>
+        <fieldset class="mode-settings">
+          <legend>Quick · popup</legend>
+          <div class="models">
+            <div class="field">
+              <label for="quickModel">Quick model</label>
+              <input id="quickModel" name="quickModel" type="text" list="modelList" autocomplete="off" spellcheck="false" placeholder="Use Deep model">
+            </div>
+            <div class="field">
+              <label for="quickThinkingLevel">Thinking effort</label>
+              <select id="quickThinkingLevel" name="quickThinkingLevel" aria-describedby="effortHelp"><option value="">Default (provider)</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="quickContextMode">Page context</label>
+            <select id="quickContextMode" name="quickContextMode"><option value="none">None</option><option value="surrounding">Surrounding paragraph (up to 2,400 characters)</option><option value="page">Larger page excerpt (up to 12,000 characters)</option></select>
+          </div>
+          <div class="field">
+            <div class="prompt-label"><label for="quickSystemPrompt">System prompt</label><button type="button" data-reset="quickSystemPrompt" aria-label="Reset Quick system prompt">Reset</button></div>
+            <textarea id="quickSystemPrompt" name="quickSystemPrompt" rows="10" maxlength="32000" aria-describedby="promptHelp"></textarea>
+          </div>
+        </fieldset>
+        <p id="effortHelp" class="hint">Default sends no reasoning_effort parameter. Other levels require provider/model support; unsupported settings report an error. Quick effort is independent of Deep, even when sharing its model. Test AI uses Deep settings.</p>
+        <p id="promptHelp" class="hint">Changes save automatically. These are the complete editable instructions for each mode (up to 32,000 characters); blank is allowed. Reset restores that mode's bundled prompt. Quick never uses MCP.</p>
         <div class="field">
-          <label for="contextMode">Page context</label>
-          <select id="contextMode" name="contextMode"><option value="none">None</option><option value="surrounding">Surrounding paragraph</option><option value="page">Larger page excerpt</option></select>
+          <label for="hostGuard">Fixed host rules · read-only</label>
+          <textarea id="hostGuard" rows="5" readonly></textarea>
         </div>
       </fieldset>
       <p id="saveStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>

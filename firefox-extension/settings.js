@@ -1,11 +1,18 @@
+import { DEEP_SYSTEM_PROMPT, QUICK_SYSTEM_PROMPT } from "./prompt.js";
+
 export const DEFAULT_SETTINGS = Object.freeze({
   aiUrl: "https://llm.cjvnjde.tech",
   aiKey: "",
   model: "",
   quickModel: "",
+  thinkingLevel: "",
+  quickThinkingLevel: "",
+  systemPrompt: DEEP_SYSTEM_PROMPT,
+  quickSystemPrompt: QUICK_SYSTEM_PROMPT,
   mcpUrl: "",
   mcpToken: "",
   contextMode: "surrounding",
+  quickContextMode: "surrounding",
 });
 
 function invalid(field, message) {
@@ -39,19 +46,31 @@ export function validateSettings(candidate) {
   }
   const settings = {};
   for (const [field, fallback] of Object.entries(DEFAULT_SETTINGS)) {
-    const value = Object.hasOwn(candidate, field) ? candidate[field] : fallback;
+    const fallbackValue = field === "quickContextMode" ? candidate.contextMode ?? fallback : fallback;
+    const value = Object.hasOwn(candidate, field) ? candidate[field] : fallbackValue;
     if (typeof value !== typeof fallback) invalid(field, `Invalid value for ${field}.`);
     if (typeof value === "string") {
-      if (/[\u0000-\u001f\u007f]/.test(value)) invalid(field, `${field} cannot contain control characters.`);
-      settings[field] = value.trim();
+      const prompt = field === "systemPrompt" || field === "quickSystemPrompt";
+      if ((prompt ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/ : /[\u0000-\u001f\u007f]/).test(value)) {
+        invalid(field, `${field} cannot contain control characters.`);
+      }
+      if (prompt && value.length > 32000) invalid(field, "System prompts must be at most 32,000 characters.");
+      settings[field] = prompt ? value : value.trim();
     } else {
       settings[field] = value;
     }
   }
   settings.aiUrl = connectionUrl(settings.aiUrl, "aiUrl", "AI base URL");
   settings.mcpUrl = connectionUrl(settings.mcpUrl, "mcpUrl", "English MCP URL");
-  if (!["none", "surrounding", "page"].includes(settings.contextMode)) {
-    invalid("contextMode", "Choose a valid page context option.");
+  for (const field of ["contextMode", "quickContextMode"]) {
+    if (!["none", "surrounding", "page"].includes(settings[field])) {
+      invalid(field, "Choose a valid page context option.");
+    }
+  }
+  for (const field of ["thinkingLevel", "quickThinkingLevel"]) {
+    if (!["", "none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(settings[field])) {
+      invalid(field, "Choose a valid thinking effort.");
+    }
   }
   return settings;
 }

@@ -139,6 +139,7 @@ export async function completeChat(candidate, messages, { signal, onDelta } = {}
     throw new Error("Chat messages must contain a role and text content.");
   }
   const body = { model: settings.model, messages: messages.map(({ role, content }) => ({ role, content })), stream: true };
+  if (settings.thinkingLevel) body.reasoning_effort = settings.thinkingLevel;
   return request(settings, "chat/completions", { signal, timeout: 120_000, body }, async response => {
     if (!response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
       const payload = await jsonResponse(response);

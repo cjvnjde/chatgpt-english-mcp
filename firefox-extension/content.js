@@ -1,6 +1,8 @@
 (() => {
   let selectedRange = null;
   let selectedTerm = '';
+  let selectionSourceId = '';
+  let selectionUrl = '';
   let host = null;
   let selectionTimer;
   let requestId = 0;
@@ -22,6 +24,14 @@
       && range.endContainer === selectedRange.endContainer
       && range.endOffset === selectedRange.endOffset
       && selection.toString().replace(/\s+/gu, ' ').trim() === selectedTerm;
+  }
+
+  function cacheSelection(selection) {
+    if (matchesSelection(selection)) return;
+    selectedRange = selection.getRangeAt(0).cloneRange();
+    selectedTerm = selection.toString().replace(/\s+/gu, ' ').trim();
+    selectionSourceId = crypto.getRandomValues(new Uint32Array(4)).join('-');
+    selectionUrl = location.href;
   }
 
   function positionPopup(popup, anchor) {
@@ -53,8 +63,7 @@
       return;
     }
     hide();
-    selectedRange = selection.getRangeAt(0).cloneRange();
-    selectedTerm = term;
+    cacheSelection(selection);
     const rects = selectedRange.getClientRects();
     const rect = rects[rects.length - 1];
     if (!rect || (!rect.width && !rect.height)) return;
@@ -76,9 +85,10 @@
       .spinner { width: 12px; height: 12px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
-      p { margin: 0; padding: 9px 11px; width: min(320px, calc(100vw - 16px)); max-height: min(320px, calc(100vh - 16px)); overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; font-weight: 400; }
-      .error { display: flex; align-items: center; gap: 8px; padding: 7px; color: CanvasText; background: Canvas; border: 1px solid ButtonBorder; border-radius: 5px; max-width: calc(100vw - 16px); font: 13px/1.5 system-ui,sans-serif; }
-      .error button { width: auto; padding: 2px 7px; }
+      .answer { display: flex; flex-direction: column; width: min(320px, calc(100vw - 16px)); max-height: min(320px, calc(100vh - 16px)); overflow: auto; color: CanvasText; background: Canvas; border: 1px solid ButtonBorder; border-radius: 5px; font: 13px/1.5 system-ui,sans-serif; }
+      p { margin: 0; padding: 9px 11px; min-height: 0; flex: 1 1 auto; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; font-weight: 400; border: 0; }
+      .status { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 8px; padding: 7px; overflow-wrap: anywhere; }
+      .status button { width: auto; padding: 2px 7px; }
     `;
     const button = document.createElement('button');
     button.type = 'button';
@@ -100,7 +110,44 @@
     button.addEventListener('click', async event => {
       if (!event.isTrusted || button.disabled) return;
       const id = ++requestId;
-      pendingRequest = id;
+      let partialText = '';
+      let answer;
+      let panel;
+      let status;
+      const isCurrent = () => {
+        if (id !== requestId || host !== popup) return false;
+        if (!matchesSelection(window.getSelection()) || isPrivate(document.activeElement)) {
+          hide();
+          return false;
+        }
+        return true;
+      };
+      const showAnswer = () => {
+        if (!panel) {
+          panel = document.createElement('div');
+          panel.className = 'answer';
+          answer = document.createElement('p');
+          answer.setAttribute('role', 'status');
+          status = document.createElement('div');
+          status.className = 'status';
+          status.setAttribute('role', 'status');
+          panel.append(answer, status);
+          shadow.replaceChildren(style, panel);
+        }
+        popup.style.setProperty('display', 'block', 'important');
+      };
+      pendingRequest = {
+        id,
+        update(text) {
+          if (!isCurrent() || !text.trim()) return;
+          partialText = text;
+          showAnswer();
+          answer.setAttribute('aria-busy', 'true');
+          answer.textContent = text;
+          status.textContent = 'Answering…';
+          positionPopup(popup, rect);
+        },
+      };
       button.disabled = true;
       button.setAttribute('aria-label', 'Thinking');
       button.setAttribute('aria-busy', 'true');
@@ -111,12 +158,8 @@
       shadow.replaceChildren(style, button);
       positionPopup(popup, rect);
       try {
-        const result = await browser.runtime.sendMessage({ type: 'EXPLAIN_SELECTION' });
-        if (id !== requestId || host !== popup) return;
-        if (!matchesSelection(window.getSelection()) || isPrivate(document.activeElement)) {
-          hide();
-          return;
-        }
+        const result = await browser.runtime.sendMessage({ type: 'EXPLAIN_SELECTION', requestId: id });
+        if (!isCurrent()) return;
         pendingRequest = null;
         if (!result?.ok) throw new Error('Could not explain.');
         if (result.mode !== 'quick') {
@@ -124,31 +167,25 @@
           return;
         }
         if (typeof result.text !== 'string' || !result.text.trim()) throw new Error('Could not explain.');
-        const answer = document.createElement('p');
-        answer.setAttribute('role', 'status');
+        showAnswer();
+        answer.removeAttribute('aria-busy');
         answer.textContent = result.text;
-        shadow.replaceChildren(style, answer);
-        popup.style.setProperty('display', 'block', 'important');
+        status.remove();
         positionPopup(popup, rect);
       } catch {
-        if (id !== requestId || host !== popup) return;
-        if (!matchesSelection(window.getSelection()) || isPrivate(document.activeElement)) {
-          hide();
-          return;
-        }
+        if (!isCurrent()) return;
         pendingRequest = null;
         button.disabled = false;
         button.removeAttribute('aria-busy');
         button.setAttribute('aria-label', 'Retry explanation');
         button.textContent = 'Retry';
-        const error = document.createElement('div');
-        error.className = 'error';
-        const status = document.createElement('span');
-        status.setAttribute('role', 'status');
-        status.textContent = 'Could not explain.';
-        error.append(status, button);
-        shadow.replaceChildren(style, error);
-        popup.style.setProperty('display', 'block', 'important');
+        showAnswer();
+        answer.removeAttribute('aria-busy');
+        answer.textContent = partialText;
+        answer.hidden = !partialText;
+        const error = document.createElement('span');
+        error.textContent = partialText ? 'Incomplete answer. Retry to try again.' : 'Could not explain.';
+        status.replaceChildren(error, button);
         positionPopup(popup, rect);
       }
     });
@@ -192,7 +229,8 @@
   }
 
   function capture(mode) {
-    if (!selectedRange || !selectedRange.startContainer.isConnected || isPrivate(selectedRange.startContainer) || isPrivate(selectedRange.endContainer)) return null;
+    if (!selectedRange || !selectedRange.startContainer.isConnected || !selectedRange.endContainer.isConnected || isPrivate(selectedRange.startContainer) || isPrivate(selectedRange.endContainer)) return null;
+    if (selectionUrl !== location.href || selectedRange.toString().replace(/\s+/gu, ' ').trim() !== selectedTerm) return null;
     const anchor = selectedRange.commonAncestorContainer;
     const element = anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement;
     let context = '';
@@ -202,7 +240,7 @@
         : element.closest('p,li,blockquote,pre,td,dd,dt,figcaption,h1,h2,h3,h4') || element;
       context = excerpt(root, mode === 'page' ? 12000 : 2400);
     }
-    return { term: selectedTerm, context, title: mode === 'none' ? '' : document.title, url: mode === 'none' ? '' : location.href };
+    return { term: selectedTerm, context, title: mode === 'none' ? '' : document.title, url: mode === 'none' ? '' : location.href, sourceId: selectionSourceId };
   }
 
   document.addEventListener('pointerup', event => {
@@ -219,11 +257,22 @@
   }, true);
   document.addEventListener('pointerdown', event => { if (event.target !== host) hide(); }, true);
   document.addEventListener('selectionchange', () => {
-    if (!matchesSelection(window.getSelection())) hide(false);
+    const current = window.getSelection();
+    if (!matchesSelection(current)) {
+      hide(false);
+      // Sidebar focus may collapse the selection; a different selection invalidates its source.
+      if (current?.rangeCount && !current.isCollapsed) selectedRange = null;
+    }
   });
   window.addEventListener('scroll', event => { if (event.target !== host) hide(); }, { passive: true, capture: true });
   window.addEventListener('resize', hide, { passive: true });
   browser.runtime.onMessage.addListener(message => {
+    if (message?.type === 'QUICK_UPDATED') {
+      if (pendingRequest?.id === message.requestId && message.requestId === requestId && typeof message.text === 'string') {
+        pendingRequest.update(message.text);
+      }
+      return undefined;
+    }
     if (message?.type === 'DISMISS_QUICK') {
       hide();
       return undefined;
@@ -235,11 +284,15 @@
         if (current?.rangeCount && !current.isCollapsed) {
           if (isPrivate(current.anchorNode) || isPrivate(current.focusNode) || isPrivate(document.activeElement)) return Promise.resolve(null);
           if (!matchesSelection(current)) hide();
-          selectedRange = current.getRangeAt(0).cloneRange();
-          selectedTerm = current.toString().replace(/\s+/gu, ' ').trim();
+          cacheSelection(current);
         } else {
           return Promise.resolve(null);
         }
+      } else {
+        const current = window.getSelection();
+        if (isPrivate(document.activeElement) || (current?.rangeCount && !current.isCollapsed && !matchesSelection(current))) return Promise.resolve(null);
+        if (message.sourceId !== undefined && message.sourceId !== selectionSourceId) return Promise.resolve(null);
+        if (message.expectedTerm !== undefined && message.expectedTerm !== selectedTerm) return Promise.resolve(null);
       }
       const result = capture(message.contextMode);
       // Keep the pending indicator visible while the background captures context.

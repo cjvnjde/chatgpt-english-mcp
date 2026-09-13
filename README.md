@@ -59,13 +59,15 @@ The same Compose file includes the static admin UI. Set `ADMIN_BEARER_TOKEN` and
 1. Download `english-dictionary-<version>.xpi` from [GitHub Releases](https://github.com/cjvnjde/chatgpt-english-mcp/releases/latest). Use the `.xpi` asset, **not** the source-code ZIP/TAR archives.
 2. In Firefox 142+, open `about:addons` → gear → **Install Add-on From File…** and select the downloaded `.xpi`. Accept the permission prompt.
 3. Pin English Dictionary to the toolbar. Open settings using the sidebar gear or **Manage Extension → Preferences**.
-4. Enter your OpenAI-compatible API URL and key. Use **Load models** to choose the sidebar **Model** and a faster **Quick model**. An empty Quick model uses Model. No API key is bundled.
+4. Enter your OpenAI-compatible API URL and key. Use **Load models** to choose the **Deep · sidebar** model and **Quick · popup** model. An empty Quick model uses the Deep model, but keeps its own thinking effort, context, and prompt. No API key is bundled.
 5. Enter your English MCP’s exact Streamable HTTP URL and separate bearer token. For this server, use your public HTTPS `/mcp` endpoint, or `http://127.0.0.1:8081/mcp` when running locally with `MCP_BEARER_TOKEN`.
 6. Settings save automatically. Connection-test buttons are optional. AI-only explanations work without MCP; dictionary saving requires MCP.
 
+Each mode has its own **Thinking effort**, **Page context**, and editable **System prompt**. Thinking defaults to the provider's choice; explicit levels require support for OpenAI-compatible `reasoning_effort` by your model/provider. Prompt editors show the complete bundled instructions, preserve multiline edits, and have independent **Reset** buttons. Fixed host rules remain visible and read-only: page/dictionary content is untrusted, models have no tools, and only Save can write vocabulary.
+
 Select text and click the small dictionary icon. With the sidebar closed, only the quick model runs, without MCP. With it open, only the deep explanation runs. Opening the sidebar through the toolbar, **Alt+Shift+E**, or **right-click → Explain in sidebar** dismisses the quick popup and explains the pending selection. Closing the sidebar cancels an unfinished deep response.
 
-The quick action stays visible as a spinner while waiting. The sidebar shows a small **Thinking…** indicator, then **Answering…** while text streams; it disappears when the response finishes or stops. Indicators respect reduced-motion preferences.
+The quick action shows a spinner until text arrives, then displays the growing answer immediately with **Answering…** while streaming. A failed stream retains its partial text with an **Incomplete answer** notice and Retry. The sidebar also shows **Thinking…**, then **Answering…** while text streams. Indicators disappear when the response finishes or stops and respect reduced-motion preferences.
 
 Firefox [does not permit a webpage button to open a closed native sidebar](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/User_actions); this is a browser restriction, not a permission you can grant. Keyboard shortcuts can be reassigned in Firefox’s **Manage Extension Shortcuts** screen. On protected pages such as `about:` pages, Mozilla Add-ons, or Firefox’s PDF viewer, use manual input in the sidebar.
 
@@ -73,8 +75,8 @@ The sidebar shows the word, expandable context, answer, and follow-up input. The
 
 ### Privacy and permanent installation
 
-- The default shares at most 2,400 characters of surrounding visible text. Settings also offer selected words only (no page title or URL), or a larger, selection-centered excerpt of at most 12,000 characters. URL query strings/fragments are removed. Hidden text and form/editable fields are excluded from excerpts.
-- AI and MCP credentials are stored separately in local Firefox extension storage, **not encrypted** and not synced. Chats and captured context live only in background memory until a new selection or the browser/extension restarts.
+- Quick and Deep have independent context choices: selected words only (no page title or URL), up to 2,400 characters of surrounding visible text, or a selection-centered page excerpt of up to 12,000 characters. Opening Deep after Quick recaptures the original selection using Deep's choice; changed or unavailable source text falls back to the original term without stale context. On upgrade, Quick inherits the previous context setting, including None. URL query strings/fragments, hidden text, and form/editable fields are excluded.
+- AI and MCP credentials are stored separately in local Firefox extension storage, **not encrypted** and not synced. Anyone with access to the Firefox profile can read them; password fields only hide them on screen. Protect the profile with OS access controls/full-disk encryption and use revocable, limited-scope tokens. Chats and captured context live only in background memory until a new selection or the browser/extension restarts.
 - Page content is sent only after an explicit explanation action. Quick mode sends context to AI only; deep mode also uses dictionary facts from MCP. MCP receives lookup terms and, only when saving, the selected meaning and explanation/context. There is no telemetry. Images load only from exact HTTPS URLs supplied by the dictionary and contact those image hosts.
 - Host permissions allow selection actions on ordinary HTTP(S) pages and requests to configurable services. Service URLs must be HTTPS, except `localhost`, `127.0.0.1`, and `[::1]`. Configure final URLs: redirects are deliberately not followed.
 

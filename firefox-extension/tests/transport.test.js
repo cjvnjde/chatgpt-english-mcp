@@ -2,7 +2,7 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { completeChat } from '../api.js';
 import { MCPClient } from '../mcp.js';
-import { apiEndpoint, validateSettings } from '../settings.js';
+import { apiEndpoint, loadSettings, saveSettings, validateSettings } from '../settings.js';
 
 const settings = { aiUrl: 'https://ai.example', aiKey: 'ai-secret', model: 'tutor', mcpUrl: 'https://dictionary.example/mcp', mcpToken: 'dictionary-secret' };
 const messages = [{ role: 'user', content: 'Explain café.' }];
@@ -42,6 +42,24 @@ test('JSON-only compatible providers return a usable answer', async t => {
   t.after(() => mock.restoreAll());
   mock.method(globalThis, 'fetch', async () => Response.json({ choices: [{ message: { content: 'A coffee shop.' } }] }));
   assert.equal(await completeChat(settings, messages), 'A coffee shop.');
+});
+
+test('provider-default effort stays compatible and unsupported explicit effort fails without retry', async t => {
+  t.after(() => mock.restoreAll());
+  let calls = 0;
+  mock.method(globalThis, 'fetch', async (_url, options) => {
+    calls++;
+    const body = JSON.parse(options.body);
+    if (Object.hasOwn(body, 'reasoning_effort')) {
+      if (body.reasoning_effort === 'low') return Response.json({ choices: [{ message: { content: 'A concise explanation.' } }] });
+      return Response.json({ error: { message: 'Unsupported reasoning_effort' } }, { status: 400 });
+    }
+    return Response.json({ choices: [{ message: { content: 'A standard explanation.' } }] });
+  });
+  assert.equal(await completeChat(settings, messages), 'A standard explanation.');
+  assert.equal(await completeChat({ ...settings, thinkingLevel: 'low' }, messages), 'A concise explanation.');
+  await assert.rejects(completeChat({ ...settings, thinkingLevel: 'high' }, messages), /Unsupported reasoning_effort/);
+  assert.equal(calls, 3);
 });
 
 test('provider failures do not expose credentials and cancellation remains distinguishable', async t => {
@@ -98,5 +116,52 @@ test('connection URL handling preserves custom routes and rejects credential-bea
   assert.equal(apiEndpoint('https://ai.example/chat/completions', 'chat/completions'), 'https://ai.example/chat/completions');
   for (const aiUrl of ['http://remote.example', 'https://user:password@ai.example', 'https://ai.example?key=secret']) {
     assert.throws(() => validateSettings({ ...settings, aiUrl }));
+  }
+});
+
+test('legacy no-context preference survives loading and independent mode edits', async t => {
+  const previous = globalThis.browser;
+  t.after(() => {
+    if (previous === undefined) delete globalThis.browser;
+    else globalThis.browser = previous;
+  });
+  let stored = { settings: { ...settings, contextMode: 'none' } };
+  globalThis.browser = { storage: { local: {
+    get: async () => structuredClone(stored),
+    set: async value => { stored = structuredClone(value); },
+  } } };
+  const migrated = await loadSettings();
+  assert.equal(migrated.quickContextMode, 'none');
+  await saveSettings({ ...migrated, contextMode: 'page', thinkingLevel: 'high', quickThinkingLevel: 'low' });
+  const reloaded = await loadSettings();
+  assert.equal(reloaded.contextMode, 'page');
+  assert.equal(reloaded.quickContextMode, 'none');
+  assert.equal(reloaded.thinkingLevel, 'high');
+  assert.equal(reloaded.quickThinkingLevel, 'low');
+  assert.equal(validateSettings({ ...settings, contextMode: 'none', quickContextMode: 'surrounding' }).quickContextMode, 'surrounding');
+});
+
+test('multiline system prompts preserve whitespace without allowing multiline credentials or unbounded text', async t => {
+  const previous = globalThis.browser;
+  t.after(() => {
+    if (previous === undefined) delete globalThis.browser;
+    else globalThis.browser = previous;
+  });
+  let stored = {};
+  globalThis.browser = { storage: { local: {
+    get: async () => structuredClone(stored),
+    set: async value => { stored = structuredClone(value); },
+  } } };
+  const systemPrompt = '  Explain the selected word.\r\n\tUse one example.\n';
+  await saveSettings({ ...settings, systemPrompt, quickSystemPrompt: '' });
+  const reloaded = await loadSettings();
+  assert.equal(reloaded.systemPrompt, systemPrompt);
+  assert.equal(reloaded.quickSystemPrompt, '');
+  for (const field of ['aiKey', 'mcpToken', 'aiUrl']) {
+    assert.throws(() => validateSettings({ ...settings, [field]: 'first\nsecond' }), error => error.field === field);
+  }
+  for (const field of ['systemPrompt', 'quickSystemPrompt']) {
+    assert.throws(() => validateSettings({ ...settings, [field]: 'bad\u0000prompt' }), error => error.field === field);
+    assert.throws(() => validateSettings({ ...settings, [field]: 'a'.repeat(32001) }), error => error.field === field);
   }
 });

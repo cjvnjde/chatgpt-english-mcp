@@ -1,10 +1,12 @@
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, validateSettings } from "./settings.js";
 import { listModels, completeChat } from "./api.js";
 import { MCPClient } from "./mcp.js";
+import { HOST_SYSTEM_GUARD } from "./prompt.js";
 
 const $ = id => document.getElementById(id);
 const form = $("settingsForm");
 const fields = Object.keys(DEFAULT_SETTINGS);
+$("hostGuard").value = HOST_SYSTEM_GUARD;
 const operations = new Map();
 let revision = 0;
 let ready = false;
@@ -132,18 +134,26 @@ for (const button of document.querySelectorAll("[data-reveal]")) {
   });
 }
 
-form.addEventListener("input", event => {
-  if (!ready || !fields.includes(event.target.id)) return;
+function settingsChanged(field, reportErrors = false) {
+  if (!ready || !fields.includes(field)) return;
   revision++;
   for (const controller of operations.values()) controller.abort();
   for (const id of ["saveStatus", "modelsStatus", "aiStatus", "mcpStatus"]) status(id, "");
-  if (event.target.id === "aiUrl" || event.target.id === "aiKey") $("modelList").replaceChildren();
-  autosave();
-});
+  if (field === "aiUrl" || field === "aiKey") $("modelList").replaceChildren();
+  autosave(reportErrors);
+}
 
-form.addEventListener("change", event => {
-  if (fields.includes(event.target.id)) autosave(true);
-});
+for (const button of document.querySelectorAll("[data-reset]")) {
+  button.addEventListener("click", () => {
+    if (!ready) return;
+    const field = button.dataset.reset;
+    $(field).value = DEFAULT_SETTINGS[field];
+    settingsChanged(field, true);
+  });
+}
+
+form.addEventListener("input", event => settingsChanged(event.target.id));
+form.addEventListener("change", event => settingsChanged(event.target.id, true));
 
 form.addEventListener("submit", event => {
   event.preventDefault();

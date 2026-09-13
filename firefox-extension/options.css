@@ -8,8 +8,17 @@
 body { margin: 0; }
 main { max-width: 600px; margin: 0 auto; padding: 20px; }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-button, input, select { font: inherit; }
-input, select { width: 100%; min-width: 0; padding: 5px 7px; }
+button, input, select, textarea { font: inherit; }
+input, select, textarea { width: 100%; min-width: 0; padding: 5px 7px; }
+textarea { resize: vertical; }
+h1 { font-size: 1.3rem; margin: 0 0 16px; }
+h2, legend { font-size: 1rem; font-weight: 600; }
+h2 { margin: 0 0 12px; }
+.mode-settings { border-top: 1px solid GrayText; margin-top: 20px; padding-top: 12px; }
+.mode-settings legend { padding-inline-end: 8px; }
+.hint { font-size: 0.9rem; margin: 0 0 12px; }
+.prompt-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.prompt-label label { margin: 0; }
 button { padding: 4px 9px; flex-shrink: 0; }
 :focus-visible { outline: 1px solid Highlight; outline-offset: -1px; }
 [hidden] { display: none !important; }
