@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "English Dictionary",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Quick and deep explanations of selected English words.",
   "browser_specific_settings": {
     "gecko": {
@@ -41,7 +41,7 @@
   "commands": {
     "explain-selection": {
       "suggested_key": { "default": "Alt+Shift+E" },
-      "description": "Explain the selected word in English Dictionary"
+      "description": "Toggle the English Dictionary sidebar"
     }
   },
   "content_security_policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src https: http://localhost:* http://127.0.0.1:* http://[::1]:*; object-src 'none'; base-uri 'none'; form-action 'none'"

@@ -9,6 +9,8 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
   const page = { id, url: 'https://reading.example/story', tab: { id: 7, windowId: 1 }, frameId: 0 };
   let listener;
   let connect;
+  let command;
+  let toolbarClick;
   let state;
   let opened = false;
   let resolveReady;
@@ -56,8 +58,9 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
       onChanged: { addListener(callback) { storageChanged = callback; } },
     },
     menus: { create() {}, onClicked: event() },
-    browserAction: { onClicked: event() }, commands: { onCommand: event() }, windows: { onRemoved: event() },
-    tabs: { async sendMessage(tabId, message, options) {
+    browserAction: { onClicked: { addListener(callback) { toolbarClick = callback; } } },
+    commands: { onCommand: { addListener(callback) { command = callback; } } }, windows: { onRemoved: event() },
+    tabs: { async query() { return [page.tab]; }, async sendMessage(tabId, message, options) {
       if (message.type === 'DISMISS_QUICK') { dismissals.push(message); return; }
       if (message.type === 'QUICK_UPDATED') {
         updates.push({ tabId, ...message, ...options });
@@ -77,7 +80,11 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
       }
       return captured;
     } },
-    sidebarAction: { async isOpen() { return opened; } },
+    sidebarAction: {
+      async isOpen() { return opened; },
+      async open() { if (!opened) open(); },
+      async toggle() { if (opened) { opened = false; disconnect(); } else open(); },
+    },
   };
   t.after(() => { mock.restoreAll(); globalThis.browser = originalBrowser; });
   const held = (signal, started) => new Promise((_resolve, reject) => {
@@ -360,4 +367,32 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
   await answered;
   assert.equal(captures.length, beforeManual);
   assert.deepEqual(reference(requests.at(-1)).selection, { term: 'manual', context: '', title: '', url: '' });
+
+  // Closing from the shortcut must not capture text or start a new model request.
+  const beforeShortcut = requests.length;
+  command('explain-selection');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(opened, false);
+  assert.equal(requests.length, beforeShortcut);
+
+  holdDeep = true;
+  const shortcutStarted = new Promise(resolve => { deepStarted = resolve; });
+  command('explain-selection');
+  await shortcutStarted;
+  assert.equal(opened, true);
+  const beforeClosing = requests.length;
+  command('explain-selection');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(opened, false);
+  assert.equal(state.status, 'idle');
+  assert.equal(requests.length, beforeClosing);
+  holdDeep = false;
+
+  answered = nextAnswer();
+  command('explain-selection');
+  await answered;
+  assert.equal(opened, true);
+  toolbarClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(opened, true, 'the toolbar remains open-only');
 });

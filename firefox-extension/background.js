@@ -412,10 +412,11 @@ function reportActionError(windowId, error) {
 }
 
 function openFromToolbar(explain = false) {
-  const opening = browser.sidebarAction.open();
+  const opening = explain ? browser.sidebarAction.toggle() : browser.sidebarAction.open();
   opening.then(async () => {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
+    if (explain && !await browser.sidebarAction.isOpen({ windowId: tab.windowId })) return;
     const record = recordFor(tab.windowId);
     if (!explain && record.state.selection) { startDeep(record); return; }
     try { await explainFromTab(tab); } catch (error) {
