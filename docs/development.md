@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Go 1.27 or newer
+- Go 1.27.1 or newer
 - network access to Cambridge Dictionary for live lookups
 - a writable filesystem location for SQLite
 
@@ -33,6 +33,8 @@ go build ./cmd/english-learning-mcp
 
 CI runs the Go race suite and production build, Anki worker and dictionary-builder tests, and admin tests and production build on every push and pull request. Toolchains and action revisions are pinned in `.github/workflows/ci.yml`; Python dependencies are hash-locked in `anki_worker/requirements.txt` and `.github/requirements-builders.txt`, and the admin uses `npm ci`.
 
+JavaScript builds use Node 26.8.2 and npm 12.0.2; all GitHub Actions are pinned to current stable release commits and run on Node 24. These are separate runtimes: `setup-node` selects the project runtime, not the runtime embedded in other actions. Dependency locks retain upstream compatibility constraints rather than forcing unsupported transitive major upgrades. The latest `web-ext` still brings deprecated transitive tooling and an unpatched `image-size` denial-of-service advisory; it is development/signing tooling, not shipped extension code. Recheck upstream before changing that dependency; `npm audit fix --force` currently recommends a downgrade, not a supported fix.
+
 ## Firefox extension
 
 `firefox-extension/` contains English Dictionary, a Firefox Manifest V2 desktop extension built from native ES modules and DOM/CSS. Firefox continues to support Manifest V2; the native `sidebar_action` API is intentional. There is no JavaScript bundler, remote code, or runtime dependency. See the [installation and privacy instructions](../README.md#english-dictionary-for-firefox). The original Gecko extension ID is retained so installed settings survive the rename.
@@ -49,11 +51,11 @@ npm start
 
 The build produces `dist/english-dictionary-<manifest-version>.zip`, excluding development dependencies and tests. This is an unsigned package, not a signed release XPI. CI runs the extension regressions, Firefox manifest validation, and packaging independently of the server/admin jobs.
 
-The **Sign Firefox extension** workflow runs on pushes to `main` that change `firefox-extension/**`; no tags are needed. It checks the existing AMO add-on’s authenticated version history, including unlisted and pending versions. An existing version is skipped; a new manifest version is tested, validated, and submitted with `--channel unlisted`. Signing runs are serialized without canceling an in-flight submission.
+The **Release Firefox extension** workflow runs on pushes to `main` that change `firefox-extension/**`, the release workflow, or its AMO helper; no manual tags are needed. It also supports **Run workflow**. It checks the existing AMO add-on’s authenticated version history, including unlisted and pending versions. A new manifest version is tested, validated, and submitted with `--channel unlisted`. An existing approved, enabled unlisted version is downloaded from AMO and checked against AMO’s SHA-256 hash, without another submission. Signing runs are serialized without canceling an in-flight submission.
 
 Set repository Actions secrets `AMO_JWT_ISSUER` and `AMO_JWT_SECRET` using [Mozilla API credentials](https://addons.mozilla.org/en-US/developers/addon/api/key/) belonging to an author of the existing add-on. Keep the manifest’s Gecko ID unchanged. To sign an update, increase `firefox-extension/manifest.json` → `version` and push the extension changes to `main`. The manifest is the release-version source; `package.json` only describes the development tooling.
 
-Download `english-dictionary-<version>-signed` from the successful workflow’s **Artifacts** section and extract its `.xpi`; artifacts are retained for 90 days. This does not publish that version on AMO or create a GitHub Release. Authentication/API errors fail closed. The workflow waits up to 15 minutes for signing approval; if Mozilla requires longer review, the run fails and the signed file can be downloaded from the AMO developer dashboard after approval. Re-running does not resubmit a version already present on AMO. Self-distributed automatic updates require separate update configuration.
+Download `english-dictionary-<version>.xpi` directly from [GitHub Releases](https://github.com/cjvnjde/chatgpt-english-mcp/releases/latest), under tag `firefox-v<version>`. Each release includes `SHA256SUMS`; the release is published only after its assets upload. Rerunning repairs an interrupted draft/upload using the same approved AMO file. The Actions artifact is also the raw XPI, without a ZIP wrapper, and is retained for 90 days; GitHub Release assets do not have that expiration. GitHub’s automatically generated source ZIP/TAR archives are **not installable add-ons**. This workflow does not publish the extension on AMO. Authentication/API/download/hash errors fail closed. The workflow waits up to 15 minutes for a new signing approval; if Mozilla needs longer review, rerun after approval to recover the signed file and finish the GitHub Release. Existing pending, disabled, or non-unlisted versions are never resubmitted or published. Self-distributed automatic updates require separate update configuration.
 
 Release artwork in `firefox-extension/icons/` is resized from `docs/icon.png` with Lanczos filtering at 16, 32, 48, 64, 96, 128, and 256 pixels. The manifest uses these PNGs for the add-on, toolbar, and native sidebar; in-page action glyphs remain separate.
 

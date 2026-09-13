@@ -1,13 +1,16 @@
-name: Sign Firefox extension
+name: Release Firefox extension
 
 on:
   push:
     branches: [main]
     paths:
       - 'firefox-extension/**'
+      - '.github/workflows/firefox-release.yml'
+      - 'scripts/check-firefox-release.mjs'
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: firefox-extension-signing
@@ -23,25 +26,24 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '24.21.0'
+          node-version: '26.8.2'
           cache: npm
           cache-dependency-path: firefox-extension/package-lock.json
-      - name: Check whether the manifest version is new to AMO
+      - name: Install current pinned npm
+        run: npm install --global npm@12.0.2
+      - name: Check AMO version and recover an existing signed XPI
         id: version
         env:
           AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
           AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: node scripts/check-firefox-release.mjs
       - name: Install locked extension tooling
-        if: steps.version.outputs.sign == 'true'
         working-directory: firefox-extension
         run: npm ci
       - name: Test extension
-        if: steps.version.outputs.sign == 'true'
         working-directory: firefox-extension
         run: npm test
       - name: Validate extension
-        if: steps.version.outputs.sign == 'true'
         working-directory: firefox-extension
         run: npm run lint
       - name: Sign for unlisted distribution
@@ -59,11 +61,39 @@ jobs:
           --approval-timeout 900000
           --no-input
           --ignore-files package.json package-lock.json tests 'tests/**' dist 'dist/**'
-      - name: Upload signed XPI
-        if: steps.version.outputs.sign == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Prepare release files
+        working-directory: firefox-extension/dist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          files=(*.xpi)
+          test "${#files[@]}" -eq 1 && test -f "${files[0]}"
+          asset="english-dictionary-${VERSION}.xpi"
+          if [ "${files[0]}" != "$asset" ]; then
+            mv -- "${files[0]}" "$asset"
+          fi
+          sha256sum "$asset" > SHA256SUMS
+      - name: Upload signed XPI without a ZIP wrapper
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: english-dictionary-${{ steps.version.outputs.version }}-signed
           path: firefox-extension/dist/*.xpi
+          archive: false
           if-no-files-found: error
           retention-days: 90
+      - name: Publish GitHub Release
+        working-directory: firefox-extension/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="firefox-v${VERSION}"
+          asset="english-dictionary-${VERSION}.xpi"
+          if ! gh release view "$tag" --json id > /dev/null 2>&1; then
+            gh release create "$tag" --draft --target "$GITHUB_SHA" \
+              --title "English Dictionary ${VERSION}" \
+              --notes "Mozilla-signed, self-distributed Firefox extension. Download ${asset} and install it in Firefox 142+ using about:addons → gear → Install Add-on From File. Do not install the GitHub source-code ZIP or TAR archives. SHA256SUMS verifies the XPI download. This is not a public AMO listing."
+          fi
+          gh release upload "$tag" "$asset" SHA256SUMS --clobber
+          gh release edit "$tag" --draft=false
+          gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

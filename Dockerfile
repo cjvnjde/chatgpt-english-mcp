@@ -1,16 +1,16 @@
-# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# syntax=docker/dockerfile:1.27.0@sha256:bde3983e9c939224420ddaf6b784cc30e09b035a4dea01f581230c50809f372e
 
-FROM golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS tunnel-builder
+FROM golang:1.27.1-trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728 AS tunnel-builder
 WORKDIR /src/tunnel-client
-# tunnel-client v0.0.13, pinned to its peeled release commit.
+# tunnel-client v0.0.14, pinned to its peeled release commit.
 RUN git init . \
     && git remote add origin https://github.com/openai/tunnel-client.git \
-    && git fetch --depth 1 origin 4b5267f823be0b046bb883aacb51603cfde3a0ea \
+    && git fetch --depth 1 origin 0f870e50a973fa820d4c409000059e181e8d242b \
     && git checkout --detach FETCH_HEAD
 RUN mkdir -p /out \
     && CGO_ENABLED=0 go build -trimpath -o /out/tunnel-client ./cmd/client
 
-FROM golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS mcp-builder
+FROM golang:1.27.1-trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728 AS mcp-builder
 WORKDIR /src/english-learning-mcp
 COPY go.mod go.sum ./
 RUN go mod download

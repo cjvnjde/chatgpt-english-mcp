@@ -56,8 +56,8 @@ The same Compose file includes the static admin UI. Set `ADMIN_BEARER_TOKEN` and
 
 ### Install and configure
 
-1. Open `about:debugging#/runtime/this-firefox` in Firefox.
-2. Choose **Load Temporary Add-on…** and select `firefox-extension/manifest.json`. No build step is needed.
+1. Download `english-dictionary-<version>.xpi` from [GitHub Releases](https://github.com/cjvnjde/chatgpt-english-mcp/releases/latest). Use the `.xpi` asset, **not** the source-code ZIP/TAR archives.
+2. In Firefox 142+, open `about:addons` → gear → **Install Add-on From File…** and select the downloaded `.xpi`. Accept the permission prompt.
 3. Pin English Dictionary to the toolbar. Open settings using the sidebar gear or **Manage Extension → Preferences**.
 4. Enter your OpenAI-compatible API URL and key. Use **Load models** to choose the sidebar **Model** and a faster **Quick model**. An empty Quick model uses Model. No API key is bundled.
 5. Enter your English MCP’s exact Streamable HTTP URL and separate bearer token. For this server, use your public HTTPS `/mcp` endpoint, or `http://127.0.0.1:8081/mcp` when running locally with `MCP_BEARER_TOKEN`.
@@ -78,9 +78,9 @@ The sidebar shows the word, expandable context, answer, and follow-up input. The
 - Page content is sent only after an explicit explanation action. Quick mode sends context to AI only; deep mode also uses dictionary facts from MCP. MCP receives lookup terms and, only when saving, the selected meaning and explanation/context. There is no telemetry. Images load only from exact HTTPS URLs supplied by the dictionary and contact those image hosts.
 - Host permissions allow selection actions on ordinary HTTP(S) pages and requests to configurable services. Service URLs must be HTTPS, except `localhost`, `127.0.0.1`, and `[::1]`. Configure final URLs: redirects are deliberately not followed.
 
-Temporary add-ons are removed when Firefox restarts. For permanent installation in standard Firefox, submit the package to Mozilla for **unlisted/self-distributed signing**, then install the signed XPI; it does not need a public listing. An unsigned ZIP/XPI is not a permanently installable release add-on. See [Mozilla’s signing and distribution guide](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/) and [development commands](docs/development.md#firefox-extension).
+The release XPI is signed by Mozilla for **unlisted/self-distributed installation**; no public AMO listing is needed. A ZIP containing the XPI is not itself an add-on: selecting that wrapper produces Firefox’s “corrupt” error. Do not rename or repack the release file. `SHA256SUMS` on the release page verifies its bytes. For local development only, use `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → `firefox-extension/manifest.json`; temporary installations disappear after Firefox restarts. See [Mozilla’s signing and distribution guide](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/) and [development commands](docs/development.md#firefox-extension).
 
-For automated signing, add Mozilla API credentials to GitHub Actions secrets and push extension changes with a new manifest version to `main`. The **Sign Firefox extension** workflow provides a signed XPI artifact without publishing it on AMO. See the [signing setup](docs/development.md#firefox-extension).
+For automated releases, configure Mozilla API credentials in GitHub Actions secrets and push extension changes with a new manifest version to `main`. The **Release Firefox extension** workflow signs the version as unlisted and creates a GitHub Release with the direct XPI and checksum file. Reruns recover an already-approved version instead of resubmitting it. See the [release setup](docs/development.md#firefox-extension).
 
 
 > This project retrieves data from Cambridge Dictionary and is not affiliated with or endorsed by Cambridge University Press & Assessment.

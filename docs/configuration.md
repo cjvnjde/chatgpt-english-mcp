@@ -29,7 +29,7 @@ All bearer tokens must use HTTP bearer-token characters; embedded whitespace and
 | `CONTROL_PLANE_TUNNEL_ID` | none | Required tunnel identifier. |
 | `IMAGE_TAG` | `latest` | Optional tag for the locally built image. |
 
-The image builds tunnel client `v0.0.13` from immutable commit `4b5267f823be0b046bb883aacb51603cfde3a0ea`. Update its pin in `Dockerfile` when upgrading; there is no runtime version override.
+The image builds tunnel client `v0.0.14` from immutable commit `0f870e50a973fa820d4c409000059e181e8d242b`. Update its pin in `Dockerfile` when upgrading; there is no runtime version override.
 
 ## Generate the direct-client token
 
