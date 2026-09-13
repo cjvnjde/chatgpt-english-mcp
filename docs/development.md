@@ -33,6 +33,39 @@ go build ./cmd/english-learning-mcp
 
 CI runs the Go race suite and production build, Anki worker and dictionary-builder tests, and admin tests and production build on every push and pull request. Toolchains and action revisions are pinned in `.github/workflows/ci.yml`; Python dependencies are hash-locked in `anki_worker/requirements.txt` and `.github/requirements-builders.txt`, and the admin uses `npm ci`.
 
+## Firefox extension
+
+`firefox-extension/` contains English Dictionary, a Firefox Manifest V2 desktop extension built from native ES modules and DOM/CSS. Firefox continues to support Manifest V2; the native `sidebar_action` API is intentional. There is no JavaScript bundler, remote code, or runtime dependency. See the [installation and privacy instructions](../README.md#english-dictionary-for-firefox). The original Gecko extension ID is retained so installed settings survive the rename.
+
+From `firefox-extension/`:
+
+```sh
+npm ci
+npm test
+npm run lint
+npm run build
+npm start
+```
+
+The build produces `dist/english-dictionary-<manifest-version>.zip`, excluding development dependencies and tests. This is an unsigned package, not a signed release XPI. CI runs the extension regressions, Firefox manifest validation, and packaging independently of the server/admin jobs.
+
+The **Sign Firefox extension** workflow runs on pushes to `main` that change `firefox-extension/**`; no tags are needed. It checks the existing AMO add-on’s authenticated version history, including unlisted and pending versions. An existing version is skipped; a new manifest version is tested, validated, and submitted with `--channel unlisted`. Signing runs are serialized without canceling an in-flight submission.
+
+Set repository Actions secrets `AMO_JWT_ISSUER` and `AMO_JWT_SECRET` using [Mozilla API credentials](https://addons.mozilla.org/en-US/developers/addon/api/key/) belonging to an author of the existing add-on. Keep the manifest’s Gecko ID unchanged. To sign an update, increase `firefox-extension/manifest.json` → `version` and push the extension changes to `main`. The manifest is the release-version source; `package.json` only describes the development tooling.
+
+Download `english-dictionary-<version>-signed` from the successful workflow’s **Artifacts** section and extract its `.xpi`; artifacts are retained for 90 days. This does not publish that version on AMO or create a GitHub Release. Authentication/API errors fail closed. The workflow waits up to 15 minutes for signing approval; if Mozilla requires longer review, the run fails and the signed file can be downloaded from the AMO developer dashboard after approval. Re-running does not resubmit a version already present on AMO. Self-distributed automatic updates require separate update configuration.
+
+Release artwork in `firefox-extension/icons/` is resized from `docs/icon.png` with Lanczos filtering at 16, 32, 48, 64, 96, 128, and 256 pixels. The manifest uses these PNGs for the add-on, toolbar, and native sidebar; in-page action glyphs remain separate.
+
+The background page owns window-scoped conversations, independent quick/deep cancellation, MCP lookup, and vocabulary saving. A closed-sidebar selection invokes `quickModel` (falling back to `model`) without MCP and returns plain text to the content popup. A sidebar lifecycle port starts the pending deep explanation, cancels/dismisses quick output, and aborts unfinished deep generation when disconnected. Content scripts capture bounded visible context and never receive credentials. Toolbar, keyboard, and explicitly labeled sidebar context-menu actions open the native sidebar.
+
+`settings.js` validates and autosaves local connections. `prompt.js` bundles the instructions from the gitignored `docs/english-tutor-prompt-local.md`; surface-specific rules disable exercises and automatic writes, and quick mode disables MCP entirely. The initial user request is exactly `What does 'selected word' mean?` and is hidden in the UI. `api.js` handles OpenAI-compatible JSON/SSE; `mcp.js` handles Streamable HTTP initialization, negotiated protocol/session headers, JSON/SSE tool results, and errors without replaying writes. Deep explanations use `dictionary_lookup`. On explicit Save, a separate model request chooses a source-sense index from the conversation; the host validates it and calls `vocabulary_save` only if the conversation is still current. Invalid choices never write. No MCP tools are exposed to the model.
+
+`render.js` creates DOM nodes rather than evaluating model HTML. Links allow HTTP(S); images are always enabled but require exact, dictionary-provided HTTPS URLs. Native system colors follow light/dark preferences. The sidebar preserves input during streaming, hides only the initial user message, and uses icon-only save/settings controls without a meaning selector.
+
+The focused Node regressions cover quick/deep routing, sidebar-close and selection-change cancellation, opt-in writes, forged/stale save commands, model-selected senses and invalid choices, fragmented UTF-8/CRLF streams, incomplete-stream errors, JSON providers, credential redaction, MCP negotiation, and non-replayed failures. Smoke verification uses the real extension in Firefox and a **disposable** local MCP database; deterministic AI/provider fixtures can isolate routing and persistence from external availability. Check that quick mode does not contact MCP, opening the sidebar dismisses quick output, follow-ups remain visible, and Save persists the fitting definition rather than the first result. Never use a production learning database for smoke writes. Also exercise context disclosure, source images, native light/dark colors, narrow widths, and the single input focus border.
+
+
 ## Offline frequency datasets
 
 `internal/usefulness` embeds both complete English word-rank lists in a compressed binary table. The word-rank bundle covers 1,737,503 distinct normalized terms and adds approximately 15.8 MB to the executable, decoding to approximately 36.1 MB of immutable data. Separate expression assets provide Wiktionary, MAGPIE, and WordNet evidence and matching indexes. There is no runtime Python dependency or source download.

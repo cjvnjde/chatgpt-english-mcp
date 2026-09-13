@@ -50,4 +50,37 @@ For Dokploy, select `docker-compose.yml`, copy the variables from `.env.example`
 
 The same Compose file includes the static admin UI. Set `ADMIN_BEARER_TOKEN` and route `/admin` on your MCP domain to `english-admin:80`, preserving the path. Keep `/mcp` routed to `english-learning-mcp:8081`. See the [admin setup guide](admin/README.md) for the exact Dokploy domain settings.
 
+## English Dictionary for Firefox
+
+[`firefox-extension/`](firefox-extension/) is a personal Firefox-desktop extension (Firefox 142+) with quick explanations on the page and deeper, dictionary-backed explanations in the native sidebar. Only the sidebar’s Save icon adds vocabulary.
+
+### Install and configure
+
+1. Open `about:debugging#/runtime/this-firefox` in Firefox.
+2. Choose **Load Temporary Add-on…** and select `firefox-extension/manifest.json`. No build step is needed.
+3. Pin English Dictionary to the toolbar. Open settings using the sidebar gear or **Manage Extension → Preferences**.
+4. Enter your OpenAI-compatible API URL and key. Use **Load models** to choose the sidebar **Model** and a faster **Quick model**. An empty Quick model uses Model. No API key is bundled.
+5. Enter your English MCP’s exact Streamable HTTP URL and separate bearer token. For this server, use your public HTTPS `/mcp` endpoint, or `http://127.0.0.1:8081/mcp` when running locally with `MCP_BEARER_TOKEN`.
+6. Settings save automatically. Connection-test buttons are optional. AI-only explanations work without MCP; dictionary saving requires MCP.
+
+Select text and click the small dictionary icon. With the sidebar closed, only the quick model runs, without MCP. With it open, only the deep explanation runs. Opening the sidebar through the toolbar, **Alt+Shift+E**, or **right-click → Explain in sidebar** dismisses the quick popup and explains the pending selection. Closing the sidebar cancels an unfinished deep response.
+
+The quick action stays visible as a spinner while waiting. The sidebar shows a small **Thinking…** indicator, then **Answering…** while text streams; it disappears when the response finishes or stops. Indicators respect reduced-motion preferences.
+
+Firefox [does not permit a webpage button to open a closed native sidebar](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/User_actions); this is a browser restriction, not a permission you can grant. Keyboard shortcuts can be reassigned in Firefox’s **Manage Extension Shortcuts** screen. On protected pages such as `about:` pages, Mozilla Add-ons, or Firefox’s PDF viewer, use manual input in the sidebar.
+
+The sidebar shows the word, expandable context, answer, and follow-up input. The initial question is hidden; your follow-up messages are visible. Save asks the model to choose the fitting source definition, validates that choice, and saves it with the explanation/context. Existing meanings retain their notes and learning progress. If no definition fits, the AI explanation can be saved without a dictionary sense. Source-provided images are always enabled. Colors follow the browser’s native light/dark scheme.
+
+### Privacy and permanent installation
+
+- The default shares at most 2,400 characters of surrounding visible text. Settings also offer selected words only (no page title or URL), or a larger, selection-centered excerpt of at most 12,000 characters. URL query strings/fragments are removed. Hidden text and form/editable fields are excluded from excerpts.
+- AI and MCP credentials are stored separately in local Firefox extension storage, **not encrypted** and not synced. Chats and captured context live only in background memory until a new selection or the browser/extension restarts.
+- Page content is sent only after an explicit explanation action. Quick mode sends context to AI only; deep mode also uses dictionary facts from MCP. MCP receives lookup terms and, only when saving, the selected meaning and explanation/context. There is no telemetry. Images load only from exact HTTPS URLs supplied by the dictionary and contact those image hosts.
+- Host permissions allow selection actions on ordinary HTTP(S) pages and requests to configurable services. Service URLs must be HTTPS, except `localhost`, `127.0.0.1`, and `[::1]`. Configure final URLs: redirects are deliberately not followed.
+
+Temporary add-ons are removed when Firefox restarts. For permanent installation in standard Firefox, submit the package to Mozilla for **unlisted/self-distributed signing**, then install the signed XPI; it does not need a public listing. An unsigned ZIP/XPI is not a permanently installable release add-on. See [Mozilla’s signing and distribution guide](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/) and [development commands](docs/development.md#firefox-extension).
+
+For automated signing, add Mozilla API credentials to GitHub Actions secrets and push extension changes with a new manifest version to `main`. The **Sign Firefox extension** workflow provides a signed XPI artifact without publishing it on AMO. See the [signing setup](docs/development.md#firefox-extension).
+
+
 > This project retrieves data from Cambridge Dictionary and is not affiliated with or endorsed by Cambridge University Press & Assessment.

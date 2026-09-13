@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>English Dictionary</title>
+  <link rel="stylesheet" href="sidebar.css">
+  <script type="module" src="sidebar.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <details id="context-disclosure" class="selection" hidden>
+        <summary id="selection-summary" aria-label="Selected word and context"><span id="term"></span><svg id="context-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+        <div class="context-details"><a id="page-source" target="_blank" rel="noopener noreferrer" hidden></a><p id="context-text" hidden></p></div>
+      </details>
+      <div class="header-actions">
+        <button id="save" class="icon-button" type="button" aria-label="Save to dictionary" disabled><svg id="save-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4z"/></svg><svg id="saved-icon" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="m5 12 4 4L19 6"/></svg></button>
+        <button id="settings" class="icon-button" type="button" aria-label="Open settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3-.7 2.4-2 .9L4 5.7 2 9l1.8 1.8v2.4L2 15l2 3.3 2.3-.6 2 .9L9 21h6l.7-2.4 2-.9 2.3.6 2-3.3-1.8-1.8v-2.4L22 9l-2-3.3-2.3.6-2-.9L15 3z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
+    </header>
+    <main id="conversation" class="conversation" aria-label="Explanation conversation" tabindex="0">
+      <div id="messages" class="messages"></div>
+      <div id="conversation-error" class="error" role="alert" hidden></div>
+      <div id="save-error" class="error" role="alert" hidden></div>
+    </main>
+    <footer class="lower-panel">
+      <div id="response-status" class="response-status" hidden><span class="spinner" aria-hidden="true"></span><span id="response-phase"></span></div>
+      <form id="composer" class="composer">
+        <textarea id="message-input" rows="1" maxlength="6000" aria-label="Word or phrase" spellcheck="true"></textarea>
+        <button id="send" class="icon-button" type="submit" aria-label="Send message" disabled><svg id="send-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg><svg id="stop-icon" viewBox="0 0 24 24" aria-hidden="true" hidden><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>
+      </form>
+    </footer>
+    <div id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+  </div>
+</body>
+</html>

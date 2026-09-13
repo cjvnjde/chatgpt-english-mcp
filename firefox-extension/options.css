@@ -1,0 +1,27 @@
+:root {
+  color-scheme: light dark;
+  font: 14px/1.4 system-ui, sans-serif;
+  color: CanvasText;
+  background: Canvas;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 600px; margin: 0 auto; padding: 20px; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+button, input, select { font: inherit; }
+input, select { width: 100%; min-width: 0; padding: 5px 7px; }
+button { padding: 4px 9px; flex-shrink: 0; }
+:focus-visible { outline: 1px solid Highlight; outline-offset: -1px; }
+[hidden] { display: none !important; }
+.field { margin-bottom: 12px; }
+label { display: block; margin-bottom: 4px; }
+.secret-input, .actions { display: flex; align-items: center; gap: 6px; }
+.models { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.actions { flex-wrap: wrap; margin-bottom: 12px; }
+.status { margin: 0 0 12px; overflow-wrap: anywhere; }
+.status:empty { display: none; }
+.status[data-kind="error"] { border-inline-start: 2px solid CanvasText; padding-inline-start: 8px; }
+@media (max-width: 360px) {
+  main { padding: 12px; }
+  .models { grid-template-columns: 1fr; gap: 0; }
+}

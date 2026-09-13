@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>English Dictionary · Settings</title>
+  <link rel="stylesheet" href="options.css">
+  <script type="module" src="options.js"></script>
+</head>
+<body>
+  <main>
+    <form id="settingsForm" novalidate aria-label="English Dictionary settings">
+      <fieldset id="formFields" disabled aria-label="Connections and context">
+        <div class="field">
+          <label for="aiUrl">API base URL</label>
+          <input id="aiUrl" name="aiUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="aiKey">API key</label>
+          <div class="secret-input"><input id="aiKey" name="aiKey" type="password" autocomplete="off" spellcheck="false"><button type="button" data-reveal="aiKey" aria-pressed="false" aria-label="Show AI API key">Show</button></div>
+        </div>
+        <div class="models">
+          <div class="field">
+            <label for="model">Model</label>
+            <input id="model" name="model" type="text" list="modelList" autocomplete="off" spellcheck="false" aria-label="Deep model">
+          </div>
+          <div class="field">
+            <label for="quickModel">Quick model</label>
+            <input id="quickModel" name="quickModel" type="text" list="modelList" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <datalist id="modelList"></datalist>
+        <div class="actions">
+          <button id="loadModels" type="button">Load models</button>
+          <button id="cancelModels" type="button" hidden aria-label="Cancel loading models">Cancel</button>
+          <button id="testAi" type="button">Test AI</button>
+          <button id="cancelAi" type="button" hidden aria-label="Cancel AI test">Cancel</button>
+        </div>
+        <p id="modelsStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <p id="aiStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <div class="field">
+          <label for="mcpUrl">MCP endpoint URL</label>
+          <input id="mcpUrl" name="mcpUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="mcpToken">Bearer token</label>
+          <div class="secret-input"><input id="mcpToken" name="mcpToken" type="password" autocomplete="off" spellcheck="false"><button type="button" data-reveal="mcpToken" aria-pressed="false" aria-label="Show MCP bearer token">Show</button></div>
+        </div>
+        <div class="actions">
+          <button id="testMcp" type="button">Test MCP</button>
+          <button id="cancelMcp" type="button" hidden aria-label="Cancel MCP test">Cancel</button>
+        </div>
+        <p id="mcpStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <div class="field">
+          <label for="contextMode">Page context</label>
+          <select id="contextMode" name="contextMode"><option value="none">None</option><option value="surrounding">Surrounding paragraph</option><option value="page">Larger page excerpt</option></select>
+        </div>
+      </fieldset>
+      <p id="saveStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+    </form>
+  </main>
+</body>
+</html>

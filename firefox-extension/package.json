@@ -1,0 +1,13 @@
+{
+  "name": "english-dictionary-firefox",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "web-ext run --source-dir . --ignore-files package.json package-lock.json tests \"tests/**\"",
+    "lint": "web-ext lint --source-dir . --ignore-files package.json package-lock.json tests \"tests/**\"",
+    "build": "web-ext build --source-dir . --artifacts-dir dist --overwrite-dest --filename english-dictionary-{version}.zip --ignore-files package.json package-lock.json tests \"tests/**\"",
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": { "web-ext": "10.6.0" }
+}

@@ -1,0 +1,67 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  background: Canvas;
+  color: CanvasText;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+button, textarea { font: inherit; color: inherit; }
+button, summary { cursor: pointer; touch-action: manipulation; }
+button:disabled { cursor: default; color: GrayText; }
+button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 1px solid Highlight; outline-offset: 2px; }
+a { color: LinkText; overflow-wrap: anywhere; text-underline-offset: 3px; }
+svg { display: block; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.app-header { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; flex-shrink: 0; max-height: 45%; overflow-y: auto; }
+.selection { flex: 1; min-width: 0; }
+.selection summary { display: flex; align-items: center; gap: 4px; min-height: 32px; width: fit-content; max-width: 100%; list-style: none; }
+.selection summary::-webkit-details-marker { display: none; }
+.selection summary[aria-disabled="true"] { cursor: default; }
+#term { font-size: 19px; font-weight: 600; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.4; }
+.selection[open] #context-chevron { transform: rotate(180deg); }
+.context-details { margin-top: 10px; font-size: 12px; overflow-wrap: anywhere; }
+#context-text { white-space: pre-wrap; margin: 8px 0 0; }
+.header-actions { display: flex; flex-shrink: 0; gap: 2px; margin-left: auto; }
+.icon-button { display: grid; place-items: center; padding: 0; width: 32px; height: 32px; flex-shrink: 0; border: 0; border-radius: 5px; background: transparent; }
+.icon-button:hover:not(:disabled) { background: ButtonFace; color: ButtonText; }
+.conversation { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 8px 16px 20px; }
+.messages { display: flex; flex-direction: column; gap: 22px; }
+.message { min-width: 0; }
+.user-message { margin-left: 18px; padding: 8px 12px; border-left: 1px solid GrayText; }
+.user-message .markdown { white-space: pre-wrap; }
+.markdown { overflow-wrap: anywhere; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p { margin: 0 0 12px; }
+.markdown h3, .markdown h4, .markdown h5, .markdown h6 { line-height: 1.4; margin: 20px 0 8px; font-size: 15px; }
+.markdown h3 { font-size: 17px; }
+.markdown ul, .markdown ol { padding-left: 22px; margin: 10px 0 14px; }
+.markdown li { margin-bottom: 6px; }
+.markdown blockquote { border-left: 2px solid GrayText; margin: 14px 0; padding-left: 12px; }
+.markdown blockquote p:last-child { margin: 0; }
+.markdown code { font-family: ui-monospace, monospace; font-size: .9em; }
+.markdown pre { overflow-x: auto; border: 1px solid GrayText; border-radius: 5px; padding: 12px; line-height: 1.5; scrollbar-width: thin; }
+.markdown pre code { font-size: inherit; }
+.markdown hr { border: 0; border-top: 1px solid GrayText; margin: 20px 0; }
+.markdown-image { display: block; margin: 14px 0; }
+.markdown-image img { display: block; max-width: 100%; max-height: 300px; height: auto; object-fit: contain; }
+.error { margin-top: 16px; font-size: 12px; overflow-wrap: anywhere; }
+.lower-panel { flex-shrink: 0; padding: 10px 12px 12px; }
+ .response-status { display: flex; align-items: center; gap: 7px; min-height: 24px; margin: 0 5px 6px; color: GrayText; font-size: 12px; }
+ .spinner { display: inline-block; width: 12px; height: 12px; flex-shrink: 0; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+ @keyframes spin { to { transform: rotate(360deg); } }
+ @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+.composer { display: flex; align-items: flex-end; gap: 6px; padding: 5px; border: 1px solid GrayText; border-radius: 7px; background: Field; color: FieldText; }
+.composer:focus-within { border-color: Highlight; }
+textarea { flex: 1; min-width: 0; border: 0; outline: none; resize: none; min-height: 32px; max-height: 132px; background: transparent; line-height: 1.6; padding: 5px 6px; }
+.composer .icon-button:focus-visible { outline: none; background: ButtonFace; color: ButtonText; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 260px) {
+  .app-header { gap: 6px; padding: 10px; }
+  .conversation { padding: 8px 10px 16px; }
+  .lower-panel { padding: 8px; }
+}
