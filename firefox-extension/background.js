@@ -347,6 +347,16 @@ async function handleMessage(message, sender) {
     case 'SIDEBAR_GET':
       startDeep(record);
       return { ok: true, state: record.state };
+    case 'SELECTION_CLEAR':
+      checkConversation(record, message);
+      record.selectionRequest++;
+      record.controller?.abort(); record.controller = null;
+      void dismissQuick(record);
+      record.source = null;
+      record.pendingDeep = false;
+      record.needsDeepCapture = false;
+      record.state = blankState(record.state.revision);
+      publish(record); break;
     case 'CHAT_STOP':
       checkConversation(record, message);
       record.controller?.abort(); record.controller = null;

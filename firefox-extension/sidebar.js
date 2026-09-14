@@ -9,6 +9,7 @@ let localError = "";
 let sending = false;
 let saving = false;
 let stopping = false;
+let clearing = false;
 let imageUrls = [];
 let lookupKey = "";
 let lastAnnouncement = "";
@@ -115,7 +116,7 @@ function renderMessages(force = false) {
 function renderSave() {
   const isSaving = saving || state.saveStatus === "saving";
   const isSaved = state.saveStatus === "saved";
-  ui.save.disabled = isSaving || isSaved || !state.selection || !state.settings.mcpConfigured || !state.settings.configured || state.status === "loading" || state.lookupStatus === "loading" || sending || !state.messages.some(message => message.role === "assistant" && message.content.trim());
+  ui.save.disabled = clearing || isSaving || isSaved || !state.selection || !state.settings.mcpConfigured || !state.settings.configured || state.status === "loading" || state.lookupStatus === "loading" || sending || !state.messages.some(message => message.role === "assistant" && message.content.trim());
   ui.save.setAttribute("aria-label", isSaving ? "Saving to dictionary" : isSaved ? "Saved to dictionary" : state.saveStatus === "error" ? "Retry saving to dictionary" : "Save to dictionary");
   ui.save.setAttribute("aria-busy", String(isSaving));
   ui["save-icon"].toggleAttribute("hidden", isSaved);
@@ -131,7 +132,9 @@ function renderControls() {
   const phase = lastMessage?.role === "assistant" && lastMessage.content.trim() ? "Answering…" : "Thinking…";
   ui["response-status"].hidden = !loading;
   text(ui["response-phase"], loading ? phase : "");
-  ui.send.disabled = loading ? stopping : !state.settings.configured || sending || !ui["message-input"].value.trim();
+  ui.clear.hidden = !state.selection;
+  ui.clear.disabled = clearing;
+  ui.send.disabled = clearing || (loading ? stopping : !state.settings.configured || sending || !ui["message-input"].value.trim());
   ui.send.setAttribute("aria-label", loading ? stopping ? "Stopping response" : "Stop response" : "Send message");
   ui["send-icon"].toggleAttribute("hidden", loading);
   ui["stop-icon"].toggleAttribute("hidden", !loading);
@@ -172,7 +175,7 @@ async function command(type, fields = {}) {
 
 async function sendMessage(value) {
   const message = value.trim();
-  if (!state || !message || sending || state.status === "loading" || !state.settings.configured) return;
+  if (!state || !message || clearing || sending || state.status === "loading" || !state.settings.configured) return;
   const draft = ui["message-input"].value;
   const conversationId = state.id;
   sending = true; localError = ""; renderControls();
@@ -187,7 +190,7 @@ async function sendMessage(value) {
 }
 
 async function stopResponse() {
-  if (!state || stopping || state.status !== "loading") return;
+  if (!state || clearing || stopping || state.status !== "loading") return;
   const conversationId = state.id;
   stopping = true; localError = ""; renderControls();
   try { await command("CHAT_STOP", { conversationId }); }
@@ -210,6 +213,22 @@ ui.settings.addEventListener("click", async () => {
 });
 ui["selection-summary"].addEventListener("click", event => {
   if (ui["selection-summary"].getAttribute("aria-disabled") === "true") event.preventDefault();
+});
+ui.clear.addEventListener("click", async () => {
+  if (!state?.selection || clearing) return;
+  const conversationId = state.id;
+  const draft = ui["message-input"].value;
+  clearing = true; localError = ""; renderControls();
+  try {
+    const result = await command("SELECTION_CLEAR", { conversationId });
+    if (state.id === result.state.id) {
+      if (ui["message-input"].value === draft) {
+        ui["message-input"].value = ""; resizeInput();
+      }
+      ui["message-input"].focus();
+    }
+  } catch (error) { if (state.id === conversationId) localError = error.message || String(error); }
+  finally { clearing = false; renderControls(); }
 });
 ui.composer.addEventListener("submit", event => {
   event.preventDefault();

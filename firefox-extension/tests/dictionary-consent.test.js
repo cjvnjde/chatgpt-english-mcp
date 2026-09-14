@@ -33,6 +33,7 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
   let streamController;
   let resolveUpdate;
   let holdCapture = false;
+  let holdSelectionCapture = false;
   let captureStarted;
   let releaseCapture;
   const captures = [];
@@ -74,7 +75,7 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
         context: message.contextMode === 'none' ? '' : selection.context?.slice(0, message.contextMode === 'page' ? 12000 : 2400),
         url: message.contextMode === 'none' ? '' : selection.url,
       };
-      if (holdCapture && message.expectedTerm) {
+      if ((holdCapture && message.expectedTerm) || holdSelectionCapture) {
         captureStarted();
         await new Promise(resolve => { releaseCapture = resolve; });
       }
@@ -395,4 +396,62 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
   toolbarClick();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(opened, true, 'the toolbar remains open-only');
+
+  // Clearing a loading conversation must stay cleared, including after reconnect.
+  const active = (await call('SIDEBAR_GET')).state;
+  assert.equal((await call('SELECTION_CLEAR', { conversationId: active.id }, page)).ok, false);
+  holdDeep = true;
+  const clearingResponse = new Promise(resolve => { deepStarted = resolve; });
+  await call('CHAT_SEND', { conversationId: active.id, text: 'Give another example.' });
+  await clearingResponse;
+  const cleared = await call('SELECTION_CLEAR', { conversationId: active.id });
+  assert.equal(cleared.ok, true);
+  assert.notEqual(cleared.state.id, active.id);
+  assert.ok(cleared.state.revision > active.revision);
+  await new Promise(resolve => setImmediate(resolve));
+  opened = false;
+  disconnect();
+  open();
+  const reset = (await call('SIDEBAR_GET')).state;
+  assert.equal(reset.selection, null);
+  assert.deepEqual(reset.messages, []);
+  assert.equal(reset.lookup, null);
+  assert.equal(reset.status, 'idle');
+  assert.equal((await call('CHAT_SEND', { conversationId: active.id, text: 'Stale follow-up' })).ok, false);
+  assert.equal((await call('DICTIONARY_SAVE', { conversationId: active.id })).ok, false);
+  const otherWindow = (await call('SIDEBAR_GET', { windowId: 2 })).state;
+  assert.equal(otherWindow.selection.term, 'manual', 'clearing is window-scoped');
+  holdDeep = false;
+  answered = nextAnswer();
+  await call('CHAT_SEND', { conversationId: reset.id, text: 'fresh' });
+  await answered;
+  assert.equal(reference(requests.at(-1)).selection.term, 'fresh');
+  assert.deepEqual(requests.at(-1).messages.slice(1), [{ role: 'user', content: "What does 'fresh' mean?" }]);
+  assert.equal((await call('SELECTION_CLEAR', { conversationId: active.id })).ok, false);
+  assert.equal((await call('SIDEBAR_GET')).state.selection.term, 'fresh');
+
+  // A selection captured before Clear cannot reappear when its reply arrives.
+  holdSelectionCapture = true;
+  const beforeClearCapture = new Promise(resolve => { captureStarted = resolve; });
+  const pendingSelection = call('EXPLAIN_SELECTION', {}, page);
+  await beforeClearCapture;
+  await call('SELECTION_CLEAR', { conversationId: state.id });
+  releaseCapture();
+  assert.equal((await pendingSelection).mode, 'canceled');
+  assert.equal((await call('SIDEBAR_GET')).state.selection, null);
+  holdSelectionCapture = false;
+
+  // Clear revokes a pending save decision, but does not delete saved vocabulary.
+  answered = nextAnswer();
+  await call('CHAT_SEND', { conversationId: state.id, text: 'bank' });
+  await answered;
+  holdChoice = true;
+  const clearDuringChoice = new Promise(resolve => { choiceStarted = resolve; });
+  const clearedSave = call('DICTIONARY_SAVE', { conversationId: state.id });
+  await clearDuringChoice;
+  await call('SELECTION_CLEAR', { conversationId: state.id });
+  releaseChoice();
+  await clearedSave;
+  assert.equal(writes.length, 1);
+  assert.equal((await call('SIDEBAR_GET')).state.selection, null);
 });
