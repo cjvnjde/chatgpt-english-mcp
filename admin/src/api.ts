@@ -14,15 +14,20 @@ export function createAPI(
   return async function request<T>(
     path: string,
     options: RequestInit = {},
-    responseType: "json" | "blob" = "json",
+    responseType: "json" | "blob" | "database" = "json",
   ): Promise<T> {
     const headers = new Headers(options.headers);
     headers.set("Authorization", `Bearer ${token}`);
     headers.set(
       "Accept",
-      responseType === "blob" ? "application/vnd.sqlite3" : "application/json",
+      responseType === "database"
+        ? "application/vnd.sqlite3"
+        : responseType === "blob"
+          ? "image/*,audio/*"
+          : "application/json",
     );
-    if (options.body) headers.set("Content-Type", "application/json");
+    if (options.body && !(options.body instanceof FormData))
+      headers.set("Content-Type", "application/json");
     let response: Response;
     try {
       response = await fetcher(`/admin/api${path}`, {
@@ -40,15 +45,21 @@ export function createAPI(
       );
     }
     if (response.status === 401) onUnauthorized();
-    if (response.ok && responseType === "blob") {
+    if (response.ok && responseType !== "json") {
+      const contentType = response.headers.get("Content-Type") || "";
       if (
-        !response.headers
-          .get("Content-Type")
-          ?.includes("application/vnd.sqlite3")
+        responseType === "database" &&
+        !contentType.includes("application/vnd.sqlite3")
       )
         throw new Error(
           "Expected a SQLite database. Check your reverse proxy configuration.",
         );
+      if (
+        responseType === "blob" &&
+        !contentType.startsWith("image/") &&
+        !contentType.startsWith("audio/")
+      )
+        throw new Error("Expected stored image or audio data.");
       return (await response.blob()) as T;
     }
     const isJSON = response.headers

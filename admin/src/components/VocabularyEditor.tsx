@@ -16,6 +16,7 @@ import {
   type LeaveGuard,
 } from "../vocabularyDraft";
 import Modal from "./Modal";
+import EntryMedia from "./EntryMedia";
 import TextList from "./TextList";
 
 export default function VocabularyEditor(props: {
@@ -23,6 +24,7 @@ export default function VocabularyEditor(props: {
   id?: string;
   close: () => void;
   saved: (message: string) => void;
+  changed: (message: string) => void;
   history: (id: string) => void;
   registerGuard: (guard: LeaveGuard | undefined) => void;
 }) {
@@ -77,6 +79,7 @@ export default function VocabularyEditor(props: {
     tags: [],
     notes: [],
     examples: [],
+    images: [],
     createdAt: "",
     updatedAt: "",
   };
@@ -113,6 +116,7 @@ export default function VocabularyEditor(props: {
             }}
             close={() => requestLeave(props.close)}
             saved={props.saved}
+            changed={props.changed}
             history={props.history}
           />
         )}
@@ -155,6 +159,7 @@ function Editor(props: {
   close: () => void;
   saved: (message: string) => void;
   history: (id: string) => void;
+  changed: (message: string) => void;
 }) {
   const isNew = !props.item.itemId;
   const [item, setItem] = createSignal(props.item);
@@ -176,6 +181,14 @@ function Editor(props: {
     active = false;
     props.registerDirty(() => false);
   });
+  const failed = (caught: unknown) => {
+    if (!active) return;
+    if (!isNew && caught instanceof APIError && caught.status === 409) {
+      setStale(true);
+      setMergeNotice("");
+    }
+    setError(caught instanceof Error ? caught.message : String(caught));
+  };
   const save = async (event: SubmitEvent) => {
     event.preventDefault();
     if (props.busy || stale() || conflicts().length) return;
@@ -205,13 +218,8 @@ function Editor(props: {
             ? "Vocabulary added."
             : "Vocabulary updated.",
       );
-    } catch (error) {
-      if (!active) return;
-      if (!isNew && error instanceof APIError && error.status === 409) {
-        setStale(true);
-        setMergeNotice("");
-      }
-      setError(error instanceof Error ? error.message : String(error));
+    } catch (caught) {
+      failed(caught);
     } finally {
       if (active) props.setBusy(false);
     }
@@ -432,6 +440,17 @@ function Editor(props: {
           values={draft().examples}
           change={(values) => change("examples", values)}
         />
+        <Show when={!isNew}>
+          <EntryMedia
+            api={props.api}
+            item={item()}
+            busy={props.busy}
+            setBusy={props.setBusy}
+            updated={setItem}
+            failed={failed}
+            changed={props.changed}
+          />
+        </Show>
         <TextList
           label="Tags"
           values={draft().tags}

@@ -58,9 +58,9 @@ The tutor chooses explanations, questions, hints, and answer-quality ratings. Th
 The server can:
 
 - look up words, phrases, idioms, phrasal verbs, and expressions on Cambridge Dictionary;
-- cache complete lookup snapshots, including definitions, examples, pronunciation, audio, images, related words, idioms, and collocations;
+- cache complete lookup snapshots, including definitions, examples, pronunciation, related words, idioms, and collocations, while copying supported source audio and images into SQLite;
 - save a personal vocabulary item independently of a dictionary lookup;
-- attach custom descriptions and source attribution, notes, examples, tags, learning status, and general usefulness;
+- attach custom descriptions and source attribution, notes, examples, example images, tags, learning status, and general usefulness;
 - browse and filter saved vocabulary;
 - choose exactly one item for production-recall practice;
 - store immutable review attempts and optional notes about mistakes;
@@ -77,9 +77,11 @@ The server cannot initiate a lesson or send a reminder. MCP is request/response:
 
 Concurrent requests for the same normalized term and provider/dataset/parser version share one in-process fetch. Cancelling one caller does not cancel work needed by the others.
 
-On a cache miss, the server fetches and parses Cambridge Dictionary. A successful refresh creates a new immutable snapshot and makes it active. Legacy/context-only vocabulary with the same normalized term follows the current successful snapshot automatically, including after parser upgrades within the same provider and dataset. Dictionary-selected meanings retain their original snapshot so definition indices, part of speech, and pronunciation remain consistent.
+On a cache miss, the server fetches and parses Cambridge Dictionary. A successful refresh creates a new snapshot and makes it active. Its dictionary facts and ordering do not change afterward. Legacy/context-only vocabulary with the same normalized term follows the current successful snapshot automatically, including after parser upgrades within the same provider and dataset. Dictionary-selected meanings retain their original fact snapshot so definition indices, part of speech, and pronunciation remain consistent.
 
 Genuine HTTP 404 results without entries are cached for five minutes; expiry or explicit refresh retries upstream. Transport and parser failures are not negative-cached. An HTTP 200 page without usable entries or suggestions is treated as an upstream failure rather than replacing good cached content. If a fetch fails and an older snapshot exists for the current parser, the server returns it with `cache.state` set to `stale_fallback`. Parsed resource links allow only HTTP(S) URLs without embedded credentials.
+
+After a successful upstream fetch, the service makes a bounded, best-effort copy of every parsed audio and image resource from the exact configured Cambridge origin. Cross-origin URLs and redirects are rejected. Audio is limited to 5 MiB per file, images to 10 MiB, and one lookup to 64 files, 64 MiB, and 15 seconds of media work. Supported audio is MPEG, MP4, Ogg, or WAV; supported images are AVIF, GIF, JPEG, PNG, or WebP. Content is validated, keyed by SHA-256, and stored as a SQLite BLOB. The fetched snapshot keeps each original source URL and adds `mediaId` / `thumbnailMediaId` links to the local object. Matching source URLs in older snapshots receive the same local links, so existing dictionary-selected meanings gain stored media without changing their definitions or rebinding to a newer snapshot. A failed, oversized, or unsupported asset is omitted without failing the dictionary lookup.
 
 ### Vocabulary items
 
@@ -91,10 +93,13 @@ A vocabulary item belongs to the namespace configured by `MCP_OWNER_KEY` and rep
 - normalized tags;
 - a custom description with optional source attribution;
 - ordered personal notes and examples;
+- up to 12 attached JPEG, PNG, GIF, WebP, or AVIF example images, each with an optional filename and learner-facing example or memory cue;
 - a saved context, whether or not a dictionary sense was selected;
-- an optional selected dictionary definition and its immutable lookup snapshot, which contains all definitions.
+- an optional selected dictionary definition and its original lookup fact snapshot, which contains all definitions.
 
 Saving is idempotent for the same normalized term and selected definition. A different selected definition creates a separate item. Intentional edits go through `vocabulary_update`. Archived items stay stored but are excluded from practice.
+
+Example images are added or removed through the bearer-authenticated admin editor after the vocabulary item exists. They belong to that exact owner/item identity, advance its edit revision, and are deleted with the item. The binary data lives in the same SQLite database as the vocabulary record.
 
 Learning status is learner-managed metadata. FSRS reviews do not automatically change `new` to `learning` or `learned`; all three active statuses remain eligible for selection. Only `archived` removes an item from the review queue.
 

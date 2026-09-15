@@ -66,6 +66,16 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 			logger.Warn("Database export download interrupted")
 		}
 	})
+	mux.HandleFunc("GET /admin/api/media/{id}", func(w http.ResponseWriter, r *http.Request) {
+		media, err := store.MediaByID(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err, logger)
+			return
+		}
+		if err := writeMedia(w, media); err != nil {
+			logger.Warn("Media response interrupted")
+		}
+	})
 	handle := func(pattern string, fn func(http.ResponseWriter, *http.Request) (any, error)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			data, err := fn(w, r)
@@ -166,6 +176,29 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 		})
 		return adminVocabulary(item), err
 	})
+	handle("POST /admin/api/vocabulary/{id}/images", func(w http.ResponseWriter, r *http.Request) (any, error) {
+		input, err := decodeImageUpload(w, r)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.AttachImage(r.Context(), r.PathValue("id"), input)
+		return adminVocabulary(item), err
+	})
+	handle("DELETE /admin/api/vocabulary/{id}/images/{attachmentID}", func(w http.ResponseWriter, r *http.Request) (any, error) {
+		var input struct {
+			ExpectedRevision int64 `json:"expectedRevision"`
+		}
+		if err := decode(w, r, &input); err != nil {
+			return nil, err
+		}
+		item, err := service.DeleteImage(
+			r.Context(),
+			r.PathValue("id"),
+			r.PathValue("attachmentID"),
+			input.ExpectedRevision,
+		)
+		return adminVocabulary(item), err
+	})
 	handle("DELETE /admin/api/vocabulary/{id}", func(w http.ResponseWriter, r *http.Request) (any, error) {
 		err := service.Delete(r.Context(), r.PathValue("id"))
 		return map[string]bool{"deleted": err == nil}, err
@@ -188,6 +221,8 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 		timeout := 15 * time.Second
 		if r.URL.Path == "/admin/api/database" {
 			timeout = 90 * time.Second
+		} else if strings.Contains(r.URL.Path, "/images") || strings.HasPrefix(r.URL.Path, "/admin/api/media/") {
+			timeout = 60 * time.Second
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()

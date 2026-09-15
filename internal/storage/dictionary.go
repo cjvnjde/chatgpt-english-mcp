@@ -146,6 +146,141 @@ func (db *DB) InsertDictionarySnapshot(ctx context.Context, input DictionarySnap
 	}, nil
 }
 
+type DictionaryMediaLink struct {
+	SourceURL   string
+	Kind        string
+	MediaID     string
+	ContentType string
+}
+
+// BackfillDictionaryMedia links older lookup snapshots to local media without
+// changing their dictionary facts, ordering, or source URLs.
+func (db *DB) BackfillDictionaryMedia(
+	ctx context.Context,
+	provider string,
+	normalizedTerm string,
+	links []DictionaryMediaLink,
+) error {
+	byResource := make(map[string]DictionaryMediaLink, len(links))
+	for _, link := range links {
+		if link.SourceURL != "" && link.MediaID != "" {
+			byResource[link.Kind+"\x00"+link.SourceURL] = link
+		}
+	}
+	if len(byResource) == 0 {
+		return nil
+	}
+	transaction, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin dictionary media backfill: %w", err)
+	}
+	defer transaction.Rollback()
+	rows, err := transaction.QueryContext(ctx, `
+		SELECT id, data_json
+		FROM dictionary_snapshots
+		WHERE provider = ? AND normalized_term = ?
+	`, provider, normalizedTerm)
+	if err != nil {
+		return fmt.Errorf("query dictionary media backfill: %w", err)
+	}
+	type update struct {
+		id   string
+		data string
+	}
+	updates := make([]update, 0)
+	for rows.Next() {
+		var id, encoded string
+		if err := rows.Scan(&id, &encoded); err != nil {
+			rows.Close()
+			return fmt.Errorf("read dictionary media backfill: %w", err)
+		}
+		var data domain.DictionarySnapshotData
+		if err := json.Unmarshal([]byte(encoded), &data); err != nil {
+			rows.Close()
+			return fmt.Errorf("%w: dictionary snapshot %s", ErrCorruptData, id)
+		}
+		if !applyDictionaryMediaLinks(&data, byResource) {
+			continue
+		}
+		contents, err := json.Marshal(data)
+		if err != nil {
+			rows.Close()
+			return fmt.Errorf("encode dictionary media backfill: %w", err)
+		}
+		updates = append(updates, update{id: id, data: string(contents)})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate dictionary media backfill: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close dictionary media backfill: %w", err)
+	}
+	for _, item := range updates {
+		if _, err := transaction.ExecContext(
+			ctx,
+			"UPDATE dictionary_snapshots SET data_json = ? WHERE id = ?",
+			item.data,
+			item.id,
+		); err != nil {
+			return fmt.Errorf("update dictionary media backfill: %w", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit dictionary media backfill: %w", err)
+	}
+	return nil
+}
+
+func applyDictionaryMediaLinks(
+	data *domain.DictionarySnapshotData,
+	links map[string]DictionaryMediaLink,
+) bool {
+	changed := false
+	linkAudio := func(audio *domain.DictionaryAudio) {
+		if audio == nil {
+			return
+		}
+		link, ok := links[MediaKindAudio+"\x00"+audio.AudioURL]
+		if !ok {
+			return
+		}
+		if audio.MediaID != link.MediaID || audio.ContentType != link.ContentType {
+			audio.MediaID = link.MediaID
+			audio.ContentType = link.ContentType
+			changed = true
+		}
+	}
+	linkImage := func(image *domain.DictionaryImage) {
+		if link, ok := links[MediaKindImage+"\x00"+image.ImageURL]; ok &&
+			image.MediaID != link.MediaID {
+			image.MediaID = link.MediaID
+			changed = true
+		}
+		if link, ok := links[MediaKindImage+"\x00"+image.ThumbnailURL]; ok &&
+			image.ThumbnailMediaID != link.MediaID {
+			image.ThumbnailMediaID = link.MediaID
+			changed = true
+		}
+	}
+	for entryIndex := range data.Entries {
+		entry := &data.Entries[entryIndex]
+		if entry.Audio != nil {
+			linkAudio(entry.Audio.UK)
+			linkAudio(entry.Audio.US)
+		}
+		for definitionIndex := range entry.Definitions {
+			for imageIndex := range entry.Definitions[definitionIndex].Images {
+				linkImage(&entry.Definitions[definitionIndex].Images[imageIndex])
+			}
+		}
+	}
+	for imageIndex := range data.Images {
+		linkImage(&data.Images[imageIndex])
+	}
+	return changed
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }

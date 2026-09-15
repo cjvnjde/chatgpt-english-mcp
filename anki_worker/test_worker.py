@@ -39,6 +39,7 @@ def vocabulary(item_id="one", **changes):
         "tags": [],
         "notes": [],
         "examples": [],
+        "images": [],
         "createdAt": "2026-09-01T00:00:00Z",
         "updatedAt": "2026-09-01T00:00:00Z",
     }
@@ -48,7 +49,7 @@ def vocabulary(item_id="one", **changes):
 
 def envelope(config, items):
     payload = {
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "namespace": config.namespace,
         "owner": config.owner,
         "digest": "",
@@ -442,6 +443,7 @@ class ValidationTests(unittest.TestCase):
             ("schemaVersion", True),
             ("schemaVersion", 1),
             ("schemaVersion", 2),
+            ("schemaVersion", 3),
         ):
             payload = deepcopy(good)
             payload[key] = value

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	cambridgeParserVersion    = 13
+	cambridgeParserVersion    = 14
 	maxCambridgeResponseBytes = 8 << 20
 	maxCambridgeDefinitions   = 20
 )
@@ -29,13 +29,15 @@ func NewCambridgeProvider(baseURL *url.URL, timeout time.Duration, logger *slog.
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &CambridgeProvider{
+	provider := &CambridgeProvider{
 		baseURL: baseURL,
-		client: &http.Client{
-			Timeout: timeout,
-		},
-		logger: logger,
+		logger:  logger,
 	}
+	provider.client = &http.Client{
+		Timeout:       timeout,
+		CheckRedirect: provider.checkRedirect,
+	}
+	return provider
 }
 
 func (provider *CambridgeProvider) Name() string {

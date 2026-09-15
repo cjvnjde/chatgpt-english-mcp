@@ -57,6 +57,16 @@ type DescriptionSource struct {
 	URL   string `json:"url,omitempty"`
 }
 
+type VocabularyImage struct {
+	AttachmentID     string `json:"attachmentId"`
+	MediaID          string `json:"mediaId"`
+	ContentType      string `json:"contentType"`
+	ByteSize         int64  `json:"byteSize"`
+	OriginalFilename string `json:"originalFilename,omitempty"`
+	Example          string `json:"example,omitempty"`
+	CreatedAt        string `json:"createdAt"`
+}
+
 type VocabularySense struct {
 	Context         string                   `json:"context,omitempty"`
 	EntryIndex      int                      `json:"entryIndex"`
@@ -80,6 +90,7 @@ type VocabularyItem struct {
 	DescriptionSource *DescriptionSource      `json:"descriptionSource,omitempty"`
 	Notes             []string                `json:"notes"`
 	Examples          []string                `json:"examples"`
+	Images            []VocabularyImage       `json:"images"`
 	Context           string                  `json:"context,omitempty"`
 	Sense             *VocabularySense        `json:"sense,omitempty"`
 	Lookup            *DictionaryLookupResult `json:"lookup,omitempty"`

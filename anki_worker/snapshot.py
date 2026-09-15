@@ -19,6 +19,8 @@ IMAGE = {
     "imageUrl": str,
     "thumbnailUrl?": str,
     "credit?": str,
+    "mediaId?": str,
+    "thumbnailMediaId?": str,
 }
 GROUP = {"topic?": str, "words": [str]}
 DEFINITION = {
@@ -35,7 +37,16 @@ DEFINITION = {
     "synonyms?": [GROUP],
     "antonyms?": [GROUP],
 }
-AUDIO = {"audioUrl": str, "contentType": str}
+AUDIO = {"audioUrl": str, "contentType": str, "mediaId?": str}
+VOCABULARY_IMAGE = {
+    "attachmentId": str,
+    "mediaId": str,
+    "contentType": str,
+    "byteSize": int,
+    "originalFilename?": str,
+    "example?": str,
+    "createdAt": str,
+}
 ENTRY = {
     "headword": str,
     "partOfSpeech?": str,
@@ -57,6 +68,7 @@ VOCABULARY = {
     "descriptionSource?": {"title?": str, "url?": str},
     "notes": [str],
     "examples": [str],
+    "images": [VOCABULARY_IMAGE],
     "context?": str,
     "createdAt": str,
     "updatedAt": str,
@@ -148,7 +160,7 @@ def validate_snapshot(payload, config):
         raise WorkerError("Snapshot envelope is missing or unsupported")
     if (
         type(payload["schemaVersion"]) is not int
-        or payload["schemaVersion"] != 3
+        or payload["schemaVersion"] != 4
         or payload["complete"] is not True
     ):
         raise WorkerError("Snapshot is incomplete or uses an unsupported schema")

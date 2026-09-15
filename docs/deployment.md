@@ -76,9 +76,9 @@ Add the certificate resolver and Docker network required by your Traefik or Dokp
 
 ## Persistence
 
-Compose stores the database at `/app/data/english-mcp.sqlite` in the `english-learning-data` named volume. Rebuilding or replacing containers preserves it.
+Compose stores the SQLite database at `/app/data/english-mcp.sqlite` in the `english-learning-data` named volume. The file contains vocabulary, scheduling/history data, copied Cambridge audio/images, and custom vocabulary-image attachments. Rebuilding or replacing containers preserves all of it.
 
-Do not run `docker compose down -v` unless you intentionally want to delete all vocabulary, dictionary snapshots, and scheduling data. Back up the volume before infrastructure changes. Stop the MCP container or use a SQLite-aware backup method so the database and any WAL state are captured consistently.
+Do not run `docker compose down -v` unless you intentionally want to delete that data. Back up the volume before infrastructure changes. Stop the MCP container or use a SQLite-aware backup method so the database, media BLOBs, and any WAL state are captured consistently. The admin **Export database** action produces one consistent SQLite snapshot containing the media; there is no separate media directory to copy.
 
 ## Updating
 
@@ -93,6 +93,8 @@ Migrations run transactionally. Startup fails rather than silently continuing if
 Container base images and the Dockerfile frontend are pinned by digest. The tunnel source is pinned by commit, admin dependencies use the lockfile, and all Python worker dependencies are pinned with hashes. Upgrade these inputs together in source and rebuild rather than expecting mutable image tags or environment overrides to change them.
 
 Migration `015` adds vocabulary edit revisions without changing MCP or Anki export schemas. Redeploy the Go service and admin assets together: admin PATCH now requires `expectedRevision`, and stale edits must be reloaded or merged.
+
+Migration `016` adds content-addressed media objects and owner/item-scoped vocabulary-image attachments. MCP `VocabularyItem` / dictionary output and the private Anki snapshot schema gain media metadata, so deploy the Go service, admin assets, and Anki worker together. Parser version `14` causes successful legacy Cambridge cache entries to be fetched again so their audio and images can be copied locally; matching source URLs in older selected-meaning snapshots are linked to those copies without changing the saved dictionary facts.
 
 ## Security checklist
 
@@ -182,7 +184,7 @@ The worker image pins Python `3.14.7` by image digest and `anki==26.8.1` plus ev
 
 Before upgrading, stop and back up the worker, verify the new stable package/runtime combination, run the local behavior checks, then exercise a disposable AnkiWeb account. Local collection tests and controlled sync doubles do not prove live protocol compatibility. Live checks need real disposable-account credentials and outbound access; never use a production account to test full-sync recovery.
 
-Export schema version `3` includes required usefulness and personal-interest metadata. Rebuild and redeploy the Go service and Anki worker together; older strict-schema workers cannot accept the new field, and the new worker rejects older snapshots. Migration `012` backfills personal interest to `normal`; migration `013` adds independent reinforcement history/state without changing FSRS. Neither interest nor reinforcement changes Anki fields, tags, or scheduling. Migration `009` preserves old usefulness values as hints and recalculates effective values from bundled evidence without resetting learning state or timestamps; later scoring revisions use the same startup recalculation without runtime downloads.
+Export schema version `4` adds vocabulary-image metadata and optional local dictionary-media IDs while retaining required usefulness and personal-interest metadata. Media bytes are not exported to Anki or rendered into cards. Rebuild and redeploy the Go service and Anki worker together; strict-schema workers reject other versions. Migration `012` backfills personal interest to `normal`; migration `013` adds independent reinforcement history/state without changing FSRS. Neither interest nor reinforcement changes Anki fields, tags, or scheduling. Migration `009` preserves old usefulness values as hints and recalculates effective values from bundled evidence without resetting learning state or timestamps; later scoring revisions use the same startup recalculation without runtime downloads.
 
 Expression inference also keeps the existing database and export schemas. Redeploying the Go service loads the bundled expression index and advances the scoring revision, recalculating saved terms from their original hints. No expression download or Anki worker change is required. Conservative variant and typo matching affects usefulness only, not vocabulary identity or Anki content.
 

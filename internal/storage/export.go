@@ -51,7 +51,8 @@ func (db *DB) ExportVocabulary(ctx context.Context, owner, namespace string) (Vo
 		if err != nil {
 			return VocabularySnapshot{}, err
 		}
-		if item.ItemID == "" || strings.TrimSpace(item.Term) == "" || strings.TrimSpace(item.NormalizedTerm) == "" || item.Tags == nil || item.Notes == nil || item.Examples == nil {
+		if item.ItemID == "" || strings.TrimSpace(item.Term) == "" || strings.TrimSpace(item.NormalizedTerm) == "" ||
+			item.Tags == nil || item.Notes == nil || item.Examples == nil || item.Images == nil {
 			return VocabularySnapshot{}, fmt.Errorf("%w: incomplete vocabulary export record", ErrCorruptData)
 		}
 		items = append(items, VocabularySnapshotItem{SourceID: prefix + item.ItemID, Vocabulary: item})
@@ -72,7 +73,7 @@ func (db *DB) ExportVocabulary(ctx context.Context, owner, namespace string) (Vo
 	}
 	digest := sha256.Sum256(encoded)
 	return VocabularySnapshot{
-		SchemaVersion: 3,
+		SchemaVersion: 4,
 		Namespace:     namespace,
 		Owner:         owner,
 		Digest:        hex.EncodeToString(digest[:]),

@@ -50,17 +50,21 @@ The build contains only HTML, CSS, and JavaScript. Client navigation uses URL ha
 | View | Capabilities |
 | --- | --- |
 | Overview | Default landing: due-card summary, today's review count (UTC), 30-day activity, owner-filtered vocabulary/comment shortcuts, and words with recorded lapses or consecutive failures. |
-| Vocabulary | Create words and meanings, inspect/edit status, description, notes, examples, tags, source, usefulness hints, and independent personal interest; archive items or delete with typed confirmation. |
+| Vocabulary | Create words and meanings; inspect/edit status, description, notes, examples, tags, source, usefulness hints, and independent personal interest; play locally copied Cambridge audio, view copied source images, attach/remove additional example images, archive items, or delete with typed confirmation. |
 | Next suggestions | Preview words ranked by current next-draw probability, with selection reasons, learning groups, usefulness, due dates, and last-shown times; open words in the editor. |
 | Reviews / Comments | Search by word, ID, comment, or any stored field; exact-column filters, ratings, dates, pagination; full before/after FSRS state and submitted/effective ratings. Comments stays restricted to commented reviews when optional filters are cleared. |
 | Presentations | Inspect when a card was shown, selection kind, due date, and review token; follow links to cards and reviews. |
-| Database | Every SQLite table, including dictionary snapshots, cards, migrations, usefulness state, and SQLite sequences; choose columns, inspect raw JSON/schema, and export a page or record. |
+| Database | Every SQLite table, including dictionary snapshots, media metadata, vocabulary-image links, cards, migrations, usefulness state, and SQLite sequences; choose columns, inspect raw JSON/schema, and export a page or record. Binary media columns are represented by their byte size instead of being placed in table JSON. |
 | Analytics | Status counts, due cards, submitted/effective rating distribution, 30-day activity, and difficult words for the configured owner. |
-| Export database | Download the whole SQLite database as one `.sqlite` file, including all owners and system/history tables. |
+| Export database | Download the whole SQLite database as one `.sqlite` file, including all owners, source/custom media BLOBs, and system/history tables. |
 
 Review and presentation tables remain immutable, as required by the existing database triggers. Cache, scheduler, and system tables are inspectable but not directly writable. Vocabulary writes use the existing service so validation, sense identity, usefulness inference, and card creation/deletion stay consistent. Term/sense identity is fixed after creation; create a new meaning when needed. The database stores review comments and ratings, not answer transcripts. Deleting a word removes its cards; historical records are retained and may no longer have a resolvable word label.
 
 Notes, examples, and tags are edited as separate entries; notes and examples preserve multiline values, and commas within a tag are kept literally. An empty array clears a list. Usefulness is inferred from offline evidence and the optional hint, so the result can differ from the selected hint. For existing items, an empty hint selector preserves the current hint; the existing service has no operation to clear it to automatic.
+
+An existing item's **Audio and images** section reads content-addressed Cambridge media from this server instead of contacting Cambridge again. It also accepts up to 12 additional JPEG, PNG, GIF, WebP, or AVIF images of at most 10 MiB each. An optional example or memory cue and the original filename are stored with each attachment. Attachments belong only to that owner and vocabulary item; deleting an attachment or item removes an otherwise unreferenced custom media object.
+
+Uploads use authenticated `POST /admin/api/vocabulary/{id}/images` with multipart fields `image`, optional `example`, and `expectedRevision`. Removal uses authenticated `DELETE /admin/api/vocabulary/{id}/images/{attachmentID}` with a JSON `expectedRevision`. Both return the updated vocabulary item and advance its revision; a stale revision returns 409 without attaching or deleting anything. Authenticated `GET /admin/api/media/{mediaId}` streams validated image/audio bytes with `no-store`, same-origin, and no-sniff response headers. The token remains in the `Authorization` header, never a media URL.
 
 Personal interest directly sets the learner's low/normal/high priority independently of inferred usefulness. It affects selection weights, not FSRS scheduling or Anki content.
 
@@ -68,7 +72,7 @@ Dirty drafts require explicit confirmation before closing, changing views, openi
 
 The editor sends only changed fields with the loaded `expectedRevision`. If another writer changes the item, a 409 keeps the draft intact and pauses saving. **Load latest and merge draft** preserves local-only edits, adopts untouched remote fields, and requires a choice for fields changed on both sides. Description and attribution merge together. A changed usefulness hint requires an explicit choice because the saved hint is not returned by the vocabulary API. Explicit discard loads the latest saved item instead.
 
-Admin vocabulary items include a `revision`. `PATCH /admin/api/vocabulary/{id}` requires a positive integer `expectedRevision`; missing, invalid, and stale values return 428, 400, and 409 respectively. MCP clients and Anki snapshots do not include this admin precondition.
+Admin vocabulary items include a `revision`. Metadata `PATCH`, image upload, and image removal all require the loaded positive `expectedRevision`; stale values return 409 so media changes cannot silently overwrite another writer. `PATCH /admin/api/vocabulary/{id}` returns 428 for a missing precondition and 400 for an invalid one. MCP clients do not use this admin precondition.
 
 Search covers stored columns, plus the linked vocabulary term for history/cards. Quick status/rating buttons apply one exact-column filter. **Filters & tools** contains the explicit field/value form (applied on submit, not every keystroke), sorting, columns, schema, and page export. Exact-field filters replace one another, including an owner filter; active filter chips and the owner-scope label show the current scope. Search, date, and comment constraints combine with the field filter. Clear filters never removes the Comments view's built-in restriction.
 
@@ -92,7 +96,7 @@ The Export database button makes an authenticated request to `GET /admin/api/dat
 
 The service uses [SQLite `VACUUM INTO`](https://sqlite.org/lang_vacuum.html#vacuuminto) to create a consistent, compact snapshot including committed WAL data. It writes into a private temporary directory, streams the resulting file, then removes the temporary snapshot. The original database is not modified. Only one export runs at a time. Export uses the service's existing SQLite connection, so other MCP database operations can briefly queue while the snapshot is generated. This is intended for the small development/admin databases described in this project.
 
-The API allows 90 seconds for an export request, including snapshot creation and streaming; nginx and the client allow 120 seconds. The browser buffers the download as a Blob. Do not copy only the live `.sqlite` file while WAL mode is active. Keep downloads private: they contain the complete learning database, including cached source data and review tokens, but not environment-based MCP/admin/Anki secrets.
+The API allows 90 seconds for an export request, including snapshot creation and streaming; nginx and the client allow 120 seconds. The browser buffers the download as a Blob. Do not copy only the live `.sqlite` file while WAL mode is active. Keep downloads private: they contain the complete learning database, including copied Cambridge media, custom example images, cached source data, and review tokens, but not environment-based MCP/admin/Anki secrets.
 
 To inspect a downloaded file:
 
@@ -124,7 +128,7 @@ go test ./...
 
 The integration tests use temporary SQLite databases and exercise authorization, vocabulary CRUD and card lifecycle, query validation, read-only tables, and an exported file's signature, integrity, migration metadata, and committed data. Suggestion tests cover probability and random-selection boundaries, cooldown and learning precedence, early fallback, pagination, owner isolation, and unchanged learning state after preview reads. Client tests cover credential handling, expired sessions, proxy misconfiguration, binary downloads, remembered sign-in restoration and validation, sign-out cleanup, temporary server failures, and blocked browser storage.
 
-An optional automated browser smoke suite exercises the overview, table filters, calendar mouse/keyboard controls, pagination, sorting, loading/error recovery, suggestions, empty states, and mobile navigation. It intercepts all admin API requests with fixtures and never accesses a real database. With Playwright available in your environment, start Vite (or preview) and run:
+An optional automated browser smoke suite exercises the overview, table filters, calendar mouse/keyboard controls, pagination, sorting, loading/error recovery, suggestions, dictionary/custom media rendering and image attachment, empty states, and mobile navigation. It intercepts all admin API requests with fixtures and never accesses a real database. With Playwright available in your environment, start Vite (or preview) and run:
 
 ```sh
 ADMIN_TEST_URL=http://localhost:5173/admin/ node tests/browser-smoke.mjs

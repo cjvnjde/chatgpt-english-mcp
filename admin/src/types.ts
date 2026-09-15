@@ -18,6 +18,45 @@ export type Page = {
   offset: number;
 };
 export type Session = { owner: string; version: number };
+export type DictionaryAudio = {
+  audioUrl: string;
+  contentType: string;
+  mediaId?: string;
+};
+export type DictionaryImage = {
+  title?: string;
+  alt?: string;
+  imageUrl: string;
+  thumbnailUrl?: string;
+  credit?: string;
+  mediaId?: string;
+  thumbnailMediaId?: string;
+};
+export type DictionaryDefinition = {
+  definition: string;
+  examples: string[];
+  images: DictionaryImage[];
+};
+export type DictionaryEntry = {
+  headword: string;
+  partOfSpeech?: string;
+  audio?: { uk?: DictionaryAudio; us?: DictionaryAudio };
+  definitions: DictionaryDefinition[];
+};
+export type DictionaryLookup = {
+  lookupId?: string;
+  entries: DictionaryEntry[];
+  images: DictionaryImage[];
+};
+export type VocabularyImage = {
+  attachmentId: string;
+  mediaId: string;
+  contentType: string;
+  byteSize: number;
+  originalFilename?: string;
+  example?: string;
+  createdAt: string;
+};
 export type Vocabulary = {
   itemId: string;
   revision: number;
@@ -32,8 +71,9 @@ export type Vocabulary = {
   examples: string[];
   customDescription?: string;
   descriptionSource?: { title?: string; url?: string };
+  images: VocabularyImage[];
   sense?: Row;
-  lookup?: Row;
+  lookup?: DictionaryLookup;
   createdAt: string;
   updatedAt: string;
 };

@@ -51,6 +51,7 @@ def item(item_id):
         "customDescription": "Original meaning",
         "notes": ["Disposable account integration exercise"],
         "examples": [],
+        "images": [],
         "createdAt": "2026-09-01T00:00:00Z",
         "updatedAt": "2026-09-01T00:00:00Z",
     }
@@ -83,7 +84,7 @@ def exercise(config, root):
 
     def fetch(current_config):
         payload = {
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "namespace": current_config.namespace,
             "owner": current_config.owner,
             "digest": "",

@@ -22,6 +22,7 @@ const item: Vocabulary = {
   customDescription: "Original meaning",
   notes: ["Original note"],
   examples: [],
+  images: [],
   tags: ["nature"],
   descriptionSource: {
     title: "Original source",

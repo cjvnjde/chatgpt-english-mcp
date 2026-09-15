@@ -31,6 +31,8 @@ type Store interface {
 	VocabularyBySense(ctx context.Context, ownerKey, normalizedTerm, senseKey string) (domain.VocabularyItem, error)
 	ListVocabulary(ctx context.Context, input storage.VocabularyListQuery) ([]domain.VocabularyItem, error)
 	DeleteVocabulary(ctx context.Context, ownerKey, itemID string) error
+	AttachVocabularyImage(ctx context.Context, input storage.VocabularyImageInsert) (domain.VocabularyItem, error)
+	DeleteVocabularyImage(ctx context.Context, ownerKey, itemID, attachmentID string, expectedRevision int64) (domain.VocabularyItem, error)
 }
 
 type Service struct {
@@ -69,6 +71,14 @@ type UpdateChanges struct {
 	DescriptionSource *domain.DescriptionSource
 	Notes             *[]string
 	Examples          *[]string
+}
+
+type ImageAttachmentInput struct {
+	ExpectedRevision int64
+	ContentType      string
+	Data             []byte
+	OriginalFilename string
+	Example          string
 }
 
 type ListOptions struct {
@@ -371,6 +381,59 @@ func (service *Service) Delete(ctx context.Context, itemID string) error {
 		return apperr.Wrap(apperr.InternalError, "failed to delete the vocabulary item", err)
 	}
 	return nil
+}
+
+func (service *Service) AttachImage(ctx context.Context, itemID string, input ImageAttachmentInput) (domain.VocabularyItem, error) {
+	itemID = strings.TrimSpace(itemID)
+	input.OriginalFilename = strings.TrimSpace(input.OriginalFilename)
+	input.Example = strings.TrimSpace(input.Example)
+	if itemID == "" || input.ExpectedRevision <= 0 {
+		return domain.VocabularyItem{}, apperr.New(apperr.InvalidArgument, "itemId and a positive expectedRevision are required")
+	}
+	if !domain.ValidText(input.OriginalFilename) || len([]rune(input.OriginalFilename)) > 255 ||
+		!domain.ValidText(input.Example) || len([]rune(input.Example)) > 2000 {
+		return domain.VocabularyItem{}, apperr.New(apperr.InvalidArgument, "image filename and example must contain valid UTF-8 and fit their limits")
+	}
+	item, err := service.store.AttachVocabularyImage(ctx, storage.VocabularyImageInsert{
+		OwnerKey:         service.ownerKey,
+		VocabularyItemID: itemID,
+		ExpectedRevision: input.ExpectedRevision,
+		OriginalFilename: input.OriginalFilename,
+		Example:          input.Example,
+		Media: storage.MediaInsert{
+			ContentType: input.ContentType,
+			Data:        input.Data,
+			Now:         service.now().UTC(),
+		},
+	})
+	return item, service.mediaMutationError(err)
+}
+
+func (service *Service) DeleteImage(ctx context.Context, itemID, attachmentID string, expectedRevision int64) (domain.VocabularyItem, error) {
+	itemID = strings.TrimSpace(itemID)
+	attachmentID = strings.TrimSpace(attachmentID)
+	if itemID == "" || attachmentID == "" || expectedRevision <= 0 {
+		return domain.VocabularyItem{}, apperr.New(apperr.InvalidArgument, "itemId, attachmentId, and a positive expectedRevision are required")
+	}
+	item, err := service.store.DeleteVocabularyImage(ctx, service.ownerKey, itemID, attachmentID, expectedRevision)
+	return item, service.mediaMutationError(err)
+}
+
+func (service *Service) mediaMutationError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, storage.ErrNotFound):
+		return apperr.New(apperr.NotFound, "the vocabulary item or image was not found")
+	case errors.Is(err, storage.ErrEditConflict):
+		return apperr.New(apperr.Conflict, "the vocabulary item has changed; reload it before editing")
+	case errors.Is(err, storage.ErrVocabularyImageLimit):
+		return apperr.New(apperr.InvalidArgument, "a vocabulary item can have at most 12 additional images")
+	case errors.Is(err, storage.ErrInvalidMedia):
+		return apperr.New(apperr.InvalidArgument, "the uploaded file must be a supported image no larger than 10 MiB")
+	default:
+		return apperr.Wrap(apperr.InternalError, "failed to change the vocabulary image", err)
+	}
 }
 
 func validateTerm(term string) (displayTerm, normalizedTerm string, err error) {

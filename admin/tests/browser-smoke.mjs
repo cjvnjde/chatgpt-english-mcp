@@ -43,18 +43,89 @@ const rows = Array.from({ length: 65 }, (_, i) => ({
 const calls = [];
 let failTable = false,
   emptyAnalytics = false,
-  emptySuggestions = false;
+  emptySuggestions = false,
+  uploadedImage = false;
 let holdTable;
+function vocabularyFixture(row) {
+  const item = {
+    itemId: row.id,
+    revision: row.id === "0" && uploadedImage ? 2 : 1,
+    term: row.term,
+    normalizedTerm: row.term,
+    status: row.learning_status,
+    usefulness: row.usefulness,
+    personalInterest: row.personal_interest,
+    tags: [],
+    notes: [],
+    examples: [],
+    images: [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  if (row.id !== "0") return item;
+  item.lookup = {
+    lookupId: "dictionary-lookup",
+    entries: [
+      {
+        headword: row.term,
+        audio: {
+          uk: {
+            audioUrl: "https://dictionary.cambridge.org/media/uk.mp3",
+            contentType: "audio/mpeg",
+            mediaId: "dictionary-audio",
+          },
+        },
+        definitions: [
+          {
+            definition: "an unexpected pleasant discovery",
+            examples: [],
+            images: [
+              {
+                imageUrl: "https://dictionary.cambridge.org/images/source.png",
+                mediaId: "dictionary-image",
+                alt: "Cambridge illustration",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    images: [],
+  };
+  item.images = [
+    {
+      attachmentId: "personal-attachment",
+      mediaId: "personal-image",
+      contentType: "image/png",
+      byteSize: 68,
+      originalFilename: "memory-cue.png",
+      example: "A personal memory cue",
+      createdAt: row.created_at,
+    },
+  ];
+  if (uploadedImage)
+    item.images.push({
+      attachmentId: "uploaded-attachment",
+      mediaId: "uploaded-image",
+      contentType: "image/png",
+      byteSize: 68,
+      originalFilename: "new-example.png",
+      example: "A newly attached cue",
+      createdAt: row.updated_at,
+    });
+  return item;
+}
 await page.route("**/admin/api/**", async (route) => {
   const url = new URL(route.request().url());
-  assert.equal(
-    route.request().method(),
-    "GET",
-    "Browser smoke must not mutate data",
-  );
   const endpoint = url.pathname.replace("/admin/api", "");
+  const method = route.request().method();
+  assert.ok(
+    method === "GET" ||
+      (method === "POST" && endpoint === "/vocabulary/0/images"),
+    "Browser smoke may only mutate its mocked vocabulary fixture",
+  );
   const q = Object.fromEntries(url.searchParams);
-  calls.push({ endpoint, ...q });
+  calls.push({ endpoint, method, ...q });
   let body;
   if (endpoint === "/session") body = { owner, version: 1 };
   else if (endpoint === "/tables")
@@ -110,23 +181,28 @@ await page.route("**/admin/api/**", async (route) => {
             difficulty: 6,
           })),
     };
-  else if (endpoint.startsWith("/vocabulary/")) {
+  else if (method === "POST" && endpoint === "/vocabulary/0/images") {
+    assert.match(
+      route.request().headers()["content-type"] || "",
+      /^multipart\/form-data;\s*boundary=/,
+    );
+    uploadedImage = true;
+    body = vocabularyFixture(rows[0]);
+  } else if (endpoint.startsWith("/media/")) {
+    const audio = endpoint.endsWith("dictionary-audio");
+    return route.fulfill({
+      contentType: audio ? "audio/mpeg" : "image/png",
+      body: audio
+        ? Buffer.from("ID3\u0004\u0000\u0000\u0000\u0000\u0000\u0000")
+        : Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+          ),
+    });
+  } else if (endpoint.startsWith("/vocabulary/")) {
     const row = rows.find((row) => row.id === endpoint.split("/").at(-1));
     assert.ok(row, "The editor must request an existing fixture item");
-    body = {
-      itemId: row.id,
-      revision: 1,
-      term: row.term,
-      normalizedTerm: row.term,
-      status: row.learning_status,
-      usefulness: row.usefulness,
-      personalInterest: row.personal_interest,
-      tags: [],
-      notes: [],
-      examples: [],
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+    body = vocabularyFixture(row);
   } else if (endpoint === "/suggestions")
     body = {
       owner,
@@ -266,7 +342,42 @@ try {
     .getByRole("dialog", { name: "Vocabulary item", exact: true })
     .waitFor();
   await page.locator(".item-heading h3").waitFor();
-  assert.equal(calls.at(-1).endpoint, "/vocabulary/0");
+  assert.ok(calls.some((call) => call.endpoint === "/vocabulary/0"));
+  await page
+    .getByRole("heading", { name: "Audio and images", exact: true })
+    .waitFor();
+  await page.getByRole("img", { name: "Cambridge illustration" }).waitFor();
+  await page.getByRole("img", { name: "A personal memory cue" }).waitFor();
+  await page.locator('audio[aria-label="UK pronunciation"]').waitFor();
+  assert.ok(
+    await page.getByLabel("Image file", { exact: true }).isVisible(),
+    "Editor exposes the image attachment picker",
+  );
+  assert.ok(
+    await page.getByRole("button", { name: "Attach image", exact: true }).isDisabled(),
+    "Attach stays disabled until a file is selected",
+  );
+  await page.getByLabel("Image file", { exact: true }).setInputFiles({
+    name: "new-example.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await page
+    .getByLabel("Example or memory cue", { exact: true })
+    .fill("A newly attached cue");
+  await page.getByRole("button", { name: "Attach image", exact: true }).click();
+  await page.getByText("Image attached to this vocabulary item.").waitFor();
+  await page.getByRole("img", { name: "A newly attached cue" }).waitFor();
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.method === "POST" && call.endpoint === "/vocabulary/0/images",
+    ),
+  );
+  await screenshot("vocabulary-entry-media");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await navigate("Analytics");
   await settled();
@@ -517,7 +628,7 @@ try {
   }
   assert.deepEqual(errors, []);
   console.log(
-    "Browser smoke passed: dashboard, filters, calendar, keyboard, pagination, sort, loading/error recovery, suggestions, empty states, and mobile navigation.",
+    "Browser smoke passed: dashboard, filters, calendar, keyboard, pagination, sort, loading/error recovery, suggestions, entry media upload/rendering, empty states, and mobile navigation.",
   );
 } finally {
   await browser.close();

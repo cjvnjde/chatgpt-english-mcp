@@ -25,9 +25,32 @@ type LearningStatus = "new" | "learning" | "learned" | "archived";
 type Usefulness = "low" | "normal" | "high";
 type PersonalInterest = "low" | "normal" | "high";
 type ReviewRating = "again" | "hard" | "good" | "easy";
+type DictionaryAudio = {
+  audioUrl: string;
+  contentType: string;
+  mediaId?: string;
+};
+type DictionaryImage = {
+  title?: string;
+  alt?: string;
+  imageUrl: string;
+  thumbnailUrl?: string;
+  credit?: string;
+  mediaId?: string;
+  thumbnailMediaId?: string;
+};
+type VocabularyImage = {
+  attachmentId: string;
+  mediaId: string;
+  contentType: string;
+  byteSize: number;
+  originalFilename?: string;
+  example?: string;
+  createdAt: string;
+};
 ```
 
-A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, optional saved `context` and selected `sense`, an optional complete dictionary lookup, and creation/update timestamps. Context is returned even without a dictionary-selected sense. Returned usefulness is the effective general-usefulness classification calculated from offline word/expression evidence and any saved API hint, not personal relevance, difficulty, or recall quality.
+A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulness, tags, optional custom description and source, notes, examples, an `images: VocabularyImage[]` attachment list, optional saved `context` and selected `sense`, an optional complete dictionary lookup, and creation/update timestamps. Context is returned even without a dictionary-selected sense. Returned usefulness is the effective general-usefulness classification calculated from offline word/expression evidence and any saved API hint, not personal relevance, difficulty, or recall quality.
 
 Every item also returns `personalInterest`: personal priority, independent of general usefulness and recall quality. Existing items default to `normal`. Set `high` for “interesting” or “learn sooner,” `low` for “not interesting” or “less important,” and `normal` to reset. Low interest reduces selection weight but never excludes an otherwise eligible item.
 
@@ -67,6 +90,8 @@ The result includes:
 
 Entries may contain headwords, parts of speech, UK/US pronunciation and audio, inflections, definitions, examples, labels, phrases, images, usages, related words, synonyms, antonyms, and idioms.
 
+When the server copied a Cambridge resource successfully, audio and image objects include a content-addressed `mediaId`; full images may also include `thumbnailMediaId`. Original Cambridge URLs remain present. A later lookup also links matching URLs in older snapshots to the stored object, without changing their dictionary facts. Binary retrieval is intentionally limited to the bearer-authenticated admin API rather than embedded in MCP responses.
+
 Definition `labels` may include Cambridge CEFR levels such as `B1`, alongside usage/register labels. These are not a direct usefulness score. The offline usefulness engine does not perform Cambridge requests or equate advanced CEFR levels with low usefulness.
 
 ## `vocabulary_save`
@@ -95,7 +120,7 @@ The operation is idempotent by normalized term and selected meaning. `definition
 
 For terms with dictionary data, callers should always pass `definition`. Omitting it preserves the legacy one-item-per-term behavior unless different non-empty contexts are supplied. A context-only meaning and a dictionary-selected meaning remain distinct even when their normalized identity text is identical. Initial metadata is applied only when creating the same meaning; an existing item is never overwritten.
 
-Dictionary-selected meanings retain the immutable lookup snapshot used when they were saved, preserving definition indices, part of speech, and pronunciation across refreshes. Retrying an existing selected meaning returns that saved item with `created: false`, even if a dictionary refresh or parser upgrade no longer exposes its original definition; genuinely new meanings still require a matching current lookup. Legacy/context-only items can follow newer successful lookups, including parser upgrades within the same provider and dataset. Re-saving a legacy item with an explicit definition can create a separate card; use metadata updates when preserving its existing identity and history.
+Dictionary-selected meanings retain the original lookup fact snapshot used when they were saved, preserving definition indices, part of speech, and pronunciation across refreshes. Local media links can be added to that snapshot when a later lookup downloads a matching source URL; this does not rebind the selected meaning or change its dictionary facts. Retrying an existing selected meaning returns that saved item with `created: false`, even if a dictionary refresh or parser upgrade no longer exposes its original definition; genuinely new meanings still require a matching current lookup. Legacy/context-only items can follow newer successful lookups, including parser upgrades within the same provider and dataset. Re-saving a legacy item with an explicit definition can create a separate card; use metadata updates when preserving its existing identity and history.
 
 Tags are trimmed, lowercased, deduplicated, and sorted. `descriptionSource.url`, when present, must be an absolute HTTP(S) URL and requires a non-empty custom description.
 

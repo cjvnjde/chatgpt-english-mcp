@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -371,6 +372,88 @@ func TestAdminVocabularyRevisionPreconditions(t *testing.T) {
 	}
 }
 
+func TestAdminVocabularyImageLifecycle(t *testing.T) {
+	_, handler := testHandler(t)
+	created := adminRequest(handler, http.MethodPost, "/vocabulary", `{"term":"bank"}`, testToken)
+	var item vocabularyResponse
+	if created.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
+	}
+	createdRevision := item.Revision
+	image := []byte("\x89PNG\r\n\x1a\nexample image")
+	path := "/vocabulary/" + item.ItemID + "/images"
+	if response := imageUploadRequest(handler, path, item.Revision, "river-bank.png", "We picnicked on the bank.", image, ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized upload returned %d", response.Code)
+	}
+	uploaded := imageUploadRequest(handler, path, item.Revision, "river-bank.png", "We picnicked on the bank.", image, testToken)
+	if uploaded.Code != http.StatusOK {
+		t.Fatalf("upload: %d %s", uploaded.Code, uploaded.Body.String())
+	}
+	if err := json.Unmarshal(uploaded.Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.Revision <= createdRevision || len(item.Images) != 1 {
+		t.Fatalf("upload did not update vocabulary: %#v", item)
+	}
+	attachment := item.Images[0]
+	if attachment.MediaID == "" || attachment.AttachmentID == "" || attachment.ContentType != "image/png" ||
+		attachment.ByteSize != int64(len(image)) || attachment.OriginalFilename != "river-bank.png" ||
+		attachment.Example != "We picnicked on the bank." {
+		t.Fatalf("unexpected image metadata: %#v", attachment)
+	}
+	mediaPath := "/media/" + attachment.MediaID
+	if response := adminRequest(handler, http.MethodGet, mediaPath, "", ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized media read returned %d", response.Code)
+	}
+	media := adminRequest(handler, http.MethodGet, mediaPath, "", testToken)
+	if media.Code != http.StatusOK || media.Header().Get("Content-Type") != "image/png" ||
+		media.Header().Get("Cross-Origin-Resource-Policy") != "same-origin" ||
+		media.Header().Get("Cache-Control") != "no-store" ||
+		!bytes.Equal(media.Body.Bytes(), image) {
+		t.Fatalf("stored media response: %d %#v %q", media.Code, media.Header(), media.Body.Bytes())
+	}
+	inspected := adminRequest(handler, http.MethodGet, "/tables/media_objects", "", testToken)
+	var mediaPage storage.AdminPage
+	if inspected.Code != http.StatusOK {
+		t.Fatalf("inspect media table: %d %s", inspected.Code, inspected.Body.String())
+	}
+	if err := json.Unmarshal(inspected.Body.Bytes(), &mediaPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(mediaPage.Rows) != 1 || mediaPage.Rows[0]["data"] != fmt.Sprintf("[binary: %d bytes]", len(image)) {
+		t.Fatalf("admin table exposed raw media data: %#v", mediaPage.Rows)
+	}
+	stale := imageUploadRequest(handler, path, createdRevision, "stale.png", "", image, testToken)
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale upload returned %d: %s", stale.Code, stale.Body.String())
+	}
+	current := adminRequest(handler, http.MethodGet, "/vocabulary/"+item.ItemID, "", testToken)
+	var unchanged vocabularyResponse
+	if err := json.Unmarshal(current.Body.Bytes(), &unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Revision != item.Revision || len(unchanged.Images) != 1 {
+		t.Fatalf("stale upload changed the item: %#v", unchanged)
+	}
+	deleted := adminRequest(handler, http.MethodDelete,
+		path+"/"+attachment.AttachmentID, fmt.Sprintf(`{"expectedRevision":%d}`, item.Revision), testToken)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", deleted.Code, deleted.Body.String())
+	}
+	if err := json.Unmarshal(deleted.Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
+	}
+	if len(item.Images) != 0 || item.Revision <= unchanged.Revision {
+		t.Fatalf("delete did not update vocabulary: %#v", item)
+	}
+	if response := adminRequest(handler, http.MethodGet, mediaPath, "", testToken); response.Code != http.StatusNotFound {
+		t.Fatalf("unreferenced media remained readable: %d", response.Code)
+	}
+}
+
 const testToken = "admin-test-token-at-least-32-characters"
 
 func testHandler(t *testing.T) (*storage.DB, http.Handler) {
@@ -394,5 +477,34 @@ func adminRequest(handler http.Handler, method, path, body, token string) *httpt
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, req)
+	return response
+}
+
+func imageUploadRequest(handler http.Handler, path string, revision int64, filename, example string, image []byte, token string) *httptest.ResponseRecorder {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("image", filename)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := part.Write(image); err != nil {
+		panic(err)
+	}
+	if err := writer.WriteField("example", example); err != nil {
+		panic(err)
+	}
+	if err := writer.WriteField("expectedRevision", fmt.Sprint(revision)); err != nil {
+		panic(err)
+	}
+	if err := writer.Close(); err != nil {
+		panic(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/api"+path, &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
 	return response
 }

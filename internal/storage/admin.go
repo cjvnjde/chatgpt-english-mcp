@@ -110,9 +110,13 @@ func (db *DB) AdminRows(ctx context.Context, name string, query AdminQuery) (Adm
 		return page, err
 	}
 	columns := map[string]bool{}
+	blobColumns := map[string]bool{}
 	primary := ""
 	for _, column := range table.Columns {
 		columns[column.Name] = true
+		if strings.Contains(strings.ToUpper(column.Type), "BLOB") {
+			blobColumns[column.Name] = true
+		}
 		if column.PrimaryKey {
 			primary = column.Name
 		}
@@ -137,6 +141,9 @@ func (db *DB) AdminRows(ctx context.Context, name string, query AdminQuery) (Adm
 	if query.Query != "" {
 		parts := []string{}
 		for _, column := range table.Columns {
+			if blobColumns[column.Name] {
+				continue
+			}
 			parts = append(parts, `instr(lower(CAST(t.`+adminIdentifier(column.Name)+` AS TEXT)), lower(?)) > 0`)
 			args = append(args, query.Query)
 		}
@@ -193,10 +200,19 @@ func (db *DB) AdminRows(ctx context.Context, name string, query AdminQuery) (Adm
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*)"+from, args...).Scan(&page.Total); err != nil {
 		return page, err
 	}
-	projection := "t.*"
-	if columns["vocabulary_item_id"] {
-		projection += ", (SELECT v.term FROM vocabulary_items v WHERE v.id = t.vocabulary_item_id) AS _term"
+	projectionParts := make([]string, 0, len(table.Columns)+1)
+	for _, column := range table.Columns {
+		identifier := adminIdentifier(column.Name)
+		if blobColumns[column.Name] {
+			projectionParts = append(projectionParts, `printf('[binary: %d bytes]', length(t.`+identifier+`)) AS `+identifier)
+		} else {
+			projectionParts = append(projectionParts, "t."+identifier)
+		}
 	}
+	if columns["vocabulary_item_id"] {
+		projectionParts = append(projectionParts, "(SELECT v.term FROM vocabulary_items v WHERE v.id = t.vocabulary_item_id) AS _term")
+	}
+	projection := strings.Join(projectionParts, ", ")
 	sortExpression := "t." + adminIdentifier(query.Sort)
 	if strings.HasSuffix(query.Sort, "_at") {
 		// Match the existing chronological indexes for variable-precision RFC3339 timestamps.

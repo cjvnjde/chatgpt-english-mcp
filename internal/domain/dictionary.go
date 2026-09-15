@@ -19,14 +19,17 @@ type SourceRef struct {
 type DictionaryAudio struct {
 	AudioURL    string `json:"audioUrl"`
 	ContentType string `json:"contentType"`
+	MediaID     string `json:"mediaId,omitempty"`
 }
 
 type DictionaryImage struct {
-	Title        string `json:"title,omitempty"`
-	Alt          string `json:"alt,omitempty"`
-	ImageURL     string `json:"imageUrl"`
-	ThumbnailURL string `json:"thumbnailUrl,omitempty"`
-	Credit       string `json:"credit,omitempty"`
+	Title            string `json:"title,omitempty"`
+	Alt              string `json:"alt,omitempty"`
+	ImageURL         string `json:"imageUrl"`
+	ThumbnailURL     string `json:"thumbnailUrl,omitempty"`
+	Credit           string `json:"credit,omitempty"`
+	MediaID          string `json:"mediaId,omitempty"`
+	ThumbnailMediaID string `json:"thumbnailMediaId,omitempty"`
 }
 
 type DictionaryWordGroup struct {

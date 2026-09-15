@@ -219,7 +219,7 @@ function Workspace(props: {
             AbortSignal.timeout(120000),
           ]),
         },
-        "blob",
+        "database",
       );
       if (!active) return;
       const url = URL.createObjectURL(blob);
@@ -502,6 +502,7 @@ function Workspace(props: {
               if (editor() === value) setEditor(undefined);
               saved(message);
             }}
+            changed={saved}
             history={(id) =>
               navigate("review_attempts", "vocabulary_item_id", id)
             }

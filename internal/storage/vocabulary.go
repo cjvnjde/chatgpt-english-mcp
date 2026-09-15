@@ -430,8 +430,26 @@ func (db *DB) DeleteVocabulary(ctx context.Context, ownerKey, itemID string) err
 const vocabularySelect = `
 	SELECT
 		v.id, v.term, v.normalized_term, v.learning_status, v.usefulness, v.personal_interest, v.tags_json,
-		v.custom_description, v.description_source_json, v.notes_json,
-		v.examples_json, v.context, v.selected_entry_index, v.selected_definition_index,
+		v.custom_description, v.description_source_json, v.notes_json, v.examples_json,
+		COALESCE((
+			SELECT json_group_array(json(image_json))
+			FROM (
+				SELECT json_object(
+					'attachmentId', image.id,
+					'mediaId', image.media_id,
+					'contentType', media.content_type,
+					'byteSize', media.byte_size,
+					'originalFilename', image.original_filename,
+					'example', image.example,
+					'createdAt', image.created_at
+				) AS image_json
+				FROM vocabulary_images image
+				JOIN media_objects media ON media.id = image.media_id
+				WHERE image.owner_key = v.owner_key AND image.vocabulary_item_id = v.id
+				ORDER BY rtrim(image.created_at, 'Z'), image.id
+			)
+		), '[]'),
+		v.context, v.selected_entry_index, v.selected_definition_index,
 		v.selected_definition_json, v.created_at, v.updated_at, v.edit_revision,
 		snapshot.id, snapshot.provider, snapshot.normalized_term,
 		snapshot.parser_version, snapshot.dataset_version, snapshot.data_json,
@@ -446,6 +464,7 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 	var descriptionSourceJSON sql.NullString
 	var notesJSON string
 	var examplesJSON string
+	var imagesJSON string
 	var entryIndex sql.NullInt64
 	var definitionIndex sql.NullInt64
 	var selectedDefinitionJSON sql.NullString
@@ -474,6 +493,7 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		&descriptionSourceJSON,
 		&notesJSON,
 		&examplesJSON,
+		&imagesJSON,
 		&item.Context,
 		&entryIndex,
 		&definitionIndex,
@@ -514,6 +534,9 @@ func scanVocabularyItem(scanner rowScanner) (domain.VocabularyItem, error) {
 		return domain.VocabularyItem{}, err
 	}
 	if err := decodeJSON(examplesJSON, &item.Examples, item.ItemID, "examples"); err != nil {
+		return domain.VocabularyItem{}, err
+	}
+	if err := decodeJSON(imagesJSON, &item.Images, item.ItemID, "images"); err != nil {
 		return domain.VocabularyItem{}, err
 	}
 	if descriptionSourceJSON.Valid {

@@ -45,7 +45,7 @@ test("nginx HTML fallback is reported as a configuration error", async () => {
   );
   await assert.rejects(api("/tables"), /Expected JSON/);
   await assert.rejects(
-    api("/database", {}, "blob"),
+    api("/database", {}, "database"),
     /Expected a SQLite database/,
   );
 });
@@ -60,8 +60,39 @@ test("SQLite export returns the binary response intact", async () => {
         headers: { "Content-Type": "application/vnd.sqlite3" },
       }),
   );
-  const blob = await api<Blob>("/database", {}, "blob");
+  const blob = await api<Blob>("/database", {}, "database");
   assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), bytes);
+});
+
+test("media uploads preserve the browser multipart boundary and media downloads accept image blobs", async () => {
+  const requests: RequestInit[] = [];
+  const api = createAPI(
+    "token",
+    () => {},
+    async (_input, init) => {
+      requests.push(init || {});
+      if (init?.method === "POST")
+        return Response.json({ itemId: "word", images: [] });
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        headers: { "Content-Type": "image/png" },
+      });
+    },
+  );
+  const form = new FormData();
+  form.append("expectedRevision", "1");
+  form.append(
+    "image",
+    new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+      type: "image/png",
+    }),
+    "example.png",
+  );
+  await api("/vocabulary/word/images", { method: "POST", body: form });
+  const media = await api<Blob>("/media/hash", {}, "blob");
+  assert.equal(new Headers(requests[0].headers).has("Content-Type"), false);
+  assert.equal(new Headers(requests[0].headers).get("Accept"), "application/json");
+  assert.equal(new Headers(requests[1].headers).get("Accept"), "image/*,audio/*");
+  assert.equal(media.type, "image/png");
 });
 
 test("stale edit failures preserve the session and expose a conflict without retrying", async () => {

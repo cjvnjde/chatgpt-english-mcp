@@ -1,7 +1,9 @@
 package dictionary
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log/slog"
@@ -543,5 +545,159 @@ func TestServiceRechecksCacheAfterDelayedMiss(t *testing.T) {
 		provider.calls != 1 || store.inserts != 1 {
 		t.Fatalf("delayed miss = %#v, error %v; fetches %d, snapshots %d",
 			second.result, second.err, provider.calls, store.inserts)
+	}
+}
+
+func TestCambridgeLookupDownloadsAndDeduplicatesSourceMedia(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio := []byte("ID3\x04\x00\x00\x00\x00\x00\x00")
+	var audioRequests, imageRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/dictionary/english/bank":
+			_, _ = io.WriteString(writer, `
+				<div class="entry-body__el">
+					<span class="hw dhw">bank</span>
+					<div class="uk"><audio><source type="audio/mpeg" src="/media/uk.mp3"></audio></div>
+					<div class="def-block ddef_block">
+						<div class="def ddef_d">land beside a river</div>
+						<div class="dimg"><img src="/images/thumb.png" on="tap:viewer.open(src: '/images/full.png')" alt="River bank"></div>
+					</div>
+				</div>`)
+		case "/media/uk.mp3":
+			audioRequests.Add(1)
+			writer.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = writer.Write(audio)
+		case "/images/full.png", "/images/thumb.png":
+			imageRequests.Add(1)
+			writer.Header().Set("Content-Type", "image/png")
+			_, _ = writer.Write(png)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	baseURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	oldImage := domain.DictionaryImage{
+		ImageURL:     server.URL + "/images/full.png",
+		ThumbnailURL: server.URL + "/images/thumb.png",
+	}
+	oldSnapshot, err := store.InsertDictionarySnapshot(context.Background(), storage.DictionarySnapshotInsert{
+		Provider:       "cambridge",
+		NormalizedTerm: "bank",
+		ParserVersion:  13,
+		Data: domain.DictionarySnapshotData{
+			Status:    http.StatusOK,
+			SourceURL: server.URL + "/dictionary/english/bank",
+			Entries: []domain.DictionaryEntry{{
+				Headword: "bank",
+				Audio: &domain.DictionaryAudioRegions{UK: &domain.DictionaryAudio{
+					AudioURL: server.URL + "/media/uk.mp3", ContentType: "audio/mpeg",
+				}},
+				Definitions: []domain.DictionaryDefinition{{
+					Definition: "land beside a river", Images: []domain.DictionaryImage{oldImage},
+				}},
+			}},
+			Images: []domain.DictionaryImage{oldImage},
+		},
+		FetchedAt: time.Now().Add(-time.Hour),
+		ExpiresAt: time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewService(store, NewCambridgeProvider(baseURL, time.Second, nil), nil).
+		Lookup(context.Background(), "bank", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := result.Entries[0]
+	if entry.Audio == nil || entry.Audio.UK == nil || entry.Audio.UK.MediaID == "" {
+		t.Fatalf("audio was not stored: %#v", entry.Audio)
+	}
+	image := entry.Definitions[0].Images[0]
+	if image.MediaID == "" || image.ThumbnailMediaID == "" || image.ImageURL != server.URL+"/images/full.png" {
+		t.Fatalf("images were not stored with source metadata: %#v", image)
+	}
+	if len(result.Images) != 1 || result.Images[0].MediaID != image.MediaID ||
+		result.Images[0].ThumbnailMediaID != image.ThumbnailMediaID {
+		t.Fatalf("deduplicated document image was not linked to stored media: %#v", result.Images)
+	}
+	if image.MediaID != image.ThumbnailMediaID {
+		t.Fatal("identical full and thumbnail bytes were stored more than once")
+	}
+	storedAudio, err := store.MediaByID(context.Background(), entry.Audio.UK.MediaID)
+	if err != nil || storedAudio.ContentType != "audio/mpeg" || !bytes.Equal(storedAudio.Data, audio) {
+		t.Fatalf("stored audio = %#v, error %v", storedAudio, err)
+	}
+	storedImage, err := store.MediaByID(context.Background(), image.MediaID)
+	if err != nil || storedImage.ContentType != "image/png" || !bytes.Equal(storedImage.Data, png) {
+		t.Fatalf("stored image = %#v, error %v", storedImage, err)
+	}
+	backfilled, err := store.DictionarySnapshotByID(context.Background(), oldSnapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backfilledEntry := backfilled.Data.Entries[0]
+	backfilledImage := backfilledEntry.Definitions[0].Images[0]
+	if backfilledEntry.Audio.UK.MediaID != entry.Audio.UK.MediaID ||
+		backfilledImage.MediaID != image.MediaID ||
+		backfilledImage.ThumbnailMediaID != image.ThumbnailMediaID ||
+		backfilled.Data.Images[0].MediaID != image.MediaID {
+		t.Fatalf("older saved lookup was not linked to downloaded media: %#v", backfilled.Data)
+	}
+	if audioRequests.Load() != 1 || imageRequests.Load() != 2 {
+		t.Fatalf("media requests: audio=%d images=%d", audioRequests.Load(), imageRequests.Load())
+	}
+}
+
+func TestCambridgeLookupNeverDownloadsCrossOriginMedia(t *testing.T) {
+	var externalRequests atomic.Int32
+	external := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		externalRequests.Add(1)
+		writer.Header().Set("Content-Type", "image/png")
+		_, _ = writer.Write([]byte("\x89PNG\r\n\x1a\n"))
+	}))
+	t.Cleanup(external.Close)
+	var source *httptest.Server
+	source = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/dictionary/english/bank" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = io.WriteString(writer, `<div class="entry-body__el">
+			<span class="hw dhw">bank</span>
+			<div class="def ddef_d">land beside a river</div>
+			<div class="dimg"><img src="`+external.URL+`/private.png"></div>
+		</div>`)
+	}))
+	t.Cleanup(source.Close)
+	baseURL, err := url.Parse(source.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	result, err := NewService(store, NewCambridgeProvider(baseURL, time.Second, nil), nil).
+		Lookup(context.Background(), "bank", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Images) != 1 || result.Images[0].MediaID != "" || externalRequests.Load() != 0 {
+		t.Fatalf("cross-origin media was downloaded: images=%#v requests=%d", result.Images, externalRequests.Load())
 	}
 }
