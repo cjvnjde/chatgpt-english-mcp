@@ -449,6 +449,24 @@ try {
   await navigate("Analytics");
   await settled();
   assert.equal(
+    await page.locator("meter").count(),
+    0,
+    "Analytics must not use browser-native horizontal meters",
+  );
+  assert.equal(
+    await page.locator(".analytics-breakdown").count(),
+    2,
+    "Analytics uses the same neutral metric-card treatment as other pages",
+  );
+  const learningMetric = page
+    .locator(".analytics-breakdown > div")
+    .filter({ has: page.locator('.badge[data-value="learning"]') });
+  assert.equal(await learningMetric.locator("strong").textContent(), "65");
+  assert.equal(
+    await learningMetric.locator("small").textContent(),
+    "100% of vocabulary",
+  );
+  assert.equal(
     await page
       .locator("section")
       .filter({

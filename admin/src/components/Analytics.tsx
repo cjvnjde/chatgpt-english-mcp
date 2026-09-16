@@ -161,49 +161,69 @@ export default function Analytics(props: {
           <div class="analytics-grid">
             <section class="panel chart-panel">
               <h2>Vocabulary by status</h2>
-              <For each={["new", "learning", "learned", "archived"]}>
-                {(state) => {
-                  const count = () =>
-                    safe()!.statuses.find((r) => r.label === state)?.count || 0;
-                  return (
-                    <div class="bar-row">
-                      <span class="badge" data-value={state}>
-                        {state}
-                      </span>
-                      <meter
-                        min="0"
-                        max={Math.max(total(), 1)}
-                        value={count()}
-                        aria-label={`${state} vocabulary`}
-                      />
-                      <strong>{count()}</strong>
-                    </div>
-                  );
-                }}
-              </For>
+              <dl
+                class="analytics-breakdown"
+                aria-label="Vocabulary status distribution"
+              >
+                <For each={["new", "learning", "learned", "archived"]}>
+                  {(state) => {
+                    const count = () =>
+                      safe()!.statuses.find((r) => r.label === state)?.count ||
+                      0;
+                    return (
+                      <div>
+                        <dt>
+                          <span class="badge" data-value={state}>
+                            {state}
+                          </span>
+                        </dt>
+                        <dd>
+                          <strong>{count().toLocaleString()}</strong>
+                          <small>
+                            {total()
+                              ? Math.round((count() / total()) * 100)
+                              : 0}
+                            % of vocabulary
+                          </small>
+                        </dd>
+                      </div>
+                    );
+                  }}
+                </For>
+              </dl>
             </section>
             <section class="panel chart-panel">
               <h2>Submitted ratings</h2>
-              <For each={["again", "hard", "good", "easy"]}>
-                {(rating) => {
-                  const count = () =>
-                    safe()!.ratings.find((r) => r.label === rating)?.count || 0;
-                  return (
-                    <div class="bar-row">
-                      <span class="badge" data-value={rating}>
-                        {rating}
-                      </span>
-                      <meter
-                        min="0"
-                        max={Math.max(reviews(), 1)}
-                        value={count()}
-                        aria-label={`${rating} ratings`}
-                      />
-                      <strong>{count()}</strong>
-                    </div>
-                  );
-                }}
-              </For>
+              <dl
+                class="analytics-breakdown"
+                aria-label="Submitted rating distribution"
+              >
+                <For each={["again", "hard", "good", "easy"]}>
+                  {(rating) => {
+                    const count = () =>
+                      safe()!.ratings.find((r) => r.label === rating)?.count ||
+                      0;
+                    return (
+                      <div>
+                        <dt>
+                          <span class="badge" data-value={rating}>
+                            {rating}
+                          </span>
+                        </dt>
+                        <dd>
+                          <strong>{count().toLocaleString()}</strong>
+                          <small>
+                            {reviews()
+                              ? Math.round((count() / reviews()) * 100)
+                              : 0}
+                            % of submitted
+                          </small>
+                        </dd>
+                      </div>
+                    );
+                  }}
+                </For>
+              </dl>
               <details>
                 <summary>Effective scheduling ratings</summary>
                 <p class="muted">

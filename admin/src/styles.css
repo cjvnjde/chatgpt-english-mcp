@@ -440,27 +440,37 @@
     font-size: 0.8125rem;
     margin-left: 12px;
   }
-  .bar-row {
+  .analytics-breakdown {
     display: grid;
-    grid-template-columns: 84px 1fr 40px;
-    align-items: center;
-    gap: 14px;
-    margin: 15px 0;
-    font-size: 0.875rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
   }
-  meter {
-    width: 100%;
-    height: 16px;
+  .analytics-breakdown > div {
+    min-width: 0;
+    padding: 16px;
+    border-radius: 10px;
+    background: var(--surface-card);
   }
-  meter::-webkit-meter-bar {
-    border: none;
-    background: #eaf0f8;
+  .analytics-breakdown dt {
+    margin-bottom: 14px;
   }
-  meter::-webkit-meter-optimum-value {
-    background: #5184d9;
+  .analytics-breakdown dd {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0;
+    flex-wrap: wrap;
   }
-  meter::-moz-meter-bar {
-    background: #5184d9;
+  .analytics-breakdown strong {
+    color: var(--ink);
+    font-size: 1.75rem;
+    line-height: 1;
+    letter-spacing: -0.04em;
+  }
+  .analytics-breakdown small {
+    color: var(--muted);
+    font-size: 0.75rem;
   }
   .activity-bars {
     display: flex;
@@ -2009,12 +2019,7 @@
   }
 
   .activity-fill,
-  .probability-track span,
-  meter::-webkit-meter-optimum-value {
-    background: var(--primary);
-  }
-
-  meter::-moz-meter-bar {
+  .probability-track span {
     background: var(--primary);
   }
 
