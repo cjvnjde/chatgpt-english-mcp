@@ -212,7 +212,7 @@ await page.route("**/admin/api/**", async (route) => {
   } else if (method === "PATCH" && endpoint === "/vocabulary/0") {
     const changes = JSON.parse(route.request().postData() || "{}");
     assert.equal(changes.expectedRevision, vocabularyRevision);
-    assert.equal(changes.context, "Edited encounter context");
+    assert.equal(changes.context, "Edited encounter\ncontext");
     rows[0].context = changes.context;
     vocabularyRevision += 1;
     body = vocabularyFixture(rows[0]);
@@ -401,9 +401,19 @@ try {
     ),
   );
   await screenshot("vocabulary-entry-media");
-  await page
-    .getByRole("textbox", { name: "Context / meaning", exact: true })
-    .fill("Edited encounter context");
+  const contextEditor = page.getByRole("textbox", {
+    name: "Context / meaning",
+    exact: true,
+  });
+  assert.equal(
+    await contextEditor.evaluate((control) => control.tagName),
+    "TEXTAREA",
+  );
+  assert.ok(
+    (await contextEditor.evaluate((control) => control.rows)) >= 3,
+    "Context editing must expose a multiline control",
+  );
+  await contextEditor.fill("Edited encounter\ncontext");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await page
     .getByRole("dialog", { name: "Vocabulary item", exact: true })
@@ -427,7 +437,7 @@ try {
     await page
       .getByRole("textbox", { name: "Context / meaning", exact: true })
       .inputValue(),
-    "Edited encounter context",
+    "Edited encounter\ncontext",
   );
   const dialogBox = await reopened.boundingBox();
   assert.ok(dialogBox, "Vocabulary dialog must have a visible bounding box");

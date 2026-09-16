@@ -360,7 +360,8 @@ function Editor(props: {
         </Show>
         <label>
           Context / meaning
-          <input
+          <textarea
+            rows="3"
             value={draft().context}
             onInput={(e) => change("context", e.currentTarget.value)}
             placeholder="Optional: distinguish this meaning from another"
