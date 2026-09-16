@@ -103,7 +103,8 @@ Do not save incidental words, proper names, typos, meaningless fragments, every
 synonym, clearly known terms, arbitrary combinations, or impractical obscure
 vocabulary.
 
-Use vocabulary_update for notes, examples, tags, descriptions, usefulness, or archival.
+Use vocabulary_update for context, notes, examples, tags, descriptions,
+usefulness, or archival.
 - Notes capture learner-specific difficulties, confusions, collocations,
   warnings, or memory aids, rather than copied definitions.
 - Examples should be short and natural. Prefer corrected learner sentences or

@@ -43,10 +43,6 @@
     font-weight: 550;
     white-space: nowrap;
   }
-  button:hover {
-    background: #eef3fb;
-    border-color: #9cacbf;
-  }
   button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -326,17 +322,34 @@
     min-width: 110px;
     overflow-wrap: anywhere;
   }
+  td {
+    vertical-align: middle;
+  }
   td > span:not(.badge) {
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  tr:hover td {
-    background: #f8faff;
+  th:last-child,
+  .row-action-cell {
+    width: 1%;
+    min-width: 110px;
+    text-align: right;
+    white-space: nowrap;
   }
-  td:last-child {
-    min-width: 50px;
+  .row-actions {
+    display: inline-flex;
+    min-height: 28px;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+  .row-actions .text-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
   }
   .pagination {
     padding: 14px 18px;
@@ -651,16 +664,6 @@
     text-align: left;
     white-space: normal;
   }
-  button,
-  summary {
-    transition:
-      background-color 140ms ease,
-      border-color 140ms ease;
-  }
-  .overview-links button:hover {
-    color: var(--primary);
-    border-color: var(--primary);
-  }
   @media (max-width: 760px) {
     .overview-focus {
       grid-template-columns: 1fr;
@@ -677,12 +680,6 @@
     }
     .overview-links {
       gap: 0 16px;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    button,
-    summary {
-      transition: none;
     }
   }
   .suggestion-explainer {
@@ -875,9 +872,6 @@
     color: #164eac;
     border-color: #b6cbeb;
   }
-  .filter-pills button:hover {
-    background: #edf2f8;
-  }
   .density-toggle {
     font-size: 0.75rem;
     min-height: 30px;
@@ -949,10 +943,6 @@
     font-size: inherit;
     font-weight: inherit;
     width: 100%;
-  }
-  .sort-heading:hover {
-    color: var(--primary);
-    background: transparent;
   }
   th[aria-sort="ascending"],
   th[aria-sort="descending"] {
@@ -1163,11 +1153,6 @@
     background: var(--primary);
     border-color: var(--primary);
   }
-  .primary:hover {
-    color: white;
-    background: #154da9;
-    border-color: #154da9;
-  }
   .text-button,
   .row-link {
     border: 0;
@@ -1180,14 +1165,6 @@
     font-weight: 650;
     text-align: left;
     white-space: normal;
-  }
-  .text-button:hover,
-  .row-link:hover {
-    text-decoration: underline;
-    background: transparent;
-  }
-  .text-button + .text-button {
-    margin-left: 10px;
   }
   .badge {
     display: inline-flex;
@@ -1675,11 +1652,6 @@
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.03);
   }
 
-  button:hover {
-    color: var(--ink);
-    background: var(--canvas);
-    border-color: var(--border);
-  }
 
   button:active {
     background: var(--surface-soft);
@@ -1820,10 +1792,6 @@
     box-shadow: none;
   }
 
-  nav button:hover {
-    color: var(--ink);
-    background: transparent;
-  }
 
   nav button.active {
     color: var(--ink);
@@ -1953,11 +1921,6 @@
     border-color: var(--primary);
   }
 
-  .primary:hover {
-    color: #ffffff;
-    background: var(--primary);
-    border-color: var(--primary);
-  }
 
   .primary:active {
     color: #ffffff;
@@ -2014,10 +1977,6 @@
     background: var(--canvas);
   }
 
-  .overview-links button:hover {
-    color: var(--ink);
-    border-color: var(--border);
-  }
 
   .stats {
     gap: 24px;
@@ -2091,9 +2050,6 @@
     color: var(--muted);
   }
 
-  .filter-pills button:hover {
-    background: transparent;
-  }
 
   .filter-pills button[aria-pressed="true"],
   button.selected {
@@ -2135,10 +2091,30 @@
     padding: 15px 16px;
     border-bottom-color: var(--border);
   }
-
-  tr:hover td {
-    background: inherit;
+  .sort-heading {
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    line-height: inherit;
   }
+
+  .text-button,
+  .row-link {
+    min-height: 28px;
+    padding: 2px 0;
+    border: 0;
+    color: var(--primary);
+    background: transparent;
+    box-shadow: none;
+    line-height: 1.25;
+  }
+
+  .row-actions .text-button {
+    margin: 0;
+  }
+
 
   .group-divider td,
   .unavailable td {

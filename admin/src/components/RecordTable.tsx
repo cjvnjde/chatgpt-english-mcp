@@ -661,25 +661,27 @@ export default function RecordTable(props: {
                             </td>
                           )}
                         </For>
-                        <td>
-                          <button
-                            class="text-button"
-                            disabled={page.loading}
-                            onClick={() => props.open(row)}
-                            aria-label={`Inspect ${display(row.term || row._term || row.id)}`}
-                          >
-                            Open
-                          </button>
-                          <Show when={props.table.name === "vocabulary_items"}>
+                        <td class="row-action-cell">
+                          <div class="row-actions">
                             <button
                               class="text-button"
                               disabled={page.loading}
-                              onClick={() => props.inspect(row)}
-                              aria-label={`Inspect raw ${display(row.term)}`}
+                              onClick={() => props.open(row)}
+                              aria-label={`Inspect ${display(row.term || row._term || row.id)}`}
                             >
-                              Raw
+                              Open
                             </button>
-                          </Show>
+                            <Show when={props.table.name === "vocabulary_items"}>
+                              <button
+                                class="text-button"
+                                disabled={page.loading}
+                                onClick={() => props.inspect(row)}
+                                aria-label={`Inspect raw ${display(row.term)}`}
+                              >
+                                Raw
+                              </button>
+                            </Show>
+                          </div>
                         </td>
                       </tr>
                     )}

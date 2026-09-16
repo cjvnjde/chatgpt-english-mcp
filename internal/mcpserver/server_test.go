@@ -162,15 +162,18 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	status := domain.LearningStatusLearned
 	tags := []string{"Core", "Finance"}
 	notes := []string{"Updated personal note."}
+	contextValue := "money held by a financial institution"
 	updatedMetadata := callTool[domain.VocabularyItem](t, ctx, clientSession, "vocabulary_update", vocabularyUpdateByTermInput{
 		Term: "bank",
 		Changes: VocabularyUpdateChanges{
-			Status: &status,
-			Tags:   &tags,
-			Notes:  &notes,
+			Status:  &status,
+			Tags:    &tags,
+			Notes:   &notes,
+			Context: &contextValue,
 		},
 	})
-	if updatedMetadata.Status != domain.LearningStatusLearned || len(updatedMetadata.Tags) != 2 {
+	if updatedMetadata.Status != domain.LearningStatusLearned || len(updatedMetadata.Tags) != 2 ||
+		updatedMetadata.Context != contextValue {
 		t.Fatalf("vocabulary update = %#v", updatedMetadata)
 	}
 	if updatedMetadata.CustomDescription != description || len(updatedMetadata.Examples) != 1 {

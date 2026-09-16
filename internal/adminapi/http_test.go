@@ -47,8 +47,8 @@ func TestAdminAuthorizationAndVocabularyLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := item["itemId"].(string)
-	changed := adminRequest(handler, "PATCH", "/vocabulary/"+id, fmt.Sprintf(`{"expectedRevision":%.0f,"status":"learning","notes":["Updated note"]}`, item["revision"]), testToken)
-	if changed.Code != 200 || !strings.Contains(changed.Body.String(), "Updated note") {
+	changed := adminRequest(handler, "PATCH", "/vocabulary/"+id, fmt.Sprintf(`{"expectedRevision":%.0f,"status":"learning","context":"edited meaning","notes":["Updated note"]}`, item["revision"]), testToken)
+	if changed.Code != 200 || !strings.Contains(changed.Body.String(), "Updated note") || !strings.Contains(changed.Body.String(), `"context":"edited meaning"`) {
 		t.Fatalf("update: %s", changed.Body.String())
 	}
 	for _, input := range []string{`{"expectedRevision":2,"status":"invalid"}`, `{"expectedRevision":2,"unsupported":true}`, `{"expectedRevision":2,"status":"new"} {}`, `{"expectedRevision":2,"notes":"wrong type"}`} {

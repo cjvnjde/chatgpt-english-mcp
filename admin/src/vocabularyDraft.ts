@@ -58,6 +58,7 @@ export function vocabularyChanges(base: Draft, draft: Draft, isNew = false) {
   const changes: Record<string, unknown> = {};
   for (const field of [
     "status",
+    "context",
     "personalInterest",
     "customDescription",
     "notes",
@@ -82,10 +83,7 @@ export function vocabularyChanges(base: Draft, draft: Draft, isNew = false) {
   }
   if (draft.usefulness && draft.usefulness !== base.usefulness)
     changes.usefulness = draft.usefulness;
-  if (isNew) {
-    changes.term = draft.term;
-    changes.context = draft.context;
-  }
+  if (isNew) changes.term = draft.term;
   return changes;
 }
 

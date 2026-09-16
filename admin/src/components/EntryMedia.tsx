@@ -7,13 +7,8 @@ import {
   Show,
 } from "solid-js";
 import type { API } from "../api";
-import type {
-  DictionaryAudio,
-  DictionaryImage,
-  DictionaryLookup,
-  Vocabulary,
-  VocabularyImage,
-} from "../types";
+import { dictionaryMedia } from "../dictionaryMedia";
+import type { Vocabulary, VocabularyImage } from "../types";
 
 export default function EntryMedia(props: {
   api: API;
@@ -300,27 +295,6 @@ function retainLoadedMedia(current: Vocabulary, updated: Vocabulary): Vocabulary
   };
 }
 
-function dictionaryMedia(lookup: DictionaryLookup | undefined): {
-  audio: { label: "UK" | "US"; media: DictionaryAudio }[];
-  images: DictionaryImage[];
-} {
-  const audio: { label: "UK" | "US"; media: DictionaryAudio }[] = [];
-  const images = new Map<string, DictionaryImage>();
-  const addImage = (image: DictionaryImage) => {
-    const mediaId = image.mediaId || image.thumbnailMediaId;
-    if (mediaId && !images.has(mediaId)) images.set(mediaId, image);
-  };
-  for (const image of lookup?.images || []) addImage(image);
-  for (const entry of lookup?.entries || []) {
-    if (entry.audio?.uk?.mediaId)
-      audio.push({ label: "UK", media: entry.audio.uk });
-    if (entry.audio?.us?.mediaId)
-      audio.push({ label: "US", media: entry.audio.us });
-    for (const definition of entry.definitions || [])
-      for (const image of definition.images || []) addImage(image);
-  }
-  return { audio, images: [...images.values()] };
-}
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;

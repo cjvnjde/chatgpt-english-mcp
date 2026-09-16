@@ -609,6 +609,41 @@ func TestContextOnlySensesRemainDistinctAndReadable(t *testing.T) {
 	}
 }
 
+func TestContextUpdateChangesContextIdentityWithoutChangingItem(t *testing.T) {
+	service := newTestService(t, "owner")
+	ctx := context.Background()
+	finance, err := service.Save(ctx, "bank", InitialValues{Context: "a financial institution"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	river, err := service.Save(ctx, "bank", InitialValues{Context: "land beside a river"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := "  money and banking  "
+	updated, err := service.Update(ctx, finance.ItemID, "", UpdateChanges{Context: &replacement})
+	if err != nil || updated.ItemID != finance.ItemID || updated.Context != "money and banking" || updated.Sense != nil {
+		t.Fatalf("context update = %#v, error %v", updated, err)
+	}
+	oldContext, err := service.Save(ctx, "bank", InitialValues{Context: "a financial institution"})
+	if err != nil || !oldContext.Created || oldContext.ItemID == finance.ItemID {
+		t.Fatalf("old identity was not released: %#v, error %v", oldContext, err)
+	}
+
+	conflictingContext := river.Context
+	_, err = service.Update(ctx, finance.ItemID, "", UpdateChanges{Context: &conflictingContext})
+	assertApplicationError(t, err, apperr.Conflict)
+	invalid := string([]byte{0xff})
+	notes := []string{"Must not persist."}
+	_, err = service.Update(ctx, finance.ItemID, "", UpdateChanges{Context: &invalid, Notes: &notes})
+	assertApplicationError(t, err, apperr.InvalidArgument)
+	current, err := service.Get(ctx, finance.ItemID, "")
+	if err != nil || current.Context != updated.Context || len(current.Notes) != 0 {
+		t.Fatalf("rejected context update mutated item: %#v, error %v", current, err)
+	}
+}
+
 func TestContextAndDefinitionWithSameTextRemainSeparateSenses(t *testing.T) {
 	for _, contextFirst := range []bool{true, false} {
 		t.Run(map[bool]string{true: "context_first", false: "definition_first"}[contextFirst], func(t *testing.T) {

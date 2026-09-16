@@ -21,6 +21,52 @@ function text(node, value) {
   if (node.textContent !== next) node.textContent = next;
 }
 
+const browserThemeColorKeys = {
+  "--browser-sidebar-background": ["sidebar", "toolbar", "frame"],
+  "--browser-sidebar-text": ["sidebar_text", "toolbar_text", "tab_text"],
+  "--browser-sidebar-border": ["sidebar_border", "toolbar_bottom_separator"],
+  "--browser-sidebar-accent": ["sidebar_highlight", "button_background_hover"],
+  "--browser-sidebar-accent-active": ["button_background_active", "sidebar_highlight"],
+  "--browser-sidebar-accent-text": ["sidebar_highlight_text", "sidebar_text", "toolbar_text"],
+  "--browser-sidebar-field": ["toolbar_field", "sidebar", "toolbar"],
+  "--browser-sidebar-field-text": ["toolbar_field_text", "sidebar_text", "toolbar_text"],
+};
+
+function themeColor(value) {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value) || value.length < 3) return "";
+  const components = value.slice(0, 3).map(Number);
+  return components.every(Number.isFinite) ? `rgb(${components.join(" ")})` : "";
+}
+
+function applyBrowserTheme(theme = {}) {
+  const root = document.documentElement;
+  const colors = theme.colors || {};
+  for (const [variable, keys] of Object.entries(browserThemeColorKeys)) {
+    root.style.removeProperty(variable);
+    for (const key of keys) {
+      const color = themeColor(colors[key]);
+      if (!color) continue;
+      root.style.setProperty(variable, color);
+      break;
+    }
+  }
+  const scheme = theme.properties?.color_scheme;
+  root.style.colorScheme = scheme === "light" || scheme === "dark" ? scheme : "";
+}
+
+async function refreshBrowserTheme() {
+  if (!browser.theme?.getCurrent) {
+    applyBrowserTheme();
+    return;
+  }
+  try {
+    applyBrowserTheme(await browser.theme.getCurrent(windowId));
+  } catch {
+    applyBrowserTheme();
+  }
+}
+
 function safeURL(value) {
   try {
     const url = new URL(value);
@@ -363,11 +409,18 @@ browser.runtime.onMessage.addListener(message => {
   if (windowId === undefined) { earlyUpdates.push(message); return; }
   if (message.windowId === windowId) applyState(message.state);
 });
+if (browser.theme?.onUpdated) {
+  browser.theme.onUpdated.addListener(({ theme, windowId: themedWindowId }) => {
+    if (themedWindowId === undefined || themedWindowId === windowId)
+      applyBrowserTheme(theme);
+  });
+}
 window.addEventListener("unload", () => { sidebarPort?.disconnect(); }, { once: true });
 
 async function start() {
   try {
     windowId = (await browser.windows.getCurrent()).id;
+    await refreshBrowserTheme();
     sidebarPort = browser.runtime.connect({ name: `sidebar:${windowId}` });
     for (const message of earlyUpdates) if (message.windowId === windowId) applyState(message.state);
     earlyUpdates = [];

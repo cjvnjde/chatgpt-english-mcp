@@ -140,6 +140,7 @@ Identify exactly one item by `itemId` or `term`:
     status?: LearningStatus;
     usefulness?: Usefulness;
     personalInterest?: PersonalInterest;
+    context?: string;
     tags?: string[];
     customDescription?: string;
     descriptionSource?: { title?: string; url?: string };
@@ -151,7 +152,9 @@ Identify exactly one item by `itemId` or `term`:
 // Output: VocabularyItem directly
 ```
 
-`changes` must contain at least one field. Omitted fields are preserved; supplied arrays replace the previous arrays, so `[]` clears them. An empty custom description clears its source too unless another valid source change is supplied. An empty source object clears only the attribution.
+`changes` must contain at least one field. Omitted fields are preserved; supplied arrays replace the previous arrays, so `[]` clears them. A supplied context is trimmed, and an empty string clears it. An empty custom description clears its source too unless another valid source change is supplied. An empty source object clears only the attribution.
+
+A context-only update is valid: `{"itemId":"…","changes":{"context":"revised cue"}}`. It preserves the item ID, FSRS card, due date, review token, and review history. On an item with a selected dictionary definition, context is editable metadata and does not change that selected sense. On an item without one, context defines its saved meaning identity; an edit that would duplicate another meaning for the same owner and normalized term returns a conflict without changing either item.
 
 An update containing only `usefulness` is valid. It replaces the saved hint and recalculates effective usefulness with offline evidence. Omission preserves both hint and result; an empty string, null, or unsupported value is rejected. There is no clear-hint operation. Do not repeatedly submit the returned result as a new hint: it is already the combined assessment. This updates vocabulary metadata without resetting the FSRS card, due date, review token, or review history.
 

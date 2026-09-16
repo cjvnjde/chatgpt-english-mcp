@@ -171,8 +171,8 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 		}
 		item, err := service.Update(r.Context(), r.PathValue("id"), "", vocabulary.UpdateChanges{
 			ExpectedRevision: &revision,
-			Status:           changes.Status, Usefulness: changes.Usefulness, PersonalInterest: changes.PersonalInterest, Tags: changes.Tags, CustomDescription: changes.CustomDescription,
-			DescriptionSource: changes.DescriptionSource, Notes: changes.Notes, Examples: changes.Examples,
+			Status:           changes.Status, Usefulness: changes.Usefulness, PersonalInterest: changes.PersonalInterest, Context: changes.Context,
+			Tags: changes.Tags, CustomDescription: changes.CustomDescription, DescriptionSource: changes.DescriptionSource, Notes: changes.Notes, Examples: changes.Examples,
 		})
 		return adminVocabulary(item), err
 	})

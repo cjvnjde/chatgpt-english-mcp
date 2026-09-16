@@ -44,14 +44,16 @@ const calls = [];
 let failTable = false,
   emptyAnalytics = false,
   emptySuggestions = false,
-  uploadedImage = false;
+  uploadedImage = false,
+  vocabularyRevision = 1;
 let holdTable;
 function vocabularyFixture(row) {
   const item = {
     itemId: row.id,
-    revision: row.id === "0" && uploadedImage ? 2 : 1,
+    revision: row.id === "0" ? vocabularyRevision : 1,
     term: row.term,
     normalizedTerm: row.term,
+    context: row.context,
     status: row.learning_status,
     usefulness: row.usefulness,
     personalInterest: row.personal_interest,
@@ -63,33 +65,39 @@ function vocabularyFixture(row) {
     updatedAt: row.updated_at,
   };
   if (row.id !== "0") return item;
+  const ukAudio = {
+    audioUrl: "https://dictionary.cambridge.org/media/uk.mp3",
+    contentType: "audio/mpeg",
+    mediaId: "dictionary-audio-uk",
+  };
+  const usAudio = {
+    audioUrl: "https://dictionary.cambridge.org/media/us.mp3",
+    contentType: "audio/mpeg",
+    mediaId: "dictionary-audio-us",
+  };
   item.lookup = {
     lookupId: "dictionary-lookup",
-    entries: [
-      {
-        headword: row.term,
-        audio: {
-          uk: {
-            audioUrl: "https://dictionary.cambridge.org/media/uk.mp3",
-            contentType: "audio/mpeg",
-            mediaId: "dictionary-audio",
-          },
-        },
-        definitions: [
-          {
-            definition: "an unexpected pleasant discovery",
-            examples: [],
-            images: [
+    entries: Array.from({ length: 6 }, (_, index) => ({
+      headword: row.term,
+      audio: index < 3 ? { uk: ukAudio, us: usAudio } : { us: usAudio },
+      definitions:
+        index === 0
+          ? [
               {
-                imageUrl: "https://dictionary.cambridge.org/images/source.png",
-                mediaId: "dictionary-image",
-                alt: "Cambridge illustration",
+                definition: "an unexpected pleasant discovery",
+                examples: [],
+                images: [
+                  {
+                    imageUrl:
+                      "https://dictionary.cambridge.org/images/source.png",
+                    mediaId: "dictionary-image",
+                    alt: "Cambridge illustration",
+                  },
+                ],
               },
-            ],
-          },
-        ],
-      },
-    ],
+            ]
+          : [],
+    })),
     images: [],
   };
   item.images = [
@@ -121,7 +129,8 @@ await page.route("**/admin/api/**", async (route) => {
   const method = route.request().method();
   assert.ok(
     method === "GET" ||
-      (method === "POST" && endpoint === "/vocabulary/0/images"),
+      (method === "POST" && endpoint === "/vocabulary/0/images") ||
+      (method === "PATCH" && endpoint === "/vocabulary/0"),
     "Browser smoke may only mutate its mocked vocabulary fixture",
   );
   const q = Object.fromEntries(url.searchParams);
@@ -187,9 +196,10 @@ await page.route("**/admin/api/**", async (route) => {
       /^multipart\/form-data;\s*boundary=/,
     );
     uploadedImage = true;
+    vocabularyRevision += 1;
     body = vocabularyFixture(rows[0]);
   } else if (endpoint.startsWith("/media/")) {
-    const audio = endpoint.endsWith("dictionary-audio");
+    const audio = endpoint.includes("dictionary-audio-");
     return route.fulfill({
       contentType: audio ? "audio/mpeg" : "image/png",
       body: audio
@@ -199,6 +209,13 @@ await page.route("**/admin/api/**", async (route) => {
             "base64",
           ),
     });
+  } else if (method === "PATCH" && endpoint === "/vocabulary/0") {
+    const changes = JSON.parse(route.request().postData() || "{}");
+    assert.equal(changes.expectedRevision, vocabularyRevision);
+    assert.equal(changes.context, "Edited encounter context");
+    rows[0].context = changes.context;
+    vocabularyRevision += 1;
+    body = vocabularyFixture(rows[0]);
   } else if (endpoint.startsWith("/vocabulary/")) {
     const row = rows.find((row) => row.id === endpoint.split("/").at(-1));
     assert.ok(row, "The editor must request an existing fixture item");
@@ -349,6 +366,12 @@ try {
   await page.getByRole("img", { name: "Cambridge illustration" }).waitFor();
   await page.getByRole("img", { name: "A personal memory cue" }).waitFor();
   await page.locator('audio[aria-label="UK pronunciation"]').waitFor();
+  await page.locator('audio[aria-label="US pronunciation"]').waitFor();
+  assert.equal(
+    await page.locator("audio").count(),
+    2,
+    "Repeated dictionary entries must render each stored pronunciation once",
+  );
   assert.ok(
     await page.getByLabel("Image file", { exact: true }).isVisible(),
     "Editor exposes the image attachment picker",
@@ -378,7 +401,41 @@ try {
     ),
   );
   await screenshot("vocabulary-entry-media");
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Context / meaning", exact: true })
+    .fill("Edited encounter context");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Vocabulary item", exact: true })
+    .waitFor({ state: "hidden" });
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.method === "PATCH" && call.endpoint === "/vocabulary/0",
+    ),
+    "Existing context edits must use the vocabulary PATCH endpoint",
+  );
+  await page
+    .getByRole("button", { name: "Attention word 0", exact: true })
+    .click();
+  const reopened = page.getByRole("dialog", {
+    name: "Vocabulary item",
+    exact: true,
+  });
+  await reopened.waitFor();
+  assert.equal(
+    await page
+      .getByRole("textbox", { name: "Context / meaning", exact: true })
+      .inputValue(),
+    "Edited encounter context",
+  );
+  const dialogBox = await reopened.boundingBox();
+  assert.ok(dialogBox, "Vocabulary dialog must have a visible bounding box");
+  await page.mouse.click(
+    dialogBox.x + dialogBox.width / 2,
+    Math.max(1, dialogBox.y / 2),
+  );
+  await reopened.waitFor({ state: "hidden" });
   await navigate("Analytics");
   await settled();
   assert.equal(
@@ -476,6 +533,37 @@ try {
       .evaluate((el) => el === document.activeElement),
   );
   await page.keyboard.press("Escape");
+  const actionButtons = page
+    .locator("tbody tr")
+    .first()
+    .locator(".row-actions button");
+  assert.equal(await actionButtons.count(), 2);
+  const actionLayout = await actionButtons.evaluateAll((buttons) =>
+    buttons.map((button) => {
+      const box = button.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      return {
+        top: box.top,
+        height: box.height,
+        background: style.backgroundColor,
+        transitionDuration: style.transitionDuration,
+      };
+    }),
+  );
+  assert.equal(actionLayout[0].top, actionLayout[1].top);
+  assert.equal(actionLayout[0].height, actionLayout[1].height);
+  assert.ok(
+    actionLayout.every((button) => button.transitionDuration === "0s"),
+    "Table actions must not animate",
+  );
+  await actionButtons.first().hover();
+  assert.equal(
+    await actionButtons
+      .first()
+      .evaluate((button) => getComputedStyle(button).backgroundColor),
+    actionLayout[0].background,
+    "Table actions must not add a hover background",
+  );
   const rowHeight = await page
     .locator("tbody tr")
     .first()

@@ -15,6 +15,7 @@ import (
 
 var (
 	ErrEditConflict             = errors.New("vocabulary edit revision conflicts with current item")
+	ErrSenseConflict            = errors.New("vocabulary sense conflicts with another item")
 	ErrInvalidDescriptionSource = errors.New("description source requires a non-empty custom description")
 )
 
@@ -52,6 +53,8 @@ type VocabularyUpdate struct {
 	Status               *domain.LearningStatus
 	Usefulness           *domain.Usefulness
 	PersonalInterest     *domain.PersonalInterest
+	Context              *string
+	SenseKey             *string
 	Tags                 *[]string
 	CustomDescription    *string
 	SetDescriptionSource bool
@@ -209,9 +212,31 @@ func (db *DB) UpdateVocabulary(ctx context.Context, input VocabularyUpdate) (dom
 	if source != nil && strings.TrimSpace(description) == "" {
 		return domain.VocabularyItem{}, ErrInvalidDescriptionSource
 	}
+	if input.SenseKey != nil {
+		var conflictingID string
+		err := transaction.QueryRowContext(ctx, `
+			SELECT id FROM vocabulary_items
+			WHERE owner_key = ? AND normalized_term = ? AND sense_key = ? AND id <> ?
+			LIMIT 1
+		`, input.OwnerKey, current.NormalizedTerm, *input.SenseKey, input.ItemID).Scan(&conflictingID)
+		if err == nil {
+			return domain.VocabularyItem{}, ErrSenseConflict
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return domain.VocabularyItem{}, fmt.Errorf("check vocabulary sense conflict: %w", err)
+		}
+	}
 
-	assignments := make([]string, 0, 11)
-	arguments := make([]any, 0, 13)
+	assignments := make([]string, 0, 13)
+	arguments := make([]any, 0, 15)
+	if input.Context != nil {
+		assignments = append(assignments, "context = ?")
+		arguments = append(arguments, *input.Context)
+	}
+	if input.SenseKey != nil {
+		assignments = append(assignments, "sense_key = ?")
+		arguments = append(arguments, *input.SenseKey)
+	}
 	if input.Status != nil {
 		assignments = append(assignments, "learning_status = ?")
 		arguments = append(arguments, *input.Status)

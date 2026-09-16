@@ -151,7 +151,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_update",
 		Title:       "Update saved vocabulary",
-		Description: "Partially update an item's status, personalInterest, usefulness hint, tags, description source, notes, or examples. Set personalInterest high for interesting/learn sooner, low for less important without exclusion, or normal to reset. Personal interest is independent of general usefulness; do not change usefulness to express preferences. A usefulness hint is combined with offline evidence, not a forced override. Omitted fields are preserved.",
+		Description: "Partially update an item's status, personalInterest, usefulness hint, context, tags, description source, notes, or examples. Set personalInterest high for interesting/learn sooner, low for less important without exclusion, or normal to reset. Personal interest is independent of general usefulness; do not change usefulness to express preferences. A usefulness hint is combined with offline evidence, not a forced override. Omitted fields are preserved.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			OpenWorldHint:   &closedWorld,
@@ -161,6 +161,7 @@ func registerVocabularyUpdate(server *mcp.Server, service *vocabulary.Service, l
 			Status:            input.Changes.Status,
 			Usefulness:        input.Changes.Usefulness,
 			PersonalInterest:  input.Changes.PersonalInterest,
+			Context:           input.Changes.Context,
 			Tags:              input.Changes.Tags,
 			CustomDescription: input.Changes.CustomDescription,
 			DescriptionSource: input.Changes.DescriptionSource,

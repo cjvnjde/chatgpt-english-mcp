@@ -470,16 +470,11 @@ async function saveToDictionary(record, message) {
     let result = await client.callTool('vocabulary_save', args);
     if (record.state !== state) return;
     if (!result.itemId) throw new Error('The MCP response did not confirm a saved vocabulary item.');
-    let contextPreservedAsNote = false;
     if (!result.created) {
-      const notes = [...draft.notes];
-      if (draft.context && cleanDraftText(result.context, MAX_SAVE_CONTEXT) !== draft.context) {
-        notes.push(`Encounter: ${draft.context}`);
-        contextPreservedAsNote = true;
-      }
       const changes = {
+        context: draft.context,
         tags: mergeDraftLists(result.tags, draft.tags, 50, 50, tag => tag.toLocaleLowerCase()),
-        notes: mergeDraftLists(result.notes, notes, 100, 1000),
+        notes: mergeDraftLists(result.notes, draft.notes, 100, 1000),
         examples: mergeDraftLists(result.examples, draft.examples, 100, 1000),
         customDescription: draft.description,
         descriptionSource: draft.sourceTitle || draft.sourceUrl
@@ -495,9 +490,7 @@ async function saveToDictionary(record, message) {
     state.savedItemId = result.itemId;
     state.saveNotice = result.created
       ? 'Added to your vocabulary.'
-      : contextPreservedAsNote
-        ? 'Existing vocabulary updated. The new encounter cue was added to notes.'
-        : 'Existing vocabulary updated with your details.';
+      : 'Existing vocabulary updated with your details.';
   } catch (error) {
     if (record.state !== state) return;
     state.saveStatus = 'error'; state.saveError = error.message || 'Dictionary saving failed.';

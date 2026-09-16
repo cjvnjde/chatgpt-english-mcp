@@ -284,9 +284,6 @@ function Editor(props: {
             <div>
               <h3>{item().term}</h3>
               <code>{item().itemId}</code>
-              <Show when={item().context}>
-                <p class="muted">Context / meaning: {item().context}</p>
-              </Show>
             </div>
             <button type="button" onClick={() => props.history(item().itemId)}>
               Review history
@@ -360,15 +357,15 @@ function Editor(props: {
               placeholder="e.g. put someone through the wringer"
             />
           </label>
-          <label>
-            Context / meaning
-            <input
-              value={draft().context}
-              onInput={(e) => change("context", e.currentTarget.value)}
-              placeholder="Optional: distinguish this meaning from another"
-            />
-          </label>
         </Show>
+        <label>
+          Context / meaning
+          <input
+            value={draft().context}
+            onInput={(e) => change("context", e.currentTarget.value)}
+            placeholder="Optional: distinguish this meaning from another"
+          />
+        </label>
         <div class="form-grid">
           <label>
             Learning status

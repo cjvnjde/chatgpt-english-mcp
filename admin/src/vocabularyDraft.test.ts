@@ -50,6 +50,17 @@ test("interest-only edits do not replace usefulness or unchanged metadata", () =
   assert.equal("usefulness" in created, false);
 });
 
+test("existing context edits are included in partial updates", () => {
+  const base = vocabularyDraft(item);
+  assert.deepEqual(
+    vocabularyPatch(base, { ...base, context: "  financial institution  " }, item.revision),
+    {
+      context: "  financial institution  ",
+      expectedRevision: 4,
+    },
+  );
+});
+
 test("reverting list edits clears dirty state and does not send replacement lists", () => {
   const base = vocabularyDraft(item);
   const edited = { ...base, notes: ["Changed note"] };

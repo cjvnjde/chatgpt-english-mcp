@@ -33,6 +33,7 @@ type VocabularyUpdateChanges struct {
 	Status            *domain.LearningStatus    `json:"status,omitempty" jsonschema:"replacement learning status"`
 	Usefulness        *domain.Usefulness        `json:"usefulness,omitempty" jsonschema:"replacement general-usefulness hint; combined with offline word and expression evidence, not a forced override; omission preserves the existing hint"`
 	PersonalInterest  *domain.PersonalInterest  `json:"personalInterest,omitempty" jsonschema:"replacement personal priority: low reduces selection chance but never excludes; normal resets; high favors learning sooner"`
+	Context           *string                   `json:"context,omitempty" jsonschema:"replacement context or meaning cue; an empty string clears it"`
 	Tags              *[]string                 `json:"tags,omitempty" jsonschema:"replacement tags; an empty array clears them"`
 	CustomDescription *string                   `json:"customDescription,omitempty" jsonschema:"replacement description; an empty string clears it"`
 	DescriptionSource *domain.DescriptionSource `json:"descriptionSource,omitempty" jsonschema:"replacement source; an empty object clears it"`

@@ -8,6 +8,7 @@ export default function Modal(props: {
   busy?: boolean;
 }) {
   let dialog!: HTMLDialogElement;
+  let backdropPointer = false;
   const previous = document.activeElement as HTMLElement | null;
   onMount(() => dialog.showModal());
   onCleanup(() => {
@@ -22,6 +23,24 @@ export default function Modal(props: {
       onCancel={(e) => {
         e.preventDefault();
         if (!props.busy) props.close();
+      }}
+      onPointerDown={(event) => {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        backdropPointer =
+          event.target === event.currentTarget &&
+          (event.clientX < bounds.left ||
+            event.clientX > bounds.right ||
+            event.clientY < bounds.top ||
+            event.clientY > bounds.bottom);
+      }}
+      onClick={(event) => {
+        if (
+          backdropPointer &&
+          event.target === event.currentTarget &&
+          !props.busy
+        )
+          props.close();
+        backdropPointer = false;
       }}
     >
       <div class="dialog-heading">

@@ -66,6 +66,7 @@ type UpdateChanges struct {
 	Status            *domain.LearningStatus
 	Usefulness        *domain.Usefulness
 	PersonalInterest  *domain.PersonalInterest
+	Context           *string
 	Tags              *[]string
 	CustomDescription *string
 	DescriptionSource *domain.DescriptionSource
@@ -212,6 +213,10 @@ func (service *Service) Update(
 	update.ItemID = current.ItemID
 	update.Now = service.now().UTC()
 	update.ExpectedRevision = changes.ExpectedRevision
+	if update.Context != nil && current.Sense == nil {
+		senseKey := vocabularySenseKey("", *update.Context)
+		update.SenseKey = &senseKey
+	}
 
 	item, err := service.store.UpdateVocabulary(ctx, update)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -222,6 +227,9 @@ func (service *Service) Update(
 	}
 	if errors.Is(err, storage.ErrEditConflict) {
 		return domain.VocabularyItem{}, apperr.New(apperr.Conflict, "the vocabulary item has changed; reload it before editing")
+	}
+	if errors.Is(err, storage.ErrSenseConflict) {
+		return domain.VocabularyItem{}, apperr.New(apperr.Conflict, "another saved meaning for this term already uses that context")
 	}
 	if errors.Is(err, storage.ErrInvalidDescriptionSource) {
 		return domain.VocabularyItem{}, apperr.New(apperr.InvalidArgument, "descriptionSource requires a non-empty customDescription")
@@ -516,8 +524,8 @@ func normalizeInitialValues(input InitialValues) (normalizedMetadata, error) {
 }
 
 func normalizeUpdateChanges(input UpdateChanges) (storage.VocabularyUpdate, error) {
-	if input.Status == nil && input.Usefulness == nil && input.PersonalInterest == nil && input.Tags == nil &&
-		input.CustomDescription == nil && input.DescriptionSource == nil && input.Notes == nil && input.Examples == nil {
+	if input.Status == nil && input.Usefulness == nil && input.PersonalInterest == nil && input.Context == nil &&
+		input.Tags == nil && input.CustomDescription == nil && input.DescriptionSource == nil && input.Notes == nil && input.Examples == nil {
 		return storage.VocabularyUpdate{}, apperr.New(apperr.InvalidArgument, "changes must contain at least one field")
 	}
 
@@ -542,6 +550,13 @@ func normalizeUpdateChanges(input UpdateChanges) (storage.VocabularyUpdate, erro
 		}
 		interest := *input.PersonalInterest
 		update.PersonalInterest = &interest
+	}
+	if input.Context != nil {
+		if !domain.ValidText(*input.Context) {
+			return storage.VocabularyUpdate{}, apperr.New(apperr.InvalidArgument, "context must contain valid UTF-8 without NUL characters")
+		}
+		contextValue := strings.TrimSpace(*input.Context)
+		update.Context = &contextValue
 	}
 	if input.Tags != nil {
 		tags, err := normalizeTags(*input.Tags)
