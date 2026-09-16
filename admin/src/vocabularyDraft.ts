@@ -23,8 +23,8 @@ export const fieldLabels: Record<keyof Draft, string> = {
   notes: "Notes",
   examples: "Examples",
   tags: "Tags",
-  sourceTitle: "Description source title",
-  sourceURL: "Description source URL",
+  sourceTitle: "Description attribution title",
+  sourceURL: "Description attribution URL",
 };
 const fields = Object.keys(fieldLabels) as (keyof Draft)[];
 const same = (a: Draft[keyof Draft], b: Draft[keyof Draft]) =>

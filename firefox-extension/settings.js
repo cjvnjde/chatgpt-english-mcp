@@ -15,6 +15,30 @@ export const DEFAULT_SETTINGS = Object.freeze({
   quickContextMode: "surrounding",
 });
 
+const LEGACY_BUNDLED_PROMPT_HASHES = Object.freeze({
+  systemPrompt: "95a1dc2c8d3558486683676612558f252ef9729b171fd96f6d0cc634c6cc16ba",
+  quickSystemPrompt: "a030fdd76cac3a494b9d93be1b7fd526ff57f4986365788edea7abdeda247642",
+});
+
+async function promptHash(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function migrateBundledPrompts(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return { candidate, changed: false };
+  let migrated = candidate;
+  let changed = false;
+  for (const [field, legacyHash] of Object.entries(LEGACY_BUNDLED_PROMPT_HASHES)) {
+    const value = candidate[field];
+    if (typeof value !== "string" || await promptHash(value) !== legacyHash) continue;
+    if (!changed) migrated = { ...candidate };
+    migrated[field] = DEFAULT_SETTINGS[field];
+    changed = true;
+  }
+  return { candidate: migrated, changed };
+}
+
 function invalid(field, message) {
   const error = new Error(message);
   error.field = field;
@@ -77,7 +101,10 @@ export function validateSettings(candidate) {
 
 export async function loadSettings() {
   const stored = await browser.storage.local.get("settings");
-  return validateSettings(stored.settings ?? {});
+  const migration = await migrateBundledPrompts(stored.settings ?? {});
+  const settings = validateSettings(migration.candidate);
+  if (migration.changed) await browser.storage.local.set({ settings });
+  return settings;
 }
 
 export async function saveSettings(candidate) {

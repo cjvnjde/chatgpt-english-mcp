@@ -15,7 +15,14 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
   let opened = false;
   let resolveReady;
   let selection = { term: 'bank', context: 'She sat on the bank of the river. '.repeat(120), url: page.url, sourceId: 'bank-source' };
-  let choice = '{"index":1}';
+  let choice = JSON.stringify({
+    index: 1,
+    description: 'The sloping land beside a river.',
+    context: selection.context,
+    notes: ['Often used with river or stream.'],
+    examples: ['They rested on the river bank.'],
+    tags: ['nature', 'reading'],
+  });
   let holdQuick = false;
   let quickStarted;
   let holdDeep = false;
@@ -102,7 +109,7 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
       if (request.model === 'fast' && streamingQuick) {
         return new Response(new ReadableStream({ start(controller) { streamController = controller; } }), { headers: { 'Content-Type': 'text/event-stream' } });
       }
-      if (request.messages[0].content.startsWith('Select the dictionary sense')) {
+      if (request.messages[0].content.startsWith('Build an editable vocabulary save draft')) {
         if (holdChoice) await new Promise(resolve => { releaseChoice = resolve; choiceStarted(); });
         return Response.json({ choices: [{ message: { content: choice } }] });
       }
@@ -173,16 +180,45 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
   assert.equal((await call('DICTIONARY_SAVE', { conversationId: state.id }, page)).ok, false);
   const conversationId = state.id;
   choice = '{"index":99}';
-  await call('DICTIONARY_SAVE', { conversationId });
+  await call('SAVE_PREPARE', { conversationId });
   assert.equal(state.saveStatus, 'error');
   assert.deepEqual(writes, []);
-  choice = '{"index":1}';
-  await call('DICTIONARY_SAVE', { conversationId });
+  choice = JSON.stringify({
+    index: 1,
+    description: 'The sloping land beside a river.',
+    context: selection.context,
+    notes: ['Often used with river or stream.'],
+    examples: ['They rested on the river bank.'],
+    tags: ['nature', 'reading'],
+  });
+  await call('SAVE_PREPARE', { conversationId });
+  assert.equal(state.saveStatus, 'ready');
+  assert.ok(state.saveDraft.context.length <= 400);
+  assert.notEqual(state.saveDraft.context, selection.context);
+  await call('DICTIONARY_SAVE', {
+    conversationId,
+    draft: {
+      ...state.saveDraft,
+      context: 'Story scene; resting beside a river',
+      notes: ['River sense, not the financial sense.'],
+      examples: ['They rested on the river bank.'],
+      tags: ['nature', 'fiction'],
+      personalInterest: 'high',
+    },
+  });
   assert.equal(state.saveStatus, 'saved');
   assert.equal(writes.length, 1);
   assert.equal(writes[0].definition, 'land beside a river');
+  assert.equal(writes[0].context, 'Story scene; resting beside a river');
+  assert.deepEqual(writes[0].notes, ['River sense, not the financial sense.']);
+  assert.deepEqual(writes[0].tags, ['nature', 'fiction']);
+  assert.equal(writes[0].personalInterest, 'high');
+  assert.deepEqual(writes[0].descriptionSource, {
+    title: 'reading.example',
+    url: 'https://reading.example/story',
+  });
   assert.equal(requests.at(-1).reasoning_effort, 'high');
-  assert.ok(requests.at(-1).messages[0].content.startsWith('Select the dictionary sense'));
+  assert.ok(requests.at(-1).messages[0].content.startsWith('Build an editable vocabulary save draft'));
   assert.ok(!requests.at(-1).messages[0].content.includes('Deep teaching instructions.'));
   await call('DICTIONARY_SAVE', { conversationId });
   assert.equal(writes.length, 1);
@@ -196,7 +232,7 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
 
   holdChoice = true;
   const choosing = new Promise(resolve => { choiceStarted = resolve; });
-  const pendingSave = call('DICTIONARY_SAVE', { conversationId: state.id });
+  const pendingSave = call('SAVE_PREPARE', { conversationId: state.id });
   await choosing;
   answered = nextAnswer();
   await call('EXPLAIN_SELECTION', {}, page);
@@ -447,7 +483,7 @@ test('quick/deep routing, cancellation, and explicit AI-selected saving', async 
   await answered;
   holdChoice = true;
   const clearDuringChoice = new Promise(resolve => { choiceStarted = resolve; });
-  const clearedSave = call('DICTIONARY_SAVE', { conversationId: state.id });
+  const clearedSave = call('SAVE_PREPARE', { conversationId: state.id });
   await clearDuringChoice;
   await call('SELECTION_CLEAR', { conversationId: state.id });
   releaseChoice();

@@ -117,7 +117,7 @@ $("testMcp").addEventListener("click", () => runOperation(
     await client.connect({ signal });
     const tools = await client.listTools({ signal });
     const names = new Set(tools.map(tool => tool.name));
-    const missing = ["dictionary_lookup", "vocabulary_save"].filter(name => !names.has(name));
+    const missing = ["dictionary_lookup", "vocabulary_save", "vocabulary_update"].filter(name => !names.has(name));
     if (missing.length) throw new Error(`Missing MCP tools: ${missing.join(", ")}.`);
     return "MCP connected.";
   },

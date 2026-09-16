@@ -8,6 +8,7 @@ let earlyUpdates = [];
 let localError = "";
 let sending = false;
 let saving = false;
+let saveDialogError = "";
 let stopping = false;
 let clearing = false;
 let imageUrls = [];
@@ -25,6 +26,64 @@ function safeURL(value) {
     const url = new URL(value);
     return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password ? url : null;
   } catch { return null; }
+}
+function lines(value) {
+  return String(value || "").split(/\r?\n/u).map(item => item.trim()).filter(Boolean);
+}
+
+function tags(value) {
+  return String(value || "").split(",").map(item => item.trim()).filter(Boolean);
+}
+
+function updateSourceLink() {
+  const source = safeURL(ui["save-source-url"].value.trim());
+  ui["save-source-link"].hidden = !source;
+  if (source) ui["save-source-link"].href = source.href;
+  else ui["save-source-link"].removeAttribute("href");
+}
+
+function openSaveDialog() {
+  const draft = state?.saveDraft;
+  if (!draft) return;
+  text(ui["save-term"], draft.term);
+  ui["save-context"].value = draft.context || "";
+  ui["save-tags"].value = (draft.tags || []).join(", ");
+  ui["save-notes"].value = (draft.notes || []).join("\n");
+  ui["save-examples"].value = (draft.examples || []).join("\n");
+  ui["save-interest"].value = draft.personalInterest || "";
+  ui["save-description"].value = draft.description || "";
+  ui["save-source-title"].value = draft.sourceTitle || "";
+  ui["save-source-url"].value = draft.sourceUrl || "";
+  ui["save-details"].open = Boolean(draft.description || draft.sourceTitle || draft.sourceUrl);
+  saveDialogError = "";
+  updateSourceLink();
+  if (!ui["save-dialog"].open) ui["save-dialog"].showModal();
+  ui["save-context"].focus();
+  renderControls();
+}
+
+function editedSaveDraft() {
+  return {
+    context: ui["save-context"].value,
+    tags: tags(ui["save-tags"].value),
+    notes: lines(ui["save-notes"].value),
+    examples: lines(ui["save-examples"].value),
+    personalInterest: ui["save-interest"].value,
+    description: ui["save-description"].value,
+    sourceTitle: ui["save-source-title"].value,
+    sourceUrl: ui["save-source-url"].value,
+  };
+}
+
+async function cancelSaveDialog() {
+  if (ui["save-dialog"].open) ui["save-dialog"].close();
+  saveDialogError = "";
+  if (!state || !["ready", "error"].includes(state.saveStatus)) return;
+  try { await command("SAVE_CANCEL", { conversationId: state.id }); }
+  catch (error) {
+    localError = `Could not close save details: ${error.message || error}`;
+    renderControls();
+  }
 }
 
 function announce(message) {
@@ -114,15 +173,26 @@ function renderMessages(force = false) {
 }
 
 function renderSave() {
-  const isSaving = saving || state.saveStatus === "saving";
+  const isPreparing = state.saveStatus === "preparing";
+  const isSaving = state.saveStatus === "saving";
+  const isBusy = saving || isPreparing || isSaving;
   const isSaved = state.saveStatus === "saved";
-  ui.save.disabled = clearing || isSaving || isSaved || !state.selection || !state.settings.mcpConfigured || !state.settings.configured || state.status === "loading" || state.lookupStatus === "loading" || sending || !state.messages.some(message => message.role === "assistant" && message.content.trim());
-  ui.save.setAttribute("aria-label", isSaving ? "Saving to dictionary" : isSaved ? "Saved to dictionary" : state.saveStatus === "error" ? "Retry saving to dictionary" : "Save to dictionary");
-  ui.save.setAttribute("aria-busy", String(isSaving));
+  const hasAnswer = state.messages.some(message => message.role === "assistant" && message.content.trim());
+  ui.save.disabled = clearing || isBusy || isSaved || ui["save-dialog"].open || !state.selection || !state.settings.mcpConfigured || !state.settings.configured || state.status === "loading" || state.lookupStatus === "loading" || sending || !hasAnswer;
+  const label = isPreparing ? "Preparing save details" : isSaving ? "Saving to dictionary" : isSaved ? "Saved to dictionary" : state.saveStatus === "ready" || state.saveDraft ? "Review save details" : state.saveStatus === "error" ? "Retry preparing save details" : "Save to dictionary";
+  ui.save.setAttribute("aria-label", label);
+  ui.save.setAttribute("title", label);
+  ui.save.setAttribute("aria-busy", String(isBusy));
   ui["save-icon"].toggleAttribute("hidden", isSaved);
   ui["saved-icon"].toggleAttribute("hidden", !isSaved);
   text(ui["save-error"], state.saveError);
   ui["save-error"].hidden = !state.saveError;
+  text(ui["save-notice"], state.saveNotice);
+  ui["save-notice"].hidden = !state.saveNotice;
+  const dialogError = saveDialogError || (ui["save-dialog"].open ? state.saveError : "");
+  text(ui["save-dialog-error"], dialogError);
+  ui["save-dialog-error"].hidden = !dialogError;
+  ui["save-confirm"].disabled = isBusy || isSaved;
 }
 
 function renderControls() {
@@ -144,7 +214,7 @@ function renderControls() {
   text(ui["conversation-error"], error);
   ui["conversation-error"].hidden = !error;
   renderSave();
-  announce(error || (loading ? phase : state.saveStatus === "error" ? state.saveError : state.saveStatus === "saved" ? "Saved to dictionary." : state.status === "ready" ? "Explanation ready." : ""));
+  announce(error || (loading ? phase : state.saveStatus === "error" ? state.saveError : state.saveStatus === "saved" ? state.saveNotice || "Saved to dictionary." : state.status === "ready" ? "Explanation ready." : ""));
 }
 
 function applyState(next) {
@@ -154,9 +224,12 @@ function applyState(next) {
   state = next;
   if (changedConversation) {
     localError = "";
+    saveDialogError = "";
+    if (ui["save-dialog"].open) ui["save-dialog"].close();
     ui["context-disclosure"].open = false;
     lookupKey = "";
   }
+  if (state.saveStatus === "saved" && ui["save-dialog"].open) ui["save-dialog"].close();
   const nextLookupKey = `${state.id}:${state.lookup?.lookupId || ""}:${state.lookupStatus}`;
   const lookupChanged = lookupKey !== nextLookupKey;
   if (lookupChanged) { renderLookup(); lookupKey = nextLookupKey; }
@@ -244,12 +317,46 @@ ui["message-input"].addEventListener("keydown", event => {
 });
 ui.save.addEventListener("click", async () => {
   if (!state || ui.save.disabled || saving) return;
+  if (state.saveDraft) {
+    openSaveDialog();
+    return;
+  }
   const conversationId = state.id;
   saving = true; localError = ""; renderControls();
-  try { await command("DICTIONARY_SAVE", { conversationId }); }
-  catch (error) { if (state.id === conversationId) localError = `Dictionary save failed: ${error.message || error}`; }
-  finally { saving = false; renderControls(); }
+  try {
+    await command("SAVE_PREPARE", { conversationId });
+    if (state.id === conversationId && state.saveDraft) openSaveDialog();
+  } catch (error) {
+    if (state.id === conversationId) localError = `Could not prepare save details: ${error.message || error}`;
+  } finally {
+    saving = false;
+    renderControls();
+  }
 });
+ui["save-form"].addEventListener("submit", async event => {
+  event.preventDefault();
+  if (!state?.saveDraft || saving) return;
+  const conversationId = state.id;
+  saving = true; saveDialogError = ""; localError = ""; renderControls();
+  try {
+    await command("DICTIONARY_SAVE", { conversationId, draft: editedSaveDraft() });
+    if (state.id === conversationId && state.saveStatus !== "saved") {
+      saveDialogError = state.saveError || "The vocabulary item could not be saved.";
+    }
+  } catch (error) {
+    if (state.id === conversationId) saveDialogError = `Dictionary save failed: ${error.message || error}`;
+  } finally {
+    saving = false;
+    renderControls();
+  }
+});
+ui["save-cancel"].addEventListener("click", () => { void cancelSaveDialog(); });
+ui["save-close"].addEventListener("click", () => { void cancelSaveDialog(); });
+ui["save-dialog"].addEventListener("cancel", event => {
+  event.preventDefault();
+  void cancelSaveDialog();
+});
+ui["save-source-url"].addEventListener("input", updateSourceLink);
 
 browser.runtime.onMessage.addListener(message => {
   if (message?.type !== "STATE_UPDATED") return;

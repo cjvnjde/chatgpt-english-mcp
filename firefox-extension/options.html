@@ -3,17 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>English Dictionary · Settings</title>
+  <meta name="color-scheme" content="light">
+  <title>English MCP · Settings</title>
   <link rel="stylesheet" href="options.css">
   <script type="module" src="options.js"></script>
 </head>
 <body>
   <main>
-    <form id="settingsForm" novalidate aria-label="English Dictionary settings">
-      <fieldset id="formFields" disabled aria-label="Connections and mode settings">
+    <header class="page-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">En</span>
+        <div>
+          <strong>English MCP</strong>
+          <span>Extension settings</span>
+        </div>
+      </div>
+      <div class="heading-copy">
+        <span class="eyebrow">Browser extension</span>
         <h1>Settings</h1>
-        <h2>Connections</h2>
+        <p>Connect your language models and tune how quick and deep explanations work.</p>
+      </div>
+    </header>
+    <form id="settingsForm" novalidate aria-label="English MCP settings">
+      <fieldset id="formFields" disabled aria-label="Connections and mode settings">
+        <section class="settings-card connection-settings" aria-labelledby="connections-heading">
+          <h2 id="connections-heading">Connections</h2>
         <div class="field">
           <label for="aiUrl">API base URL</label>
           <input id="aiUrl" name="aiUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false">
@@ -45,6 +59,7 @@
         </div>
         <p id="mcpStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
         <p class="hint">API keys and bearer tokens are stored unencrypted in this Firefox profile's extension local storage, not synced or exposed to web pages. Anyone with access to the profile can read them.</p>
+        </section>
         <fieldset class="mode-settings">
           <legend>Deep · sidebar</legend>
           <div class="models">
@@ -88,7 +103,7 @@
           </div>
         </fieldset>
         <p id="effortHelp" class="hint">Default sends no reasoning_effort parameter. Other levels require provider/model support; unsupported settings report an error. Quick effort is independent of Deep, even when sharing its model. Test AI uses Deep settings.</p>
-        <p id="promptHelp" class="hint">Changes save automatically. These are the complete editable instructions for each mode (up to 32,000 characters); blank is allowed. Reset restores that mode's bundled prompt. Quick never uses MCP.</p>
+        <p id="promptHelp" class="hint">Changes save automatically. Deep and Quick prompts control contextual explanations only—no lessons, review drills, or vocabulary repetition. Save separately prepares an editable MCP draft for context, notes, examples, tags, explanation, and source URL. Reset restores the bundled prompt; Quick never uses MCP.</p>
         <div class="field">
           <label for="hostGuard">Fixed host rules · read-only</label>
           <textarea id="hostGuard" rows="5" readonly></textarea>
@@ -96,6 +111,10 @@
       </fieldset>
       <p id="saveStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
     </form>
+  <footer class="page-footer">
+    <strong>English MCP</strong>
+    <span>Private language learning, on your terms.</span>
+  </footer>
   </main>
 </body>
 </html>

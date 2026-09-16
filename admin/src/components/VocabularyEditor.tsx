@@ -457,17 +457,21 @@ function Editor(props: {
           change={(values) => change("tags", values)}
         />
         <details>
-          <summary>Description source</summary>
+          <summary>Description attribution</summary>
+          <p class="muted">
+            Where the custom description came from. Use the encounter page only
+            when the saved description is based on that page.
+          </p>
           <div class="form-grid">
             <label>
-              Title
+              Source title
               <input
                 value={draft().sourceTitle}
                 onInput={(e) => change("sourceTitle", e.currentTarget.value)}
               />
             </label>
             <label>
-              URL
+              Source URL
               <input
                 type="url"
                 value={draft().sourceURL}
