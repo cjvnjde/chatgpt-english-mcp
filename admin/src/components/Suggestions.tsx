@@ -79,11 +79,12 @@ export default function Suggestions(props: {
             passes. Refresh to see the latest state.
           </p>
           <p class="muted">
-            Due learning and relearning steps take priority. Otherwise, when
-            both new words and due reviews are available, the scheduler gives
-            new words a 20% share and reviews an 80% share. Within each group,
-            weights account for usefulness of new words, personal interest,
-            review urgency, failures, and recent exposure.
+            Due learning and relearning steps take priority. Otherwise, new and
+            due-review shares adapt to how many words need exposure and how
+            long they have gone unshown, with each group kept between 20% and
+            80%. Within each group, weights also account for new-word
+            usefulness, personal interest, review urgency, failures, and
+            exposure age.
           </p>
           <p class="muted">
             Recently shown words cool down when alternatives exist. If nothing

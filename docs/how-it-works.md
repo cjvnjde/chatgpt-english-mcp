@@ -312,7 +312,7 @@ flowchart TD
     Adapt --> Steps{"Any selectable due Learning/Relearning cards?"}
     Steps -->|"Yes"| Learning["Choose the learning/relearning pool"]
     Steps -->|"No"| Both{"Both new and mature-review pools remain?"}
-    Both -->|"Yes"| Mix["Fixed 20% new / 80% mature review"]
+    Both -->|"Yes"| Mix["Adaptive exposure share, bounded 20%–80% per pool"]
     Both -->|"No"| Only["Choose the nonempty pool"]
     Learning --> Lottery["Weighted random draw within that pool"]
     Mix --> Lottery
@@ -328,7 +328,7 @@ flowchart TD
     Commit --> Return["Return item, reason, presentation ID, time, and review token"]
 ```
 
-The ordering matters: **eligibility → global adaptive cooldown → learning-step priority or fixed pool choice → within-pool weight**. A large weight cannot bypass an earlier stage.
+The ordering matters: **eligibility → global adaptive cooldown → learning-step priority or adaptive pool choice → within-pool weight**. A large weight cannot bypass an earlier stage.
 
 ### 1. Build the candidate pools
 
@@ -372,20 +372,20 @@ The implementation treats a negative elapsed interval after a backward clock cha
 
 ### 3. Prioritize learning steps, otherwise choose new versus mature review
 
-After adaptive cooldown and any relaxation, let $L$, $N$, and $R$ be the remaining due Learning/Relearning, New, and due mature Review pools:
+After adaptive cooldown and any relaxation, let $L$, $N$, and $R$ be the remaining due Learning/Relearning, New, and due mature Review pools. Let $E_N=\sum_{i\in N}\rho_i$ and $E_R=\sum_{i\in R}\rho_i$, using the exposure multiplier defined below.
 
 | Nonempty eligible pools | Pool probability |
 |---|---|
 | Learning/relearning, with or without other pools | Learning/relearning: 1 |
-| No learning/relearning; new and mature review | New: 0.2; mature review: 0.8 |
+| No learning/relearning; new and mature review | New: $\operatorname{clamp}(E_N/(E_N+E_R),0.2,0.8)$; mature review: the remainder |
 | New only | New: 1 |
 | Mature review only | Mature review: 1 |
 
 Selectable due learning steps pause both new introductions and mature reviews. This priority never bypasses cooldown: if all due learning/relearning cards remain excluded, other eligible cards supply spacing. A learning step that is not yet due does not pause either pool.
 
-With no selectable learning steps and both other pools present, the **20% new / 80% mature review** split is fixed. Pool size, presentation recency, usefulness, urgency, and failures do not change it. Unseen new cards against just-presented mature reviews still receive 20% when both pools survive cooldown.
+The adaptive share responds only to pool size and time since presentation. Usefulness, personal interest, due urgency, and failures still affect the lottery within their pool, not the pool split. The 20% floor keeps a small pool reachable; the 80% ceiling prevents either new material or due reviews from starving the other.
 
-This is a random choice, not a quota or per-word repetition limit. Presentations change cooldown and within-pool recency; reviews change state and due dates. The available pools can therefore change from call to call, and a real session need not contain 20% new items.
+For example, 85 never-presented new cards and 15 never-presented mature reviews have an unclamped new share of $85/(85+15)=85\%$, so New receives the 80% ceiling instead of a fixed 20%. This is a random per-call probability, not a quota or per-word repetition limit. Presentations and reviews can change the next call's eligible pools, exposure mass, and weights.
 
 ### 4. Calculate each card's weight
 
@@ -406,29 +406,33 @@ These categories are the **calculated, persisted results** of usefulness inferen
 
 **Personal-interest multiplier $I_i$:** low = 0.5, normal = 1, high = 2. Unlike general usefulness, it multiplies all three weighted pools; it cannot bypass cooldown or pool priority.
 
-**Presentation recency multiplier $\rho_i$:**
+**Presentation exposure multiplier $\rho_i$:**
 
 $$
 \rho_i =
 \begin{cases}
-1 & \text{never presented}\\
+4 & \text{never presented}\\
 0.25 + 0.75\,\operatorname{clamp}\left(
 \frac{t-\text{lastShownAt}_i}{24\text{ hours}},0,1\right)
-& \text{otherwise}
+& \text{presented at most 24 hours ago}\\
+1 + \operatorname{clamp}\left(
+\frac{t-\text{lastShownAt}_i-24\text{ hours}}{29\text{ days}},0,1\right)
+& \text{presented more than 24 hours ago}
 \end{cases}
 $$
 
-| Time since last presentation | Recency multiplier |
+| Time since last presentation | Exposure multiplier |
 |---|---|
 | Just now | 0.25 |
 | 30 minutes | 0.265625 |
 | 1 hour | 0.28125 |
 | 6 hours | 0.4375 |
 | 12 hours | 0.625 |
-| 24 hours or more | 1 |
-| Never presented | 1 |
+| 24 hours | 1 |
+| 30 days or more | 2 |
+| Never presented | 4 |
 
-The adaptive cooldown and this multiplier are separate mechanisms. A new or mature-review card leaving cooldown after 30 minutes has recovered eligibility, not full weight. Recency affects only its within-pool weight, never the pool ratio. Learning/relearning cards have no soft recency multiplier, but still obey the hard cooldown.
+The adaptive cooldown and this multiplier are separate mechanisms. A new or mature-review card leaving cooldown after 30 minutes has recovered eligibility, not full weight. Exposure affects both its pool's adaptive share and its weight within that pool. Never-presented cards receive twice the maximum presented-card exposure so saved material is unlikely to remain hidden behind repeatedly trained words. Learning/relearning cards have no soft exposure multiplier, but still obey the hard cooldown.
 
 **Due urgency multiplier $A_i$:**
 
@@ -464,7 +468,7 @@ W_i^{\text{review}} = A_i F_i \rho_i I_i
 W_i^{\text{learning}} = A_i F_i I_i
 $$
 
-The possible ranges are 0.0625–4 for new-card weights, 0.125–27.5 for mature-review weights, and 0.5–27.5 for learning/relearning weights, before considering cooldown exclusion. Weights are relative lottery mass, not percentages, mastery scores, or FSRS recall probabilities. Worked examples below assume normal personal interest.
+The possible ranges are 0.0625–16 for new-card weights, 0.125–110 for mature-review weights, and 0.5–27.5 for learning/relearning weights, before considering cooldown exclusion. Weights are relative lottery mass, not percentages, mastery scores, or FSRS recall probabilities. Worked examples below assume normal personal interest.
 
 ### 5. Draw within the chosen pool
 
@@ -474,17 +478,16 @@ $$
 \Pr(i\mid P)=\frac{W_i}{\sum_{j\in P}W_j}
 $$
 
-When no learning/relearning cards are selectable and both other pools survive cooldown:
+When no learning/relearning cards are selectable and both other pools survive cooldown, define:
 
 $$
-\Pr(i)=
-\begin{cases}
-0.2\,W_i/\sum_{j\in N}W_j & i\in N\\
-0.8\,W_i/\sum_{j\in R}W_j & i\in R
-\end{cases}
+S_N=\operatorname{clamp}\left(
+\frac{\sum_{j\in N}\rho_j}{\sum_{j\in N}\rho_j+\sum_{j\in R}\rho_j},
+0.2,0.8\right),
+\qquad S_R=1-S_N
 $$
 
-Here $N$ and $R$ contain candidates after adaptive cooldown. If $L$ is nonempty, its pool probability is 1 and all new/mature-review cards have probability zero for that call. An excluded card always has probability zero. A sole new or mature-review pool also has pool probability 1.
+Then $\Pr(i)=S_NW_i/\sum_{j\in N}W_j$ for $i\in N$, and $\Pr(i)=S_RW_i/\sum_{j\in R}W_j$ for $i\in R$. Here $N$ and $R$ contain candidates after adaptive cooldown. If $L$ is nonempty, its pool probability is 1 and all new/mature-review cards have probability zero for that call. An excluded card always has probability zero. A sole new or mature-review pool also has pool probability 1.
 
 The implementation draws a pseudorandom value in $[0,1)$, multiplies it by the pool's total weight, and walks cumulative card weights until that draw is covered. There is no persistent shuffled queue or per-word quota. Every card in the chosen pool has positive weight, but the lottery does not guarantee that a particular card appears within a fixed number of calls.
 
@@ -494,17 +497,17 @@ Assume these mature Review-state cards are due and outside the hard cooldown, wi
 
 | Card | Overdue / scheduled interval | Failures / lapses | Last presented | Usefulness | Weight |
 |---|---|---|---|---|---|
-| A | 0 / 2 days | 0 / 0 | At least 24 hours ago | `normal` | $1\times1\times1=1$ |
+| A | 0 / 2 days | 0 / 0 | Exactly 24 hours ago | `normal` | $1\times1\times1=1$ |
 | B | 1 day / 2 days | 1 / 1 | 12 hours ago | `high` | $1.5\times1.75\times0.625=1.640625$ |
-| C | 0 / 2 days | 0 / 0 | At least 24 hours ago | `low` | $1\times1\times1=1$ |
+| C | 0 / 2 days | 0 / 0 | Exactly 24 hours ago | `low` | $1\times1\times1=1$ |
 
-Total mature-review weight is 3.640625. If that pool is selected, A/B/C have approximately **27.47% / 45.06% / 27.47%** chances. A and C are equally likely because usefulness does not weight reviews. If a new pool also remains, it gets exactly **20%**, and the overall A/B/C probabilities are approximately **21.97% / 36.05% / 21.97%**.
+Total mature-review weight is 3.640625. If that pool is selected, A/B/C have approximately **27.47% / 45.06% / 27.47%** chances. A and C are equally likely because usefulness does not weight reviews. Their overall probabilities additionally depend on the adaptive review-pool share.
 
-For three otherwise equal new cards with low/normal/high usefulness, weights are 0.5/1/2 and within-pool probabilities are $1/7,2/7,4/7$. High is twice normal and four times low **within that pool**, not “a 200% chance.”
+For three otherwise equal never-presented new cards with low/normal/high usefulness, weights are 2/4/8 and within-pool probabilities are $1/7,2/7,4/7$. High is twice normal and four times low **within that pool**, not “a 200% chance.”
 
 #### Worked example: cooldown outranks usefulness and the mix
 
-Suppose the only due mature-review card was just presented, while a low-usefulness new card has never been presented. Cooldown removes the review card and preserves the fresh alternative; the new card wins with probability 1, regardless of its low usefulness or the fixed mix.
+Suppose the only due mature-review card was just presented, while a low-usefulness new card has never been presented. Cooldown removes the review card and preserves the fresh alternative; the new card wins with probability 1, regardless of its low usefulness or the adaptive mix.
 
 Now suppose the only eligible card is that recent due card, and every other card is a future review. The due card repeats. Future cards do not become eligible merely because the due card is on cooldown.
 
@@ -512,7 +515,7 @@ Now suppose the only eligible card is that recent due card, and every other card
 
 Suppose a due Learning card is 10 minutes overdue with no failures or lapses, and a due Relearning card is 40 minutes overdue with one consecutive failure and one lapse. Both are selectable. Their weights are $2\times1=2$ and $5\times1.75=8.75$, so their probabilities are $8/43$ and $35/43$. Recent exposure outside the hard cooldown and differing usefulness do not change those weights. All new and mature-review cards have probability zero while either learning step is selectable.
 
-If both steps are instead excluded by the global cooldown and two other eligible cards remain, no relaxation is needed: those other cards supply spacing. With one new and one mature-review card remaining, their probabilities are 20% and 80%. Future learning steps do not gain priority before their due time.
+If both steps are instead excluded by the global cooldown and one never-presented new card and one never-presented mature-review card remain, their equal exposure mass gives each pool 50%. Future learning steps do not gain priority before their due time.
 
 ### 6. Use the future fallback only when necessary
 
@@ -975,13 +978,13 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 - **Skipping an answer is not a failed review.** Presentation affects selection history, but only a submitted review updates FSRS and failure counters.
 - **Waiting hours is not graded as hesitation.** Answer latency never changes the submitted grade; answer quality controls scheduling.
 - **Completing all due cards does not make `learning_next` empty.** It can return new items or early reviews until the tutor/learner stops.
-- **Learning-step priority and the fixed new/review mix are not lesson quotas.** Selectable due learning steps pause new introductions and mature reviews; otherwise both remaining pools get a 20/80 split independent of recency. There is no backend daily quota, target session length, or guarantee that all due cards will be covered.
+- **Learning-step priority and the adaptive new/review mix are not lesson quotas.** Selectable due learning steps pause new introductions and mature reviews; otherwise exposure mass sets both remaining pool shares within 20%–80% bounds. There is no backend daily quota, target session length, or guarantee that all due cards will be covered.
 
 ### Which parameters can a caller change?
 
 Tool callers can save/archive items, update usefulness hints, personal interest and metadata, submit scheduled or reinforcement ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
 
-Learning-step priority, the fixed 20:80 new/mature-review mix, adaptive last-three/30-minute cooldown, 24-hour new/mature recency recovery, 10-minute learning urgency denominator, weight caps, and usefulness thresholds are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
+Learning-step priority, the adaptive exposure-based 20%–80% new/mature-review bounds, adaptive last-three/30-minute cooldown, 30-day presented-card exposure growth, never-presented boost, 10-minute learning urgency denominator, weight caps, and usefulness thresholds are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
 
 ## Implementation map
 

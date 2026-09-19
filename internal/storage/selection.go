@@ -31,8 +31,9 @@ const (
 )
 
 type selectionPool struct {
-	count  int
-	weight float64
+	count    int
+	weight   float64
+	exposure float64
 }
 
 func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey string) ([]selectionCard, int64, error) {
@@ -185,8 +186,10 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 	} else if plan.pools[reviewSelectionPool].count == 0 {
 		plan.shares[newSelectionPool] = 1
 	} else {
-		plan.shares[newSelectionPool] = 0.2
-		plan.shares[reviewSelectionPool] = 0.8
+		newExposure := plan.pools[newSelectionPool].exposure
+		reviewExposure := plan.pools[reviewSelectionPool].exposure
+		plan.shares[newSelectionPool] = max(0.2, min(newExposure/(newExposure+reviewExposure), 0.8))
+		plan.shares[reviewSelectionPool] = 1 - plan.shares[newSelectionPool]
 	}
 	return plan
 }
@@ -262,16 +265,21 @@ func presentedRecently(card *selectionCard, now time.Time) bool {
 	return card.lastPresentationID > 0 && now.Sub(card.lastShownAt) < 30*time.Minute
 }
 
-func presentationRecency(card *selectionCard, now time.Time) float64 {
-	if card.lastPresentationID > 0 {
-		return 0.25 + 0.75*max(0, min(now.Sub(card.lastShownAt).Hours()/24, 1))
+func exposurePriority(card *selectionCard, now time.Time) float64 {
+	if card.lastPresentationID == 0 {
+		return 4
 	}
-	return 1
+	elapsedHours := max(now.Sub(card.lastShownAt).Hours(), 0)
+	if elapsedHours <= 24 {
+		return 0.25 + 0.75*(elapsedHours/24)
+	}
+	return 1 + min((elapsedHours-24)/(29*24), 1)
 }
 
 func (pool *selectionPool) add(card *selectionCard, now time.Time) {
 	pool.count++
 	pool.weight += selectionWeight(card, now)
+	pool.exposure += exposurePriority(card, now)
 }
 
 func selectionWeight(card *selectionCard, now time.Time) float64 {
@@ -290,7 +298,7 @@ func selectionWeight(card *selectionCard, now time.Time) float64 {
 		case domain.UsefulnessHigh:
 			usefulness = 2
 		}
-		return presentationRecency(card, now) * usefulness * interest
+		return exposurePriority(card, now) * usefulness * interest
 	}
 
 	intervalHours := max(float64(card.scheduledDays)*24, 24)
@@ -299,7 +307,7 @@ func selectionWeight(card *selectionCard, now time.Time) float64 {
 		// Learning steps operate in minutes; cooldown already supplies spacing.
 		intervalHours = (10 * time.Minute).Hours()
 	} else {
-		exposure = presentationRecency(card, now)
+		exposure = exposurePriority(card, now)
 	}
 	urgency := 1 + min(max(now.Sub(card.dueAt).Hours(), 0)/intervalHours, 4)
 	failures := 1 + 0.5*float64(min(card.consecutiveFailures, 2)) + 0.25*float64(min(card.lapses, 3))

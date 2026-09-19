@@ -6,7 +6,7 @@ It provides ten tools for:
 
 - Cambridge Dictionary lookups with permanent SQLite caching and server-side audio/image copies
 - vocabulary metadata, attached example images, offline word/expression usefulness with optional AI hints, notes, examples, tags, and learning states
-- learning-step priority, a fixed new/mature-review mix, new-word usefulness weights, and recent-card cooldowns
+- learning-step priority, adaptive new/mature-review shares, unseen and neglected-card priority, and recent-card cooldowns
 - idempotent review recording and spaced-repetition scheduling
 - timestamped presentation history retained for future learning analytics
 - learned-word reinforcement weighted by usefulness, comments, difficulty, and recency, with a strict 25% per-word probability cap

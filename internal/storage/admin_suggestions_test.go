@@ -33,13 +33,13 @@ func TestSuggestionLikelihoodMatchesSelectionBoundaries(t *testing.T) {
 				{cardID: "overdue", fsrsState: 2, dueAt: now.Add(-24 * time.Hour)},
 				{cardID: "future", fsrsState: 2, dueAt: now.Add(time.Hour)},
 			},
-			probabilities: []float64{0.04, 0.16, 0.8 / 3, 1.6 / 3, 0},
+			probabilities: []float64{0.1, 0.4, 1.0 / 6, 1.0 / 3, 0},
 			reasons:       []string{"new", "new", "due", "due", "not_due"},
 			draws: []draw{
 				{[]float64{0, 0}, "low"},
-				{[]float64{math.Nextafter(0.2, 0), math.Nextafter(0.2, 0)}, "low"},
+				{[]float64{math.Nextafter(0.5, 0), math.Nextafter(0.2, 0)}, "low"},
 				{[]float64{0, 0.2}, "high"},
-				{[]float64{0.2, 0}, "review"},
+				{[]float64{0.5, 0}, "review"},
 				{[]float64{0.99, 1.0 / 3}, "overdue"},
 				{[]float64{0.99, math.Nextafter(1, 0)}, "overdue"},
 			},
@@ -63,9 +63,9 @@ func TestSuggestionLikelihoodMatchesSelectionBoundaries(t *testing.T) {
 				{cardID: "new", dueAt: now},
 				{cardID: "review", fsrsState: 2, dueAt: now},
 			},
-			probabilities: []float64{0, 0.2, 0.8},
+			probabilities: []float64{0, 0.5, 0.5},
 			reasons:       []string{"cooldown", "new", "due"},
-			draws:         []draw{{[]float64{0, 0}, "new"}, {[]float64{0.2, 0}, "review"}},
+			draws:         []draw{{[]float64{0, 0}, "new"}, {[]float64{0.5, 0}, "review"}},
 		},
 		{
 			name: "small pool relaxes oldest two without immediate repeat",
@@ -181,7 +181,7 @@ func TestAdminSuggestionsPaginationIsolationAndReadOnly(t *testing.T) {
 		SELECT 'recognition', vocabulary_item_id, 'recognition', due_at, created_at, updated_at FROM learning_cards WHERE id = 'a'`); err != nil {
 		t.Fatal(err)
 	}
-	shownAt := TimeString(now.Add(-24 * time.Hour))
+	shownAt := TimeString(now.Add(-30 * 24 * time.Hour))
 	if _, err := store.sql.ExecContext(ctx, `INSERT INTO learning_presentations
 		(owner_key, vocabulary_item_id, learning_card_id, exercise_mode, review_token, shown_at, due_at, selection_kind)
 		SELECT 'owner', vocabulary_item_id, id, 'production', review_token, ?, due_at, 'new'
@@ -213,7 +213,7 @@ func TestAdminSuggestionsPaginationIsolationAndReadOnly(t *testing.T) {
 		return state
 	}
 	before := snapshot()
-	for offset, want := range []string{"c", "a", "b", "future", ""} {
+	for offset, want := range []string{"c", "b", "a", "future", ""} {
 		page, err := store.AdminSuggestions(ctx, "owner", 1, offset)
 		if err != nil {
 			t.Fatal(err)
@@ -231,7 +231,7 @@ func TestAdminSuggestionsPaginationIsolationAndReadOnly(t *testing.T) {
 			t.Fatalf("page %d: %#v", offset, page.Rows)
 		}
 		row := page.Rows[0]
-		probability := map[string]float64{"a": 0.25, "b": 0.25, "c": 0.5, "future": 0}[want]
+		probability := map[string]float64{"a": 1.0 / 7, "b": 2.0 / 7, "c": 4.0 / 7, "future": 0}[want]
 		wantShownAt := ""
 		if want == "a" {
 			wantShownAt = shownAt

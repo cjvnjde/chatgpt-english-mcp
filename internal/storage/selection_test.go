@@ -19,8 +19,8 @@ func TestSelectLearningCardBalancesNewAndDueWithoutShortlists(t *testing.T) {
 		draw float64
 		want string
 	}{
-		{draw: 0.199999, want: "new"},
-		{draw: 0.2, want: "troublesome"},
+		{draw: 0.499999, want: "new"},
+		{draw: 0.5, want: "troublesome"},
 		{draw: 0.999999, want: "troublesome"},
 	} {
 		selected, ok := selectLearningCard(cards, 0, now, func() float64 { return test.draw })
@@ -77,7 +77,7 @@ func TestSelectLearningCardUsesWeightedSamplingWithinPools(t *testing.T) {
 				{cardID: "shown", lastPresentationID: 1, lastShownAt: now},
 				{cardID: "unseen"},
 			},
-			draw: 0.1, want: "shown",
+			draw: 0.05, want: "shown",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -123,10 +123,10 @@ func TestPersonalInterestWeightsEveryPoolWithoutChangingPoolShares(t *testing.T)
 		{cardID: "due", fsrsState: 2, dueAt: now, personalInterest: domain.PersonalInterestLow},
 	}
 	plan := planLearningSelection(cards, 0, now)
-	for index, want := range []float64{0.2, 0.8} {
+	for index, want := range []float64{0.5, 0.5} {
 		probability, _ := plan.likelihood(&cards[index])
 		if probability != want {
-			t.Fatalf("%s pool probability = %g, want %g", cards[index].cardID, probability, want)
+			t.Fatalf("%s exposure-balanced pool probability = %g, want %g", cards[index].cardID, probability, want)
 		}
 	}
 	// Interest cannot bypass cooldown or change deterministic future ordering.
@@ -181,20 +181,21 @@ func TestAdminLikelihoodLoadsPersistedPersonalInterest(t *testing.T) {
 	}
 }
 
-func TestSelectLearningCardRecencyPenaltyRecoversByNextDay(t *testing.T) {
+func TestSelectLearningCardPrioritizesUnseenAndLongNeglectedCards(t *testing.T) {
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
 	cards := []selectionCard{
-		{cardID: "shown", lastPresentationID: 1, lastShownAt: now},
-		{cardID: "unseen"},
+		{cardID: "recent", lastPresentationID: 1, lastShownAt: now},
+		{cardID: "neglected", lastPresentationID: 2, lastShownAt: now.Add(-30 * 24 * time.Hour)},
 	}
-	draw := func() float64 { return 0.4 }
-	recent, ok := selectLearningCard(cards, 2, now, draw)
-	if !ok || recent.cardID != "unseen" {
-		t.Fatalf("recent presentation selected %q, want unseen alternative", recent.cardID)
+	selected, ok := selectLearningCard(cards, 3, now, func() float64 { return 0.2 })
+	if !ok || selected.cardID != "neglected" {
+		t.Fatalf("recent versus neglected selected %q, want neglected", selected.cardID)
 	}
-	recovered, ok := selectLearningCard(cards, 2, now.Add(24*time.Hour), draw)
-	if !ok || recovered.cardID != "shown" {
-		t.Fatalf("next-day selection = %q, want previously shown card competing equally", recovered.cardID)
+
+	cards[0] = selectionCard{cardID: "unseen"}
+	selected, ok = selectLearningCard(cards, 3, now, func() float64 { return 0.4 })
+	if !ok || selected.cardID != "unseen" {
+		t.Fatalf("unseen versus neglected selected %q, want unseen", selected.cardID)
 	}
 }
 
@@ -274,38 +275,75 @@ func TestSelectLearningCardKeepsFreshAlternativeAheadOfCooldownRelaxation(t *tes
 	}
 }
 
-func TestSelectLearningCardKeepsNewShareFixedAcrossMatureReviewExposure(t *testing.T) {
+func TestSelectLearningCardAdaptsNewShareToBacklog(t *testing.T) {
 	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
-	for _, reviewCount := range []int{1, 4} {
-		for _, elapsed := range []time.Duration{0, 24 * time.Hour} {
-			t.Run(fmt.Sprintf("reviews-%d-after-%s", reviewCount, elapsed), func(t *testing.T) {
-				cards := make([]selectionCard, 0, reviewCount+100)
-				for index := range reviewCount {
-					cards = append(cards, selectionCard{
-						cardID: fmt.Sprintf("review-%d", index), fsrsState: 2, dueAt: now,
-						lastPresentationID: int64(index + 1), lastShownAt: now,
-					})
+	for _, test := range []struct {
+		name        string
+		newCount    int
+		reviewCount int
+		wantNew     int
+	}{
+		{name: "large new backlog reaches review-safe cap", newCount: 85, reviewCount: 15, wantNew: 80},
+		{name: "small new backlog keeps introduction floor", newCount: 1, reviewCount: 100, wantNew: 20},
+		{name: "balanced backlog gets balanced share", newCount: 10, reviewCount: 10, wantNew: 50},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cards := make([]selectionCard, 0, test.newCount+test.reviewCount)
+			for index := range test.newCount {
+				cards = append(cards, selectionCard{cardID: fmt.Sprintf("new-%d", index)})
+			}
+			for index := range test.reviewCount {
+				cards = append(cards, selectionCard{
+					cardID: fmt.Sprintf("review-%d", index), fsrsState: 2, dueAt: now,
+				})
+			}
+			newSelections := 0
+			for index := range 100 {
+				draw := (float64(index) + 0.5) / 100
+				selected, ok := selectLearningCard(cards, 0, now, func() float64 { return draw })
+				if !ok {
+					t.Fatal("eligible cards were not selectable")
 				}
-				for index := range 100 {
-					cards = append(cards, selectionCard{cardID: fmt.Sprintf("new-%d", index)})
+				if selected.fsrsState == 0 {
+					newSelections++
 				}
-				newSelections := 0
-				for index := range 100 {
-					draw := (float64(index) + 0.5) / 100
-					// Reviews have left the hard cooldown even when just shown.
-					selected, ok := selectLearningCard(cards, 5, now.Add(elapsed), func() float64 { return draw })
-					if !ok {
-						t.Fatal("eligible cards were not selectable")
-					}
-					if selected.fsrsState == 0 {
-						newSelections++
-					}
-				}
-				if newSelections != 20 {
-					t.Fatalf("new selections = %d/100, want 20/100", newSelections)
-				}
-			})
-		}
+			}
+			if newSelections != test.wantNew {
+				t.Fatalf("new selections = %d/100, want %d/100", newSelections, test.wantNew)
+			}
+		})
+	}
+}
+
+func TestSelectLearningCardExposureChangesPoolShare(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name       string
+		newCard    selectionCard
+		reviewCard selectionCard
+		wantNew    float64
+	}{
+		{
+			name:       "unseen new card reaches upper bound against recent review",
+			newCard:    selectionCard{cardID: "new"},
+			reviewCard: selectionCard{cardID: "review", fsrsState: 2, dueAt: now, lastPresentationID: 1, lastShownAt: now},
+			wantNew:    0.8,
+		},
+		{
+			name:       "recent new card keeps lower bound against unseen review",
+			newCard:    selectionCard{cardID: "new", lastPresentationID: 1, lastShownAt: now},
+			reviewCard: selectionCard{cardID: "review", fsrsState: 2, dueAt: now},
+			wantNew:    0.2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cards := []selectionCard{test.newCard, test.reviewCard}
+			plan := planLearningSelection(cards, 2, now)
+			newProbability, _ := plan.likelihood(&cards[0])
+			if newProbability != test.wantNew {
+				t.Fatalf("new probability = %g, want %g", newProbability, test.wantNew)
+			}
+		})
 	}
 }
 
@@ -321,9 +359,9 @@ func TestSelectLearningCardPrioritizesDueLearningStepsAfterCooldown(t *testing.T
 			wantReview int
 			wantStep   int
 		}{
-			{name: "future step does not compete", selectAt: now, wantNew: 20, wantReview: 80},
+			{name: "future step does not compete", selectAt: now, wantNew: 80, wantReview: 20},
 			{name: "step takes priority exactly when due", selectAt: dueAt, wantStep: 100},
-			{name: "cooldown supplies other words first", selectAt: dueAt, presented: true, wantNew: 20, wantReview: 80},
+			{name: "cooldown supplies other words first", selectAt: dueAt, presented: true, wantNew: 80, wantReview: 20},
 			{name: "expired cooldown restores priority", selectAt: now.Add(30 * time.Minute), presented: true, wantStep: 100},
 		} {
 			t.Run(fmt.Sprintf("state-%d/%s", state, test.name), func(t *testing.T) {

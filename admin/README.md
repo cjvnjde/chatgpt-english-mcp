@@ -82,7 +82,7 @@ Click a stored-column heading to sort; compact rows and sticky headers help scan
 
 ## Next suggestions
 
-The scheduler uses weighted random selection, not a fixed future queue. **Next suggestions** ranks active production cards by their probability of being chosen on the next `learning_next` call. It shares the actual scheduler's eligibility and weighting logic: cooldown and small-pool relaxation, due learning/relearning precedence, the 20% new / 80% mature-review mix when both pools remain available, and deterministic early-review fallback.
+The scheduler uses weighted random selection, not a fixed future queue. **Next suggestions** ranks active production cards by their probability of being chosen on the next `learning_next` call. It shares the actual scheduler's eligibility and weighting logic: cooldown and small-pool relaxation, due learning/relearning precedence, adaptive 20%–80% new/mature-review shares based on unseen and neglected exposure mass, and deterministic early-review fallback.
 
 Ranks are likelihood ranks, not future turn numbers. The percentage is the actual next-draw probability; probability bars are scaled relative to the highest chance on the current page, with a visible scale legend. Selection reasons and learning groups appear together, and 0%-chance rows are visually separated without changing their server order. Equal probabilities are displayed by due date and then card ID. Cards with no chance in the current snapshot appear after selectable cards with a reason such as cooling down, not due yet, or waiting for due learning steps. Archived items and other owners' cards are excluded.
 
