@@ -63,6 +63,7 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		"dictionary_lookup",
 		"learning_next",
 		"learning_review",
+		"learning_review_update",
 		"reinforcement_next",
 		"reinforcement_review",
 		"vocabulary_delete",
@@ -212,6 +213,64 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	if stillCached.LookupID != refreshed.LookupID || stillCached.Cache.State != domain.CacheHit {
 		t.Fatalf("lookup after vocabulary delete = %#v", stillCached)
 	}
+}
+
+func TestMCPLearningReviewUpdateCorrectsLatestWithOriginalToken(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t, ctx)
+	callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", VocabularySaveInput{Term: "bank"})
+	first := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{})
+	original := callTool[learning.RecordResult](t, ctx, session, "learning_review", LearningReviewInput{
+		ReviewToken: first.ReviewToken,
+		Rating:      domain.ReviewRatingGood,
+		Comment:     "Confused the meanings.",
+	})
+	pending := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{})
+	assertToolInvalidArgument(t, ctx, session, "learning_review", LearningReviewInput{
+		ReviewToken: first.ReviewToken,
+		Rating:      domain.ReviewRatingAgain,
+	})
+	assertToolInvalidArgument(t, ctx, session, "learning_review_update", map[string]any{
+		"reviewToken": first.ReviewToken, "rating": "incorrect",
+	})
+	correction := LearningReviewUpdateInput{
+		ReviewToken: first.ReviewToken,
+		Rating:      domain.ReviewRatingAgain,
+	}
+	corrected := callTool[learning.RecordResult](t, ctx, session, "learning_review_update", correction)
+	if !corrected.Recorded || corrected.Duplicate || corrected.EffectiveRating != domain.ReviewRatingAgain ||
+		corrected.NextReviewAt == original.NextReviewAt {
+		t.Fatalf("correction = %#v, original = %#v", corrected, original)
+	}
+	duplicate := callTool[learning.RecordResult](t, ctx, session, "learning_review_update", correction)
+	if !duplicate.Duplicate || duplicate.NextReviewAt != corrected.NextReviewAt ||
+		duplicate.EffectiveRating != domain.ReviewRatingAgain {
+		t.Fatalf("duplicate correction = %#v, corrected = %#v", duplicate, corrected)
+	}
+	withComment := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{IncludeComments: true})
+	if withComment.ReviewToken != pending.ReviewToken || len(withComment.Comments) != 1 ||
+		withComment.LatestComment == nil || withComment.LatestComment.Text != "Confused the meanings." ||
+		withComment.LatestComment.Rating != domain.ReviewRatingAgain {
+		t.Fatalf("correction did not preserve pending token and update comment history: %#v", withComment)
+	}
+	empty := ""
+	correction.Comment = &empty
+	cleared := callTool[learning.RecordResult](t, ctx, session, "learning_review_update", correction)
+	if cleared.Duplicate || cleared.NextReviewAt != corrected.NextReviewAt {
+		t.Fatalf("comment-only correction changed the schedule: %#v", cleared)
+	}
+	withoutComment := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{IncludeComments: true})
+	if withoutComment.LatestComment != nil || len(withoutComment.Comments) != 0 {
+		t.Fatalf("cleared comment is still visible: %#v", withoutComment)
+	}
+	nextReview := callTool[learning.RecordResult](t, ctx, session, "learning_review", LearningReviewInput{
+		ReviewToken: pending.ReviewToken,
+		Rating:      domain.ReviewRatingGood,
+	})
+	if !nextReview.Recorded || nextReview.Duplicate {
+		t.Fatalf("already presented next review was invalidated: %#v", nextReview)
+	}
+	assertToolInvalidArgument(t, ctx, session, "learning_review_update", correction)
 }
 
 func TestMCPUsefulnessMetadataAndValidation(t *testing.T) {

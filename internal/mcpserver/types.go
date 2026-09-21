@@ -114,6 +114,12 @@ type LearningReviewInput struct {
 	Comment     string              `json:"comment,omitempty" jsonschema:"optional note about what was difficult or confused"`
 }
 
+type LearningReviewUpdateInput struct {
+	ReviewToken string              `json:"reviewToken" jsonschema:"original token of the owner's latest accepted learning_review; never the pending next-card or reinforcement token"`
+	Rating      domain.ReviewRating `json:"rating" jsonschema:"corrected grade: again failed, hard effortful or materially hinted, good correct, easy effortless"`
+	Comment     *string             `json:"comment,omitempty" jsonschema:"omit to preserve the saved comment; provide an empty string to clear it"`
+}
+
 type ReinforcementNextInput struct{}
 
 type ReinforcementReviewInput struct {

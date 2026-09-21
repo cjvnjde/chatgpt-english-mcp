@@ -19,6 +19,7 @@ var (
 	ErrCorruptData         = errors.New("corrupt stored data")
 	ErrArchived            = errors.New("vocabulary item is archived")
 	ErrIdempotencyConflict = errors.New("review token conflicts with an existing attempt")
+	ErrNotLatestReview     = errors.New("review token is not the latest accepted review")
 	ErrAmbiguous           = errors.New("more than one vocabulary sense matches")
 )
 

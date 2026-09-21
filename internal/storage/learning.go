@@ -41,14 +41,14 @@ type LearningCandidate struct {
 	ShownAt        time.Time
 }
 
-// ReviewComment describes feedback saved with an immutable review attempt.
+// ReviewComment describes feedback saved with an accepted review attempt.
 type ReviewComment struct {
 	Comment    string
 	Rating     domain.ReviewRating
 	ReviewedAt time.Time
 }
 
-// ReviewAttempt is the immutable result of one accepted review submission.
+// ReviewAttempt is the current result of one accepted review submission.
 type ReviewAttempt struct {
 	ReviewID               string
 	ReviewToken            string
@@ -68,6 +68,14 @@ type RecordReviewInput struct {
 	ReviewToken string
 	Rating      domain.ReviewRating
 	Comment     string
+	Now         func() time.Time
+}
+
+type UpdateReviewInput struct {
+	OwnerKey    string
+	ReviewToken string
+	Rating      domain.ReviewRating
+	Comment     *string
 	Now         func() time.Time
 }
 
@@ -247,6 +255,143 @@ func (db *DB) RecordReview(
 	}
 
 	return attempt, false, nil
+}
+
+// UpdateLatestReview corrects a repetition in place, never advancing the review
+// clock or consuming the card's pending token.
+func (db *DB) UpdateLatestReview(
+	ctx context.Context,
+	input UpdateReviewInput,
+	schedule ScheduleReview,
+) (ReviewAttempt, bool, error) {
+	transaction, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return ReviewAttempt{}, false, fmt.Errorf("begin review correction transaction: %w", err)
+	}
+	defer transaction.Rollback()
+
+	attempt, err := reviewAttemptByToken(ctx, transaction, input.OwnerKey, input.ReviewToken)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ReviewAttempt{}, false, ErrNotFound
+	}
+	if err != nil {
+		return ReviewAttempt{}, false, fmt.Errorf("read review to correct: %w", err)
+	}
+	var latestID string
+	if err := transaction.QueryRowContext(ctx, `
+		SELECT id FROM review_attempts WHERE owner_key = ? ORDER BY rowid DESC LIMIT 1
+	`, input.OwnerKey).Scan(&latestID); err != nil {
+		return ReviewAttempt{}, false, fmt.Errorf("read latest review: %w", err)
+	}
+	if attempt.ReviewID != latestID {
+		return ReviewAttempt{}, false, ErrNotLatestReview
+	}
+
+	var status domain.LearningStatus
+	current, err := scanLearningCardWithStatus(transaction.QueryRowContext(ctx, `
+		SELECT `+learningCardColumns+`, vocabulary.learning_status
+		FROM learning_cards card
+		JOIN vocabulary_items vocabulary ON vocabulary.id = card.vocabulary_item_id
+		WHERE vocabulary.owner_key = ? AND card.id = ?
+			AND card.vocabulary_item_id = ? AND card.exercise_mode = ?
+	`, input.OwnerKey, attempt.LearningCardID, attempt.VocabularyItemID, attempt.ExerciseMode), &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ReviewAttempt{}, false, ErrNotFound
+	}
+	if err != nil {
+		return ReviewAttempt{}, false, fmt.Errorf("read correction learning card: %w", err)
+	}
+	if status == domain.LearningStatusArchived {
+		return ReviewAttempt{}, false, ErrArchived
+	}
+	comment := attempt.Comment
+	if input.Comment != nil {
+		comment = *input.Comment
+	}
+	attempt.After.ReviewToken = current.ReviewToken
+	if attempt.Rating == input.Rating && attempt.Comment == comment {
+		return attempt, true, nil
+	}
+
+	before, err := reviewCardBefore(ctx, transaction, input.OwnerKey, attempt)
+	if err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	next, _, err := schedule(before, attempt.ReviewedAt, input.Rating)
+	if err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	next.CardID = current.CardID
+	next.VocabularyItemID = current.VocabularyItemID
+	next.ExerciseMode = current.ExerciseMode
+	next.ReviewToken = current.ReviewToken
+	attempt.Rating = input.Rating
+	attempt.Comment = comment
+	attempt.After = next
+	if err := updateReviewAttempt(ctx, transaction, attempt); err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	if err := updateLearningCard(ctx, transaction, next, input.Now().UTC()); err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return ReviewAttempt{}, false, fmt.Errorf("commit review correction transaction: %w", err)
+	}
+	return attempt, false, nil
+}
+
+func reviewCardBefore(ctx context.Context, transaction *sql.Tx, ownerKey string, attempt ReviewAttempt) (LearningCard, error) {
+	var lastReviewAt sql.NullString
+	before := LearningCard{
+		CardID: attempt.LearningCardID, VocabularyItemID: attempt.VocabularyItemID,
+		ExerciseMode: attempt.ExerciseMode, ReviewToken: attempt.ReviewToken,
+		DueAt: attempt.PreviousDueAt, Retrievability: attempt.PreviousRetrievability,
+	}
+	if err := transaction.QueryRowContext(ctx, `
+		SELECT stability_before, difficulty_before, scheduled_days_before,
+			repetitions_before, lapses_before, fsrs_state_before,
+			remaining_steps_before, consecutive_failures_before, last_review_at_before,
+			COALESCE((SELECT COALESCE(previous.effective_rating, previous.rating)
+				FROM review_attempts previous
+				WHERE previous.owner_key = review.owner_key
+					AND previous.learning_card_id = review.learning_card_id
+					AND previous.rowid < review.rowid
+				ORDER BY previous.rowid DESC LIMIT 1), '')
+		FROM review_attempts review WHERE owner_key = ? AND id = ?
+	`, ownerKey, attempt.ReviewID).Scan(
+		&before.Stability, &before.Difficulty, &before.ScheduledDays,
+		&before.Repetitions, &before.Lapses, &before.FSRSState,
+		&before.RemainingSteps, &before.ConsecutiveFailures, &lastReviewAt, &before.LastRating,
+	); err != nil {
+		return LearningCard{}, fmt.Errorf("read pre-review snapshot: %w", err)
+	}
+	if lastReviewAt.Valid {
+		var err error
+		before.LastReviewAt, err = parseStoredTime(lastReviewAt.String, "pre-review date")
+		if err != nil {
+			return LearningCard{}, err
+		}
+	} else if before.Repetitions > 0 {
+		return LearningCard{}, fmt.Errorf("%w: pre-review date is unavailable", ErrCorruptData)
+	}
+	return before, nil
+}
+
+func updateReviewAttempt(ctx context.Context, transaction *sql.Tx, attempt ReviewAttempt) error {
+	_, err := transaction.ExecContext(ctx, `
+		UPDATE review_attempts SET rating = ?, effective_rating = ?, comment = ?,
+			due_after = ?, stability_after = ?, difficulty_after = ?, retrievability_after = ?,
+			scheduled_days_after = ?, repetitions_after = ?, lapses_after = ?, fsrs_state_after = ?,
+			remaining_steps_after = ?, consecutive_failures_after = ?
+		WHERE id = ?
+	`, attempt.Rating, attempt.After.LastRating, attempt.Comment,
+		TimeString(attempt.After.DueAt), attempt.After.Stability, attempt.After.Difficulty, attempt.After.Retrievability,
+		attempt.After.ScheduledDays, attempt.After.Repetitions, attempt.After.Lapses, attempt.After.FSRSState,
+		attempt.After.RemainingSteps, attempt.After.ConsecutiveFailures, attempt.ReviewID)
+	if err != nil {
+		return fmt.Errorf("update review attempt: %w", err)
+	}
+	return nil
 }
 
 const learningCardColumns = `
@@ -432,17 +577,21 @@ func insertReviewAttempt(
 	attempt ReviewAttempt,
 	before LearningCard,
 ) error {
+	var lastReviewAt any
+	if !before.LastReviewAt.IsZero() {
+		lastReviewAt = TimeString(before.LastReviewAt)
+	}
 	_, err := transaction.ExecContext(ctx, `
 		INSERT INTO review_attempts(
 			id, owner_key, submission_id, vocabulary_item_id, learning_card_id,
 			exercise_mode, rating, effective_rating, comment, reviewed_at,
 			due_before, stability_before, difficulty_before, retrievability_before,
 			scheduled_days_before, repetitions_before, lapses_before, fsrs_state_before,
-			remaining_steps_before, consecutive_failures_before,
+			remaining_steps_before, consecutive_failures_before, last_review_at_before,
 			due_after, stability_after, difficulty_after, retrievability_after,
 			scheduled_days_after, repetitions_after, lapses_after, fsrs_state_after,
 			remaining_steps_after, consecutive_failures_after
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		attempt.ReviewID,
 		ownerKey,
@@ -464,6 +613,7 @@ func insertReviewAttempt(
 		before.FSRSState,
 		before.RemainingSteps,
 		before.ConsecutiveFailures,
+		lastReviewAt,
 		TimeString(attempt.After.DueAt),
 		attempt.After.Stability,
 		attempt.After.Difficulty,

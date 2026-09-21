@@ -29,6 +29,11 @@ type Store interface {
 		input storage.RecordReviewInput,
 		schedule storage.ScheduleReview,
 	) (storage.ReviewAttempt, bool, error)
+	UpdateLatestReview(
+		ctx context.Context,
+		input storage.UpdateReviewInput,
+		schedule storage.ScheduleReview,
+	) (storage.ReviewAttempt, bool, error)
 }
 
 type Service struct {
@@ -65,6 +70,12 @@ type RecordOptions struct {
 	ReviewToken string
 	Rating      domain.ReviewRating
 	Comment     string
+}
+
+type UpdateOptions struct {
+	ReviewToken string
+	Rating      domain.ReviewRating
+	Comment     *string
 }
 
 type RecordResult struct {
@@ -154,6 +165,50 @@ func (service *Service) Record(ctx context.Context, options RecordOptions) (Reco
 	}
 	if err != nil {
 		return RecordResult{}, apperr.Wrap(apperr.InternalError, "failed to record the review", err)
+	}
+	return RecordResult{
+		Recorded:        true,
+		Duplicate:       duplicate,
+		NextReviewAt:    storage.TimeString(attempt.After.DueAt),
+		Troublesome:     isTroublesome(attempt.After),
+		EffectiveRating: attempt.After.LastRating,
+	}, nil
+}
+
+func (service *Service) UpdateLatest(ctx context.Context, options UpdateOptions) (RecordResult, error) {
+	recordOptions := RecordOptions{
+		ReviewToken: options.ReviewToken,
+		Rating:      options.Rating,
+	}
+	if options.Comment != nil {
+		recordOptions.Comment = *options.Comment
+	}
+	validated, err := validateRecordOptions(recordOptions)
+	if err != nil {
+		return RecordResult{}, err
+	}
+	var comment *string
+	if options.Comment != nil {
+		comment = &validated.Comment
+	}
+	attempt, duplicate, err := service.store.UpdateLatestReview(ctx, storage.UpdateReviewInput{
+		OwnerKey:    service.ownerKey,
+		ReviewToken: validated.ReviewToken,
+		Rating:      validated.Rating,
+		Comment:     comment,
+		Now:         service.now,
+	}, service.schedule)
+	if errors.Is(err, storage.ErrNotFound) {
+		return RecordResult{}, apperr.New(apperr.NotFound, "the review token does not identify an accepted review")
+	}
+	if errors.Is(err, storage.ErrArchived) {
+		return RecordResult{}, apperr.New(apperr.InvalidArgument, "archived vocabulary cannot be reviewed")
+	}
+	if errors.Is(err, storage.ErrNotLatestReview) {
+		return RecordResult{}, apperr.New(apperr.InvalidArgument, "only the latest accepted learning_review can be corrected")
+	}
+	if err != nil {
+		return RecordResult{}, apperr.Wrap(apperr.InternalError, "failed to update the review", err)
 	}
 	return RecordResult{
 		Recorded:        true,

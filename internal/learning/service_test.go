@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -577,5 +578,84 @@ func assertApplicationCode(t *testing.T, err error, code apperr.Code) {
 	var applicationError *apperr.Error
 	if !errors.As(err, &applicationError) || applicationError.Code != code {
 		t.Fatalf("error = %v, want application code %s", err, code)
+	}
+}
+
+func TestUpdateLatestReplaysOriginalFSRSStateAndTime(t *testing.T) {
+	for _, mature := range []bool{false, true} {
+		t.Run(map[bool]string{false: "new card", true: "mature card"}[mature], func(t *testing.T) {
+			ctx := context.Background()
+			store, service := newTestService(t)
+			controlStore, control := newTestService(t)
+			now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+			service.now = func() time.Time { return now }
+			control.now = func() time.Time { return now }
+			saveVocabulary(t, store, "recall", now.Add(-time.Hour), domain.LearningStatusNew)
+			saveVocabulary(t, controlStore, "recall", now.Add(-time.Hour), domain.LearningStatusNew)
+			if mature {
+				seed := recordReview(t, service, nextWord(t, service, false).ReviewToken, domain.ReviewRatingEasy, "")
+				recordReview(t, control, nextWord(t, control, false).ReviewToken, domain.ReviewRatingEasy, "")
+				now = mustParseTime(t, seed.NextReviewAt).Add(48 * time.Hour)
+			}
+			token := nextWord(t, service, false).ReviewToken
+			controlToken := nextWord(t, control, false).ReviewToken
+			now = now.Add(time.Minute)
+			recordReview(t, service, token, domain.ReviewRatingGood, "Confused the meaning.")
+			want := recordReview(t, control, controlToken, domain.ReviewRatingAgain, "Confused the meaning.")
+			pending := nextWord(t, service, false)
+			// Correction time must not become a second review time.
+			now = now.Add(48 * time.Hour)
+			got, err := service.UpdateLatest(ctx, UpdateOptions{ReviewToken: token, Rating: domain.ReviewRatingAgain})
+			if err != nil || got != want {
+				t.Fatalf("corrected result = %#v, %v; direct again = %#v", got, err, want)
+			}
+			candidate, err := store.NextLearningItem(ctx, "owner", service.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected, err := controlStore.NextLearningItem(ctx, "owner", control.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotCard, err := toFSRSCard(candidate.Card)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCard, err := toFSRSCard(expected.Card)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(gotCard, wantCard) || candidate.Card.ConsecutiveFailures != expected.Card.ConsecutiveFailures {
+				t.Fatalf("correction must match one direct again: got %#v; want %#v", candidate.Card, expected.Card)
+			}
+			if candidate.Card.ReviewToken != pending.ReviewToken {
+				t.Fatal("correction invalidated the already presented next review")
+			}
+			comments, err := store.ReviewComments(ctx, "owner", candidate.Card.VocabularyItemID, true)
+			if err != nil || len(comments) != 1 || comments[0].Rating != domain.ReviewRatingAgain || comments[0].Comment != "Confused the meaning." {
+				t.Fatalf("corrected comment history = %#v, %v", comments, err)
+			}
+			retry, err := service.UpdateLatest(ctx, UpdateOptions{ReviewToken: token, Rating: domain.ReviewRatingAgain})
+			if err != nil || !retry.Duplicate || retry.NextReviewAt != want.NextReviewAt {
+				t.Fatalf("correction retry = %#v, %v", retry, err)
+			}
+			empty := ""
+			_, err = service.UpdateLatest(ctx, UpdateOptions{ReviewToken: token, Rating: domain.ReviewRatingAgain, Comment: &empty})
+			if err != nil {
+				t.Fatal(err)
+			}
+			comments, err = store.ReviewComments(ctx, "owner", candidate.Card.VocabularyItemID, true)
+			if err != nil || len(comments) != 0 {
+				t.Fatalf("explicit empty comment did not clear feedback: %#v, %v", comments, err)
+			}
+			// A later real answer uses the corrected state, not the abandoned good schedule.
+			next := recordReview(t, service, pending.ReviewToken, domain.ReviewRatingGood, "")
+			controlNext := recordReview(t, control, expected.Card.ReviewToken, domain.ReviewRatingGood, "")
+			if next != controlNext {
+				t.Fatalf("subsequent schedule diverged: got %#v; want %#v", next, controlNext)
+			}
+			_, err = service.UpdateLatest(ctx, UpdateOptions{ReviewToken: token, Rating: domain.ReviewRatingAgain})
+			assertApplicationCode(t, err, apperr.InvalidArgument)
+		})
 	}
 }

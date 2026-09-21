@@ -81,7 +81,6 @@ func TestContextSenseMigrationPreservesIdentityAndLearningHistory(t *testing.T) 
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "context-migration.sqlite")
 	legacy := openLegacyDatabase(t, path, 13)
-	oldStore := &DB{sql: legacy}
 	now := time.Date(2026, 9, 10, 12, 0, 0, 123, time.UTC)
 	contextValue := "  A  “RIVER”\tbank  "
 	digest := sha256.Sum256([]byte(domain.NormalizeTerm(contextValue)))
@@ -111,10 +110,7 @@ func TestContextSenseMigrationPreservesIdentityAndLearningHistory(t *testing.T) 
 	}
 	reviewInput := RecordReviewInput{OwnerKey: "owner", ReviewToken: initialCard.ReviewToken,
 		Rating: domain.ReviewRatingGood, Comment: "A useful river context.", Now: clockAt(now.Add(time.Minute))}
-	attempt, _, err := oldStore.RecordReview(ctx, reviewInput, coreStorageReviewSchedule)
-	if err != nil {
-		t.Fatal(err)
-	}
+	attempt := insertLegacyReview(t, legacy, reviewInput, initialCard)
 	legacyInput := input
 	legacyInput.Term, legacyInput.NormalizedTerm, legacyInput.SenseKey = "legacy", "legacy", "legacy"
 	legacyID := insertContextMigrationVocabulary(t, legacy, legacyInput)
@@ -226,6 +222,63 @@ func coreStorageReviewSchedule(card LearningCard, now time.Time, rating domain.R
 	card.LastReviewAt = now
 	card.LastRating = rating
 	return card, 0, nil
+}
+
+func insertLegacyReview(t *testing.T, database *sql.DB, input RecordReviewInput, before LearningCard) ReviewAttempt {
+	t.Helper()
+	now := input.Now()
+	after, retrievability, err := coreStorageReviewSchedule(before, now, input.Rating)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after.ReviewToken, err = NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewID, err := NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := ReviewAttempt{
+		ReviewID: reviewID, ReviewToken: input.ReviewToken,
+		VocabularyItemID: before.VocabularyItemID, LearningCardID: before.CardID,
+		ExerciseMode: before.ExerciseMode, Rating: input.Rating, Comment: input.Comment,
+		ReviewedAt: now, PreviousDueAt: before.DueAt, PreviousRetrievability: retrievability, After: after,
+	}
+	transaction, err := database.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback()
+	_, err = transaction.Exec(`
+		INSERT INTO review_attempts(
+			id, owner_key, submission_id, vocabulary_item_id, learning_card_id,
+			exercise_mode, rating, effective_rating, comment, reviewed_at,
+			due_before, stability_before, difficulty_before, retrievability_before,
+			scheduled_days_before, repetitions_before, lapses_before, fsrs_state_before,
+			remaining_steps_before, consecutive_failures_before,
+			due_after, stability_after, difficulty_after, retrievability_after,
+			scheduled_days_after, repetitions_after, lapses_after, fsrs_state_after,
+			remaining_steps_after, consecutive_failures_after
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, attempt.ReviewID, input.OwnerKey, input.ReviewToken, before.VocabularyItemID, before.CardID,
+		before.ExerciseMode, input.Rating, after.LastRating, input.Comment, TimeString(now),
+		TimeString(before.DueAt), before.Stability, before.Difficulty, retrievability,
+		before.ScheduledDays, before.Repetitions, before.Lapses, before.FSRSState,
+		before.RemainingSteps, before.ConsecutiveFailures,
+		TimeString(after.DueAt), after.Stability, after.Difficulty, after.Retrievability,
+		after.ScheduledDays, after.Repetitions, after.Lapses, after.FSRSState,
+		after.RemainingSteps, after.ConsecutiveFailures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := updateLearningCard(context.Background(), transaction, after, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return attempt
 }
 
 // Historical fixtures use their original SQL schema, never current hydration.

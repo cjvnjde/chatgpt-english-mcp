@@ -63,7 +63,7 @@ The server can:
 - attach custom descriptions and source attribution, notes, examples, example images, tags, learning status, and general usefulness;
 - browse and filter saved vocabulary;
 - choose exactly one item for production-recall practice;
-- store immutable review attempts and optional notes about mistakes;
+- store review attempts and optional notes about mistakes, with correction limited to the latest answer;
 - use FSRS to schedule the next review;
 - identify repeatedly failed or troublesome items.
 
@@ -241,9 +241,9 @@ The public `usefulness` field exposes the effective result, not the original hin
 
 ### Learning state
 
-Every active vocabulary item has one production-recall card. The card stores FSRS scheduling state separately from the learning content. Each accepted review creates an immutable attempt containing the submitted rating, effective scheduling rating, schedule before and after the review, and an optional comment.
+Every active vocabulary item has one production-recall card. The card stores FSRS scheduling state separately from the learning content. Each accepted review creates an attempt containing the submitted rating, effective scheduling rating, schedule before and after the review, and an optional comment. Its identity, review time, and pre-review state are immutable; only the owner's latest accepted attempt can have its grade, comment, and resulting schedule corrected.
 
-Review tokens prevent duplicate attempts. Retrying the same token with the same rating and comment returns the original result with `duplicate: true`; reusing it with different data is rejected.
+Review tokens prevent duplicate attempts. Retrying the same token with the saved rating and comment returns the saved result with `duplicate: true`; reusing it with different data is rejected. Explicit corrections use `learning_review_update` and replace those saved values.
 
 Each committed `learning_next` selection also appends an immutable presentation event, atomically with selecting and reading the item. It records the owner, vocabulary and card IDs, exercise mode, current `reviewToken`, server issuance time (`shownAt`), scheduled due time at issuance, and selection kind (`new`, `due`, or `early`). The response exposes the event's `presentationId`, its UTC `shownAt`, and the selected vocabulary `itemId` for exact follow-up reads or edits.
 
@@ -269,6 +269,8 @@ Lookup and saving are independent. A term may be saved first, and a later succes
 4. Rate the answer and call `learning_review` with the unchanged `reviewToken`.
 5. Explain the answer and use the returned schedule only as learner-facing context when helpful.
 
+If the learner corrects the grading of that answer, call `learning_review_update` with the same original token and the corrected rating, such as `again`. Do not submit a second review. Omit `comment` to retain the saved note, or replace/clear it explicitly. Only the latest accepted repetition across all vocabulary items is editable; fetching another item is allowed, but accepting another answer locks the earlier one.
+
 Rating guidance:
 
 | Rating | Use when |
@@ -282,7 +284,7 @@ The tutor should add a short review comment only when a concrete confusion, fail
 
 FSRS uses the **submitted grade unchanged**. A fast `good` remains `good`; only an explicit `easy` receives the corresponding schedule. Server issuance includes model processing and delivery, not a measurement of human recall time.
 
-Neither the server nor the tutor should use chat latency to promote or penalize a grade. `learning_review` returns `effectiveRating`, which equals the submitted grade for new reviews. Historical retries preserve the original effective grade and schedule; always retry with the original submitted rating and comment.
+Neither the server nor the tutor should use chat latency to promote or penalize a grade. `learning_review` returns `effectiveRating`, which equals the submitted grade for new reviews. Historical retries preserve their saved effective grade and schedule; retry with the saved submitted rating and comment, using corrected values if an explicit correction has replaced them.
 
 ### Continue a lesson
 
@@ -600,7 +602,7 @@ sequenceDiagram
     else First submission with a valid active-card token
         DB->>Schedule: Card, transaction review time, submitted rating
         Schedule-->>DB: Effective rating and updated scheduling state
-        DB->>DB: Save immutable attempt, update card, rotate token, commit
+        DB->>DB: Save attempt, update card, rotate token, commit
         DB-->>MCP: New saved result, duplicate = false
     end
     MCP-->>Tutor: nextReviewAt, effectiveRating, troublesome
@@ -612,11 +614,13 @@ The service trims the token and comment and validates the rating. After acquirin
 - Same token with a different rating or comment: `INVALID_ARGUMENT`.
 - No existing attempt and no current card for that owner's token: `NOT_FOUND`.
 - A current token for an archived item: `INVALID_ARGUMENT`.
-- Otherwise: calculate scheduling, save the immutable attempt, update the card, and rotate its token atomically.
+- Otherwise: calculate scheduling, save the attempt, update the card, and rotate its token atomically.
 
 Consequently, a valid duplicate can still return its original result after later reviews, archiving, or deletion. It returns that attempt's schedule, not the latest schedule. A failed transaction does not partially record a review.
 
 A due date is not an acceptance gate: a valid active-card token can be reviewed early. A presentation is also not a storage-level prerequisite, although the normal tutor workflow gets the token from `learning_next`. Neither missing nor repeated presentation history changes the grade.
+
+`learning_review_update` acquires the same writer lock, resolves the owner's original token, and checks that its attempt has the greatest insertion row ID for that owner **before** considering duplicate corrections. It requires an existing, non-archived card. Scheduling starts from the stored pre-review state at the original review time, not from the current card or correction time. The saved result and card update commit together, preserving the pending token and attempt count. Identical corrections replay without scheduling; older attempts are always rejected. Legacy pre-review clocks are restored only from recorded predecessor reviews with matching repetition counts; missing history causes a safe failure, never an invented timestamp.
 
 ### Submitted rating versus effective rating
 

@@ -248,8 +248,15 @@ func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory
 	if attempt.Comment != "Needed a context clue." || attempt.After.ReviewToken == "" || attempt.After.ReviewToken == reviewToken {
 		t.Fatalf("recorded review token or comment = %#v", attempt)
 	}
-	if _, err := store.sql.ExecContext(ctx, "UPDATE review_attempts SET rating = 'easy' WHERE id = ?", attempt.ReviewID); err == nil {
-		t.Fatal("immutable review UPDATE succeeded")
+	for _, mutation := range []string{
+		"submission_id = 'changed-token'",
+		"due_before = '2099-01-01T00:00:00Z'",
+		"last_review_at_before = '2026-09-01T00:00:00Z'",
+		"rowid = rowid + 1",
+	} {
+		if _, err := store.sql.ExecContext(ctx, "UPDATE review_attempts SET "+mutation+" WHERE id = ?", attempt.ReviewID); err == nil {
+			t.Fatalf("immutable review metadata UPDATE succeeded: %s", mutation)
+		}
 	}
 	if _, err := store.sql.ExecContext(ctx, "DELETE FROM review_attempts WHERE id = ?", attempt.ReviewID); err == nil {
 		t.Fatal("immutable review DELETE succeeded")
@@ -296,8 +303,8 @@ func TestReviewTimingMigrationPreservesLegacyRetry(t *testing.T) {
 	if !duplicate || attempt.After.LastRating != domain.ReviewRatingGood || TimeString(attempt.After.DueAt) != "2026-09-08T10:00:00Z" {
 		t.Fatalf("legacy retry after migration = %#v, duplicate %t", attempt, duplicate)
 	}
-	if _, err := store.sql.ExecContext(ctx, "UPDATE review_attempts SET effective_rating = 'easy' WHERE id = 'review'"); err == nil {
-		t.Fatal("migration allowed immutable review history to be rewritten")
+	if _, err := store.sql.ExecContext(ctx, "UPDATE review_attempts SET reviewed_at = '2026-09-08T10:00:00Z' WHERE id = 'review'"); err == nil {
+		t.Fatal("migration allowed the original review time to be rewritten")
 	}
 }
 

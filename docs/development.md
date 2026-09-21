@@ -144,7 +144,7 @@ SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchro
 - one vocabulary item per owner, normalized term, and sense key;
 - one active dictionary snapshot per provider, term, dataset version, and parser version;
 - one production card per vocabulary item;
-- immutable review-attempt and presentation-event rows, retained after vocabulary deletion;
+- immutable presentation events and review identities/pre-review snapshots, with result corrections limited to the owner's latest accepted repetition; history is retained after vocabulary deletion;
 - unique, rotating review tokens;
 - automatic learning-card creation for new or reactivated items.
 
@@ -162,7 +162,7 @@ Only when no new or due cards exist, choose a future card: restrict to nonrecent
 
 Timestamp strings have variable fractional precision. Compare parsed times, or compare canonical UTC timestamp prefixes with the terminal `Z` removed; raw RFC3339Nano text does not sort chronologically. Presentation history records server issuance, not guaranteed delivery or human visibility. Request retries append new events, potentially for different items. Review-token linkage can associate several presentations with one accepted review, but does not establish a recall duration. Migrations retain existing timestamps and never backfill invented presentation times.
 
-Review persistence acquires the write transaction before reading card state or evaluating the injected review clock. The learning scheduler uses the submitted grade unchanged; presentation counts and answer latency never promote or penalize it. Submitted and effective grades remain separately stored to preserve immutable historical results. Duplicate lookup precedes scheduling and replays the original effective grade and due date, including reviews accepted under the old promotion policy, without recomputing them. `timingBoost` is no longer an output field.
+Review persistence acquires the write transaction before reading card state or evaluating the injected review clock. The learning scheduler uses the submitted grade unchanged; presentation counts and answer latency never promote or penalize it. Submitted and effective grades remain separately stored to preserve historical results. Duplicate lookup precedes scheduling and replays the saved effective grade and due date, including reviews accepted under the old promotion policy, without recomputing them. An explicit `learning_review_update` replaces the saved grade, comment, and result only for the owner's latest accepted repetition; it schedules from the original before-state and review time, preserving the pending token and review count. `timingBoost` is no longer an output field.
 
 `reinforcement_next` and `reinforcement_review` use separate storage and tokens for explicitly learned vocabulary. Selection groups meanings by normalized word, caps each word at 25% through proportional redistribution, and requires at least four distinct words. Positive weights combine usefulness, personal interest, independent difficulty, reinforcement recency, and a bounded comment bonus scaled by current difficulty. Good/easy reviews reduce that bonus to zero as difficulty resolves; all comments remain available for teaching. Feedback is transactional and idempotent, preserving original results and leaving FSRS/status untouched. See [the complete contract and formulas](tools.md#reinforcement_next).
 
@@ -185,6 +185,8 @@ Migration `011` adds nullable `review_attempts.effective_rating` and a presentat
 Migration `012` adds constrained `personal_interest` defaulting to `normal`, without changing existing FSRS state or usefulness. Migration `013` introduces independent reinforcement practice, presentations, and immutable reviews. No fabricated past reinforcement is backfilled.
 
 Migration `014` separates context-only sense keys from dictionary-definition keys. Its Go data step applies the same Unicode normalization and SHA-256 identity calculation used by vocabulary saves. Only context-only keys change; vocabulary IDs, metadata, card schedules, tokens, and immutable history remain intact. Conflicting stored identities abort the transaction rather than merging or deleting learner records. A previously discarded save cannot be reconstructed from the surviving item.
+
+Migration `017` adds `last_review_at_before` to review snapshots and an owner/insertion-order index. Existing timestamps are backfilled only from the immediately preceding same-card attempt when repetition counts match. Missing pre-review clocks on previously reviewed cards make corrections fail safely. New attempts persist that clock directly. The update trigger permits only the latest owner's attempt to change its grade, comment, and after-state; identity, before-state, and review time remain protected, as does deletion of any review attempt.
 
 ## Adding or changing a tool
 

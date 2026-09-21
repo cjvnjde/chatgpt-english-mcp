@@ -58,6 +58,9 @@ func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
 	if err := registerLearningReview(server, services.Learning, logger); err != nil {
 		return nil, err
 	}
+	if err := registerLearningReviewUpdate(server, services.Learning, logger); err != nil {
+		return nil, err
+	}
 	if err := registerReinforcementNext(server, services.Learning, logger); err != nil {
 		return nil, err
 	}
@@ -298,7 +301,7 @@ func registerLearningReview(server *mcp.Server, service *learning.Service, logge
 	return registerTool(server, &mcp.Tool{
 		Name:        "learning_review",
 		Title:       "Record a vocabulary review",
-		Description: "Record one production-recall rating with an optional problem comment and use FSRS to schedule the next review. Grade answer quality: again for failed or revealed recall, hard for substantial effort or material hints, good for correct recall without material hints, easy for clearly effortless recall. The submitted grade is used unchanged; answer latency never promotes or penalizes a grade. Returns effectiveRating, preserving the original scheduling grade on historical retries. Retry with the original rating and comment; reviewToken makes retries idempotent.",
+		Description: "Record one production-recall rating with an optional problem comment and use FSRS to schedule the next review. Grade answer quality: again for failed or revealed recall, hard for substantial effort or material hints, good for correct recall without material hints, easy for clearly effortless recall. The submitted grade is used unchanged; answer latency never promotes or penalizes a grade. Returns effectiveRating. Retry with the same rating and comment; reviewToken makes identical retries idempotent and changed payloads are rejected. To correct the latest accepted learning_review, use learning_review_update with its original reviewToken instead of recording a second review.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: &destructive,
 			IdempotentHint:  true,
@@ -306,6 +309,36 @@ func registerLearningReview(server *mcp.Server, service *learning.Service, logge
 		},
 	}, inputSchema, outputSchema, logger, func(ctx context.Context, input LearningReviewInput) (learning.RecordResult, error) {
 		return service.Record(ctx, learning.RecordOptions{
+			ReviewToken: input.ReviewToken,
+			Rating:      input.Rating,
+			Comment:     input.Comment,
+		})
+	})
+}
+
+func registerLearningReviewUpdate(server *mcp.Server, service *learning.Service, logger *slog.Logger) error {
+	inputSchema, err := inferredSchema[LearningReviewUpdateInput]()
+	if err != nil {
+		return err
+	}
+	configureInputSchema(inputSchema)
+	outputSchema, err := inferredSchema[learning.RecordResult]()
+	if err != nil {
+		return err
+	}
+	closedWorld := false
+	destructive := true
+	return registerTool(server, &mcp.Tool{
+		Name:        "learning_review_update",
+		Title:       "Correct the latest vocabulary review",
+		Description: "Correct only this owner's latest accepted learning_review across all vocabulary items, using that review's original reviewToken. Recalculate FSRS from its original pre-review state at its original review time; this replaces the rating and schedule, never adds a second review or repetition. Omit comment to preserve it, or provide an empty string to clear it. The next card's pending token remains valid. Multiple corrections are allowed while this is still the latest accepted review; an identical correction returns duplicate true, but older reviews are rejected even on retries. Missing, deleted, or archived vocabulary cannot be corrected. This tool never changes reinforcement practice; do not use reinforcement tokens.",
+		Annotations: &mcp.ToolAnnotations{
+			DestructiveHint: &destructive,
+			IdempotentHint:  true,
+			OpenWorldHint:   &closedWorld,
+		},
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, input LearningReviewUpdateInput) (learning.RecordResult, error) {
+		return service.UpdateLatest(ctx, learning.UpdateOptions{
 			ReviewToken: input.ReviewToken,
 			Rating:      input.Rating,
 			Comment:     input.Comment,
