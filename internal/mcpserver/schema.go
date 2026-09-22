@@ -16,7 +16,8 @@ var schemaOptions = &jsonschema.ForOptions{
 		reflect.TypeFor[domain.Usefulness]():       enumSchema("low", "normal", "high"),
 		reflect.TypeFor[domain.PersonalInterest](): enumSchema("low", "normal", "high"),
 		reflect.TypeFor[domain.ReviewRating]():     enumSchema("again", "hard", "good", "easy"),
-		reflect.TypeFor[SortOrder]():               enumSchema("recent", "oldest", "alphabetical"),
+		reflect.TypeFor[SortOrder]():               enumSchema("recent", "oldest", "alphabetical", "random"),
+		reflect.TypeFor[TermType]():                enumSchema("word", "expression"),
 	},
 }
 
@@ -129,6 +130,21 @@ func configureListSchema(schema *jsonschema.Schema) {
 	}
 	if _, ok := schema.Properties["sort"]; ok {
 		setDefault(schema, "sort", `"recent"`)
+	}
+	for _, bounds := range []struct {
+		property      string
+		maximumItems  int
+		maximumLength int
+	}{
+		{property: "partsOfSpeech", maximumItems: 50, maximumLength: 50},
+		{property: "excludeItemIds", maximumItems: 1000, maximumLength: 200},
+	} {
+		if values, ok := schema.Properties[bounds.property]; ok {
+			minimumLength := 1
+			values.MaxItems = &bounds.maximumItems
+			values.Items.MinLength = &minimumLength
+			values.Items.MaxLength = &bounds.maximumLength
+		}
 	}
 }
 

@@ -293,9 +293,17 @@ After feedback, call `learning_next` again only when the learner wants another i
 ### Manage vocabulary
 
 - Use `vocabulary_get` by `itemId` for one exact saved meaning. Term lookup works only while that spelling has one saved meaning.
-- Use `vocabulary_list` for search, status/tag filters, and cursor pagination.
+- Use `vocabulary_list` for search, status/tag/type/part-of-speech/usefulness/interest filters, and cursor pagination.
 - Use `vocabulary_update` to replace selected metadata fields or archive/reactivate an item.
 - Use `vocabulary_delete` only when the item should be removed. Dictionary snapshots remain cached; learning cards are deleted with the item, while review attempts and presentation events remain as immutable history.
+
+### Build sentences without tracking a review
+
+For a request such as “give me five words I'm learning or have learned and ask me to make sentences,” call `vocabulary_list` with `statuses: ["learning", "learned"]`, `sort: "random"`, and `limit: 5`. Use `limit: 1` for one item. The AI uses each returned saved meaning to create the exercise and discusses the learner's answers in chat; it may show the target words.
+
+This is distinct from both scheduled review and tracked learned-word reinforcement: no token, presentation event, review submission, schedule update, difficulty update, or cooldown. It works with a small pool and leaves pending reviews untouched. Selection is random over matching saved meanings, without learning-priority weights. Repeated calls may repeat items; send earlier `itemId` values in `excludeItemIds` to avoid repeats. An empty match returns an empty list.
+
+Optional filters include exact stored usefulness/personal interest, lexical single-word versus multiword expression, and dictionary part of speech for the selected sense. Missing or unresolved part-of-speech metadata does not match that filter. Omitted statuses include archived items, so request the intended statuses explicitly. See the [full filter contract](tools.md#vocabulary_list) and [copyable prompt](prompts.md#free-form-vocabulary-exercises).
 
 ## How the next item is selected
 
@@ -967,7 +975,7 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 | Review comment text / `includeComments` | No selection effect | No direct effect | Feedback for the tutor, not automated scoring |
 | CEFR, Cambridge labels, pronunciation, term length | No direct ranking or eligibility effect | No direct effect | Can inform tutor explanation/hint, but not offline inference directly |
 | Lookup/cache availability | Dictionary content is not required for selection | No direct effect | Affects available question material, not offline usefulness |
-| `vocabulary_list` filters, pagination, sort | Do not carry over into `learning_next` | No effect | Browsing controls only |
+| `vocabulary_list` filters, pagination, sort | Do not carry over into `learning_next` | No effect | Browsing and untracked exercise selection only |
 | Stored retrievability | Not used in weights | Snapshot only; recomputed from memory rather than read as input | Not a live mastery score |
 | Creation/update timestamps | No oldest-first new-card policy or age bonus | No direct memory-equation effect | Browsing/history; card creation initializes its first due date |
 | Tutor's goals, interests, conversation, or learner level | Not read by the selector | Not read by FSRS | Only explicit tool inputs can communicate an assessment |

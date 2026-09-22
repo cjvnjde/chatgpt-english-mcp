@@ -217,13 +217,18 @@ func registerVocabularyList(server *mcp.Server, service *vocabulary.Service, log
 	return registerTool(server, &mcp.Tool{
 		Name:        "vocabulary_list",
 		Title:       "List saved vocabulary",
-		Description: "List saved terms with their complete linked dictionary lookups and opaque cursor pagination.",
+		Description: "List saved vocabulary with complete linked dictionary lookups, or select words and phrases for free-form sentence-writing, conversation, and word-list exercises. This read-only tool creates no review token or presentation, requires no feedback submission, and does not start, consume, record, or change learning or reinforcement reviews or state. Different filters combine with AND; statuses and partsOfSpeech match any supplied value, while tags must all match. Each saved sense remains a separate item. Use statuses learning and learned for exercises; omitted statuses include archived items. Sort random returns a fresh sample from the full filtered result without pagination or a cursor; use excludeItemIds to avoid session repetition. Other sorts use opaque cursor pagination.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld},
 	}, inputSchema, outputSchema, logger, func(ctx context.Context, input VocabularyListInput) (VocabularyListOutput, error) {
 		result, err := service.List(ctx, vocabulary.ListOptions{
 			Query:                input.Query,
 			Statuses:             input.Statuses,
 			Tags:                 input.Tags,
+			TermType:             string(input.TermType),
+			PartsOfSpeech:        input.PartsOfSpeech,
+			Usefulness:           input.Usefulness,
+			PersonalInterest:     input.PersonalInterest,
+			ExcludeItemIDs:       input.ExcludeItemIDs,
 			HasLookup:            input.HasLookup,
 			HasCustomDescription: input.HasCustomDescription,
 			Sort:                 string(input.Sort),

@@ -694,3 +694,257 @@ func TestVocabularyConcurrentRevisionWritersHaveOneWinner(t *testing.T) {
 		t.Fatalf("revision race: wins=%d conflicts=%d current=%#v winner=%#v err=%v", wins, conflicts, current, winner, err)
 	}
 }
+
+func TestVocabularyListFiltersResolvedSelectedSense(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		entry      int
+		definition int
+		text       string
+		noSense    bool
+		wantPOS    string
+	}{
+		{name: "noun ignores other entry verb", entry: 0, definition: 1, text: "noun only", wantPOS: "noun"},
+		{name: "exact indices win over duplicate text", entry: 1, definition: 0, text: "shared", wantPOS: "verb"},
+		{name: "stale indices use first duplicate text", entry: 20, definition: 20, text: "shared", wantPOS: "noun"},
+		{name: "mismatched indexed text falls back", entry: 0, definition: 1, text: "verb only", wantPOS: "verb"},
+		{name: "negative index falls back", entry: -1, definition: -1, text: "verb only", wantPOS: "verb"},
+		{name: "unresolved text has no POS", entry: 0, definition: 0, text: "removed"},
+		{name: "missing POS does not borrow from duplicate", entry: 2, definition: 0, text: "shared"},
+		{name: "lookup without selected sense", noSense: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, now := reinforcementTestStore(t)
+			snapshot, err := store.InsertDictionarySnapshot(ctx, DictionarySnapshotInsert{
+				Provider: "cambridge", NormalizedTerm: "bank", ParserVersion: 1, FetchedAt: now, ExpiresAt: now,
+				Data: domain.DictionarySnapshotData{Status: 200, Entries: []domain.DictionaryEntry{
+					{Headword: "bank", PartOfSpeech: " Noun ", Definitions: []domain.DictionaryDefinition{{Definition: "shared"}, {Definition: "noun only"}}},
+					{Headword: "bank", PartOfSpeech: "verb", Definitions: []domain.DictionaryDefinition{{Definition: "shared"}, {Definition: "verb only"}}},
+					{Headword: "bank", Definitions: []domain.DictionaryDefinition{{Definition: "shared"}}},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := VocabularyCreate{
+				OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", LookupID: snapshot.ID,
+				Status: domain.LearningStatusLearning, Now: now,
+			}
+			if !test.noSense {
+				input.SelectedEntryIndex, input.SelectedDefinitionIndex = &test.entry, &test.definition
+				input.SelectedDefinition = &domain.DictionaryDefinition{Definition: test.text}
+			}
+			_, saved, err := store.SaveVocabulary(ctx, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, parts := range [][]string{{"noun"}, {"verb"}, {"noun", "verb"}} {
+				items, err := store.ListVocabulary(ctx, VocabularyListQuery{
+					OwnerKey: "owner", PartsOfSpeech: parts, Sort: "alphabetical", Limit: 10,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantMatch := false
+				for _, part := range parts {
+					wantMatch = wantMatch || part == test.wantPOS
+				}
+				if wantMatch {
+					if len(items) != 1 || !reflect.DeepEqual(items[0], saved) {
+						t.Fatalf("POS %v returned %#v; want saved sense %#v", parts, items, saved)
+					}
+				} else if len(items) != 0 {
+					t.Fatalf("POS %v matched wrong or unresolved sense: %#v", parts, items)
+				}
+			}
+		})
+	}
+}
+
+func TestVocabularyListCombinesExerciseFilters(t *testing.T) {
+	ctx := context.Background()
+	store, now := reinforcementTestStore(t)
+	snapshot, err := store.InsertDictionarySnapshot(ctx, DictionarySnapshotInsert{
+		Provider: "cambridge", NormalizedTerm: "bank account", ParserVersion: 1, FetchedAt: now, ExpiresAt: now,
+		Data: domain.DictionarySnapshotData{Status: 200, Entries: []domain.DictionaryEntry{
+			{Headword: "bank account", PartOfSpeech: "noun", Definitions: []domain.DictionaryDefinition{{Definition: "noun sense"}}},
+			{Headword: "bank account", PartOfSpeech: "verb", Definitions: []domain.DictionaryDefinition{{Definition: "verb sense"}}},
+			{Headword: "bank account", PartOfSpeech: "adjective", Definitions: []domain.DictionaryDefinition{{Definition: "adjective sense"}}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := make(map[string]domain.VocabularyItem)
+	for _, name := range []string{
+		"noun", "verb", "owner", "word", "POS", "usefulness", "interest", "tag",
+		"status", "query", "description", "lookup", "excluded",
+	} {
+		entry, definition := 0, 0
+		input := VocabularyCreate{
+			OwnerKey: "owner", Term: "bank account", NormalizedTerm: "bank account", SenseKey: name,
+			LookupID: snapshot.ID, SelectedEntryIndex: &entry, SelectedDefinitionIndex: &definition,
+			Status: domain.LearningStatusLearning, Usefulness: domain.UsefulnessHigh, PersonalInterest: domain.PersonalInterestHigh,
+			Tags: []string{"practice", "O'Reilly"}, CustomDescription: "A saved description", Now: now,
+		}
+		switch name {
+		case "verb":
+			entry, input.Status = 1, domain.LearningStatusLearned
+		case "owner":
+			input.OwnerKey = "other-owner"
+		case "word":
+			input.Term, input.NormalizedTerm = "bank-account", "bank-account"
+		case "POS":
+			entry = 2
+		case "usefulness":
+			input.Usefulness = domain.UsefulnessLow
+		case "interest":
+			input.PersonalInterest = domain.PersonalInterestLow
+		case "tag":
+			input.Tags = []string{"practice"}
+		case "status":
+			input.Status = domain.LearningStatusArchived
+		case "query":
+			input.Term, input.NormalizedTerm = "checking account", "checking account"
+		case "description":
+			input.CustomDescription = ""
+		case "lookup":
+			input.LookupID = ""
+		}
+		input.SelectedDefinition = &snapshot.Data.Entries[entry].Definitions[definition]
+		_, item, err := store.SaveVocabulary(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Exercise explicit saved metadata rather than usefulness inference.
+		if _, err := store.sql.ExecContext(ctx, "UPDATE vocabulary_items SET usefulness = ? WHERE id = ?", input.Usefulness, item.ItemID); err != nil {
+			t.Fatal(err)
+		}
+		saved[name] = item
+	}
+	has := true
+	query := VocabularyListQuery{
+		OwnerKey: "owner", Query: "bank", TermType: "expression",
+		Statuses:      []domain.LearningStatus{domain.LearningStatusLearning, domain.LearningStatusLearned},
+		PartsOfSpeech: []string{"noun", "verb"}, Tags: []string{"practice", "O'Reilly"},
+		Usefulness: domain.UsefulnessHigh, PersonalInterest: domain.PersonalInterestHigh,
+		HasLookup: &has, HasCustomDescription: &has, ExcludeItemIDs: []string{saved["excluded"].ItemID},
+		Sort: "alphabetical", Limit: 20,
+	}
+	for _, order := range []string{"alphabetical", "random"} {
+		query.Sort = order
+		items, err := store.ListVocabulary(ctx, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]bool{saved["noun"].ItemID: true, saved["verb"].ItemID: true}
+		for _, item := range items {
+			if !want[item.ItemID] {
+				t.Fatalf("%s returned unexpected or duplicate item %#v", order, item)
+			}
+			delete(want, item.ItemID)
+		}
+		if len(want) != 0 {
+			t.Fatalf("%s missed eligible senses: %v", order, want)
+		}
+	}
+	query.TermType = "word"
+	items, err := store.ListVocabulary(ctx, query)
+	if err != nil || len(items) != 1 || items[0].ItemID != saved["word"].ItemID {
+		t.Fatalf("lexical word filter = %#v, error %v", items, err)
+	}
+	query.TermType, query.PartsOfSpeech, query.Statuses = "expression", nil, nil
+	query.HasLookup = nil
+	items, err = store.ListVocabulary(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundArchived, foundUnresolved := false, false
+	for _, item := range items {
+		foundArchived = foundArchived || item.ItemID == saved["status"].ItemID
+		foundUnresolved = foundUnresolved || item.ItemID == saved["lookup"].ItemID
+	}
+	if !foundArchived || !foundUnresolved {
+		t.Fatalf("omitted status/POS filters excluded saved items: %#v", items)
+	}
+}
+
+func TestVocabularyRandomListingPreservesPendingLearningAndReinforcement(t *testing.T) {
+	ctx := context.Background()
+	store, now := reinforcementTestStore(t)
+	_, learning, err := store.SaveVocabulary(ctx, VocabularyCreate{
+		OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", SenseKey: "learning",
+		Status: domain.LearningStatusLearning, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NextLearningItem(ctx, "owner", clockAt(now)); err != nil {
+		t.Fatal(err)
+	}
+	eligible := map[string]bool{learning.ItemID: true}
+	var excluded string
+	for _, sense := range []string{"finance", "river", "excluded"} {
+		_, item, err := store.SaveVocabulary(ctx, VocabularyCreate{
+			OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", SenseKey: sense,
+			Status: domain.LearningStatusLearned, Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sense == "excluded" {
+			excluded = item.ItemID
+		} else {
+			eligible[item.ItemID] = true
+		}
+		seedReinforcementPresentation(t, store, item.ItemID, "pending-"+sense, now)
+	}
+	state := func() map[string][]map[string]any {
+		t.Helper()
+		result := make(map[string][]map[string]any)
+		for _, table := range []string{
+			"vocabulary_items", "dictionary_snapshots", "learning_cards", "learning_presentations",
+			"review_attempts", "reinforcement_practice", "reinforcement_presentations", "reinforcement_attempts",
+		} {
+			rows, err := store.sql.QueryContext(ctx, "SELECT * FROM "+adminIdentifier(table)+" ORDER BY rowid")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result[table], err = adminScan(rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return result
+	}
+	before := state()
+	query := VocabularyListQuery{OwnerKey: "owner", TermType: "word", ExcludeItemIDs: []string{excluded}, Sort: "random", Limit: 2}
+	for _, limit := range []int{2, 10} {
+		query.Limit = limit
+		items, err := store.ListVocabulary(ctx, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCount := min(limit, len(eligible))
+		if len(items) != wantCount {
+			t.Fatalf("random limit %d returned %d items; want %d", limit, len(items), wantCount)
+		}
+		seen := make(map[string]bool)
+		for _, item := range items {
+			if !eligible[item.ItemID] || seen[item.ItemID] {
+				t.Fatalf("random list returned excluded or duplicate item %#v", item)
+			}
+			seen[item.ItemID] = true
+		}
+	}
+	for _, cursor := range [][2]string{{"primary", ""}, {"", learning.ItemID}, {"primary", learning.ItemID}} {
+		query.CursorPrimary, query.CursorID = cursor[0], cursor[1]
+		if _, err := store.ListVocabulary(ctx, query); err == nil {
+			t.Fatalf("random list accepted cursor %v", cursor)
+		}
+	}
+	if after := state(); !reflect.DeepEqual(after, before) {
+		t.Fatal("listing changed saved vocabulary, pending tokens, scheduling, or review state")
+	}
+}

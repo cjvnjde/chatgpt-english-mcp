@@ -10,7 +10,7 @@ The server implements eleven MCP tools over stateless Streamable HTTP. Inputs us
 | `vocabulary_save` | Idempotently create one vocabulary item. |
 | `vocabulary_update` | Replace selected metadata on an existing item. |
 | `vocabulary_get` | Retrieve one saved item. |
-| `vocabulary_list` | Search, filter, sort, and paginate saved items. |
+| `vocabulary_list` | Browse saved items or select a filtered random batch for untracked exercises. |
 | `vocabulary_delete` | Delete one vocabulary item. |
 | `learning_next` | Select one item for production recall. |
 | `learning_review` | Record a rating and schedule the next review. |
@@ -181,18 +181,64 @@ The item includes its selected `sense` and complete linked dictionary lookup. On
   query?: string;
   statuses?: LearningStatus[];
   tags?: string[];
+  termType?: "word" | "expression";
+  partsOfSpeech?: string[];
+  usefulness?: Usefulness;
+  personalInterest?: PersonalInterest;
+  excludeItemIds?: string[];
   hasLookup?: boolean;
   hasCustomDescription?: boolean;
-  sort?: "recent" | "oldest" | "alphabetical"; // default: "recent"
+  sort?: "recent" | "oldest" | "alphabetical" | "random"; // default: "recent"
   limit?: number; // default: 50; range: 1–100
-  cursor?: string;
+  cursor?: string; // nonempty cursors are invalid with sort: "random"
 }
 
 // Output
 { items: VocabularyItem[]; nextCursor?: string }
 ```
 
-`query` is a normalized, case-insensitive substring search. Statuses match any requested value; tags require every requested tag. Cursors are tied to the filters and sort order that created them and must not be modified.
+Use this **read-only** tool for sentence-writing, phrase-building, conversation, or word-list exercises without review tracking. It returns saved vocabulary and meanings, not an exercise or review result. The AI creates the exercise and gives feedback in chat. No review token or presentation is issued; no feedback submission is required. Selection does not change vocabulary, FSRS schedules, review history, reinforcement difficulty, or cooldowns, and does not consume pending review tokens.
+
+Different filters combine with **AND**:
+
+- `query` is a normalized, case-insensitive term substring search.
+- `statuses` matches any requested status. Omitted or empty means all statuses, **including archived**. Pass `["learning"]`, `["learned"]`, or both for the corresponding exercise pool; add `"new"` when wanted.
+- `tags` requires every supplied tag after normalization.
+- `termType` is lexical: `"word"` has no space in the whitespace-normalized term; `"expression"` contains a space. Hyphenated single tokens count as words. This is not automatic idiom classification.
+- `partsOfSpeech` matches any supplied dictionary label, such as `"noun"`, `"verb"`, or `"phrasal verb"`. Inputs are lowercased and whitespace-normalized. Matching uses the **saved selected sense**, including recovery from stale dictionary indices, not unrelated meanings elsewhere in its lookup. An item without a resolved selected-sense label does not match; omit this filter to include it.
+- `usefulness` and `personalInterest` match the stored values exactly. Usefulness is the effective inferred value, not the original AI hint.
+- `excludeItemIds` excludes exact saved meanings. IDs are trimmed, case-preserved, and deduplicated; excluding one meaning does not exclude another meaning of the same spelling.
+- `hasLookup` and `hasCustomDescription` filter by the presence or absence of the corresponding saved content.
+
+With `sort: "random"`, the server samples from **all matching items**, not just the first page. It returns up to `limit` distinct item IDs, with no `nextCursor`. Separate meanings can share the same term. Each call is independent and may repeat earlier items; pass previous IDs in `excludeItemIds` to avoid repeats in the current chat. There is no review cooldown or minimum pool size. No matches returns `{ "items": [] }`, not `NOT_FOUND`; do not silently broaden the learner's filters.
+
+Other sort modes use opaque cursor pagination. Cursors are tied to all normalized filters, exclusions, and sort order and must not be modified.
+
+For example, fetch five words or expressions being learned or already learned:
+
+```json
+{
+  "statuses": ["learning", "learned"],
+  "sort": "random",
+  "limit": 5
+}
+```
+
+Or fetch one personally interesting learned noun tagged for work:
+
+```json
+{
+  "statuses": ["learned"],
+  "tags": ["work"],
+  "termType": "word",
+  "partsOfSpeech": ["noun"],
+  "personalInterest": "high",
+  "sort": "random",
+  "limit": 1
+}
+```
+
+Use the returned `sense`, custom description, context, and examples to preserve the intended meaning. Show the target when asking the learner to write a sentence with it. Do not call `learning_next`, `reinforcement_next`, or their review tools for this untracked workflow. See the [free-form exercise prompt](prompts.md#free-form-vocabulary-exercises).
 
 ## `vocabulary_delete`
 
@@ -390,9 +436,11 @@ Identical token/rating/comment retries return the original practice result with 
 | source title | 200 Unicode characters |
 | source URL | 2,000 bytes (and no more than 2,000 schema characters) |
 | tags | 50 items; each 1–50 Unicode characters |
+| parts of speech | 50 labels; each 1–50 Unicode characters |
+| excluded item IDs | 1,000 IDs; each 1–200 Unicode characters |
 | notes and examples | 100 items each; each 1–1,000 Unicode characters |
 | review comment | 1,000 Unicode characters |
-| list page | 1–100 items |
+| list page or random sample | 1–100 items |
 
 ## Errors
 

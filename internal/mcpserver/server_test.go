@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"english-learning-mcp/internal/apperr"
@@ -18,7 +20,8 @@ import (
 )
 
 type fixtureProvider struct {
-	calls int
+	calls   int
+	entries []domain.DictionaryEntry
 }
 
 func (*fixtureProvider) Name() string           { return "cambridge" }
@@ -26,7 +29,7 @@ func (*fixtureProvider) ParserVersion() int     { return 12 }
 func (*fixtureProvider) DatasetVersion() string { return "" }
 func (provider *fixtureProvider) Lookup(context.Context, string) (domain.DictionarySnapshotData, error) {
 	provider.calls++
-	return domain.DictionarySnapshotData{
+	data := domain.DictionarySnapshotData{
 		SourceURL: "https://dictionary.example/bank",
 		Status:    200,
 		Entries: []domain.DictionaryEntry{{
@@ -43,7 +46,11 @@ func (provider *fixtureProvider) Lookup(context.Context, string) (domain.Diction
 		}},
 		Suggestions: []string{},
 		Images:      []domain.DictionaryImage{},
-	}, nil
+	}
+	if provider.entries != nil {
+		data.Entries = provider.entries
+	}
+	return data, nil
 }
 
 func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
@@ -451,6 +458,181 @@ func TestMCPPersonalInterestRejectsInvalidUpdatesAtomically(t *testing.T) {
 	})
 	if reset.PersonalInterest != domain.PersonalInterestNormal || reset.Usefulness != saved.Usefulness {
 		t.Fatalf("interest reset changed general usefulness: %#v", reset)
+	}
+}
+
+func TestMCPVocabularyExerciseFiltersAndRandomExclusions(t *testing.T) {
+	ctx := context.Background()
+	session, provider := newTestSession(t, ctx)
+	provider.entries = []domain.DictionaryEntry{
+		{
+			Headword:     "clouds",
+			PartOfSpeech: "noun",
+			Definitions: []domain.DictionaryDefinition{
+				{Definition: "an imagined collection of clouds"},
+				{Definition: "another imagined collection of clouds"},
+			},
+		},
+		{
+			Headword:     "clouds",
+			PartOfSpeech: "verb",
+			Definitions: []domain.DictionaryDefinition{
+				{Definition: "to imagine clouds"},
+			},
+		},
+	}
+	for entryIndex := range provider.entries {
+		for definitionIndex := range provider.entries[entryIndex].Definitions {
+			definition := &provider.entries[entryIndex].Definitions[definitionIndex]
+			definition.Examples = []string{}
+			definition.Phrases = []string{}
+			definition.SeeAlso = []string{}
+			definition.Images = []domain.DictionaryImage{}
+			definition.Labels = []string{}
+		}
+	}
+	nounDefinition := provider.entries[0].Definitions[0].Definition
+	otherNounDefinition := provider.entries[0].Definitions[1].Definition
+	verbDefinition := provider.entries[1].Definitions[0].Definition
+	matching := make(map[string]domain.VocabularyItem)
+	for _, seed := range []struct {
+		term       string
+		definition string
+		status     domain.LearningStatus
+		usefulness domain.Usefulness
+		interest   domain.PersonalInterest
+		tags       []string
+		match      bool
+	}{
+		{"count clouds before breakfast", nounDefinition, domain.LearningStatusLearning, domain.UsefulnessHigh, domain.PersonalInterestHigh, []string{"exercise", "sky"}, true},
+		{"count clouds before breakfast", otherNounDefinition, domain.LearningStatusLearned, domain.UsefulnessHigh, domain.PersonalInterestHigh, []string{"exercise", "sky"}, true},
+		{"count clouds before breakfast", verbDefinition, domain.LearningStatusLearning, domain.UsefulnessHigh, domain.PersonalInterestHigh, []string{"exercise", "sky"}, false},
+		{"clouds", nounDefinition, domain.LearningStatusLearning, domain.UsefulnessHigh, domain.PersonalInterestHigh, []string{"exercise", "sky"}, false},
+		{"polish clouds before breakfast", nounDefinition, domain.LearningStatusLearning, domain.UsefulnessLow, domain.PersonalInterestHigh, []string{"exercise", "sky"}, false},
+		{"embroider clouds before breakfast", nounDefinition, domain.LearningStatusLearning, domain.UsefulnessHigh, domain.PersonalInterestLow, []string{"exercise", "sky"}, false},
+		{"pickle clouds before breakfast", nounDefinition, domain.LearningStatusArchived, domain.UsefulnessHigh, domain.PersonalInterestHigh, []string{"exercise", "sky"}, false},
+		{"weigh clouds before breakfast", nounDefinition, domain.LearningStatusLearning, domain.UsefulnessHigh, domain.PersonalInterestHigh, []string{"exercise"}, false},
+		{"count clouds after breakfast", "", domain.LearningStatusLearning, domain.UsefulnessHigh, domain.PersonalInterestHigh, []string{"exercise", "sky"}, false},
+	} {
+		callTool[domain.DictionaryLookupResult](t, ctx, session, "dictionary_lookup", DictionaryLookupInput{Term: seed.term})
+		saved := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", VocabularySaveInput{
+			Term:             seed.term,
+			Definition:       seed.definition,
+			Status:           seed.status,
+			Usefulness:       seed.usefulness,
+			PersonalInterest: seed.interest,
+			Tags:             seed.tags,
+		})
+		if seed.match {
+			matching[saved.ItemID] = saved.VocabularyItem
+		}
+	}
+	filters := VocabularyListInput{
+		Query:            "clouds",
+		Statuses:         []domain.LearningStatus{domain.LearningStatusLearning, domain.LearningStatusLearned},
+		Tags:             []string{"Exercise", "Sky"},
+		TermType:         TermTypeExpression,
+		PartsOfSpeech:    []string{"  NOUN  ", "adjective"},
+		Usefulness:       domain.UsefulnessHigh,
+		PersonalInterest: domain.PersonalInterestHigh,
+		Sort:             SortRandom,
+		Limit:            100,
+	}
+	all := callTool[VocabularyListOutput](t, ctx, session, "vocabulary_list", filters)
+	if len(all.Items) != len(matching) || all.NextCursor != "" {
+		t.Fatalf("combined exercise filters = %#v", all)
+	}
+	seen := make(map[string]bool)
+	for _, item := range all.Items {
+		want, ok := matching[item.ItemID]
+		if !ok || seen[item.ItemID] || !reflect.DeepEqual(item, want) {
+			t.Fatalf("sample returned a duplicate, unmatched, or incomplete item: %#v", item)
+		}
+		seen[item.ItemID] = true
+	}
+	filters.Limit = 1
+	first := callTool[VocabularyListOutput](t, ctx, session, "vocabulary_list", filters)
+	if len(first.Items) != 1 || first.NextCursor != "" || !seen[first.Items[0].ItemID] {
+		t.Fatalf("bounded random sample = %#v", first)
+	}
+	filters.ExcludeItemIDs = []string{"  " + first.Items[0].ItemID + "  "}
+	second := callTool[VocabularyListOutput](t, ctx, session, "vocabulary_list", filters)
+	if len(second.Items) != 1 || second.NextCursor != "" ||
+		second.Items[0].ItemID == first.Items[0].ItemID || !seen[second.Items[0].ItemID] ||
+		second.Items[0].NormalizedTerm != first.Items[0].NormalizedTerm {
+		t.Fatalf("exact item exclusion did not retain the other saved sense: %#v", second)
+	}
+	filters.ExcludeItemIDs = append(filters.ExcludeItemIDs, second.Items[0].ItemID)
+	empty := callTool[map[string]json.RawMessage](t, ctx, session, "vocabulary_list", filters)
+	if string(empty["items"]) != "[]" || len(empty) != 1 {
+		t.Fatalf("exhausted sample should return an empty array without a cursor: %#v", empty)
+	}
+}
+
+func TestMCPVocabularyExerciseRejectsInvalidFilters(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t, ctx)
+	for _, test := range []struct {
+		name      string
+		arguments map[string]any
+	}{
+		{"term type", map[string]any{"termType": "idiom"}},
+		{"empty term type", map[string]any{"termType": ""}},
+		{"usefulness", map[string]any{"usefulness": "urgent"}},
+		{"interest", map[string]any{"personalInterest": "urgent"}},
+		{"sort", map[string]any{"sort": "shuffle"}},
+		{"random cursor", map[string]any{"sort": "random", "cursor": "previous-page"}},
+		{"empty part of speech", map[string]any{"partsOfSpeech": []string{""}}},
+		{"long part of speech", map[string]any{"partsOfSpeech": []string{strings.Repeat("語", 51)}}},
+		{"too many parts of speech", map[string]any{"partsOfSpeech": strings.Fields(strings.Repeat("noun ", 51))}},
+		{"empty exclusion", map[string]any{"excludeItemIds": []string{""}}},
+		{"long exclusion", map[string]any{"excludeItemIds": []string{strings.Repeat("x", 201)}}},
+		{"too many exclusions", map[string]any{"excludeItemIds": strings.Fields(strings.Repeat("item ", 1001))}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertToolInvalidArgument(t, ctx, session, "vocabulary_list", test.arguments)
+		})
+	}
+}
+
+func TestMCPVocabularyExercisePreservesPendingReview(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t, ctx)
+	saved := callTool[vocabulary.SaveResult](t, ctx, session, "vocabulary_save", VocabularySaveInput{
+		Term: "count clouds before breakfast", Status: domain.LearningStatusLearning,
+	})
+	initial := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{})
+	callTool[learning.RecordResult](t, ctx, session, "learning_review", LearningReviewInput{
+		ReviewToken: initial.ReviewToken, Rating: domain.ReviewRatingGood,
+	})
+	pending := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{})
+	before := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_get", VocabularyGetInput{ItemID: saved.ItemID})
+	exercise := callTool[map[string]json.RawMessage](t, ctx, session, "vocabulary_list", VocabularyListInput{
+		Statuses: []domain.LearningStatus{domain.LearningStatusLearning},
+		Sort:     SortRandom,
+		Limit:    1,
+	})
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(exercise["items"], &items); err != nil {
+		t.Fatalf("decode exercise items: %v", err)
+	}
+	if len(exercise) != 1 || len(items) != 1 {
+		t.Fatalf("exercise should return only a vocabulary sample: %#v", exercise)
+	}
+	for _, key := range []string{"reviewToken", "presentationId", "nextReviewAt"} {
+		if _, exists := items[0][key]; exists {
+			t.Fatalf("exercise item unexpectedly exposes review lifecycle field %q", key)
+		}
+	}
+	after := callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_get", VocabularyGetInput{ItemID: saved.ItemID})
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("exercise changed saved vocabulary: before = %#v, after = %#v", before, after)
+	}
+	accepted := callTool[learning.RecordResult](t, ctx, session, "learning_review", LearningReviewInput{
+		ReviewToken: pending.ReviewToken, Rating: domain.ReviewRatingGood,
+	})
+	if !accepted.Recorded || accepted.Duplicate {
+		t.Fatalf("exercise consumed or invalidated the pending review: %#v", accepted)
 	}
 }
 

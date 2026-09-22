@@ -8,6 +8,14 @@ const (
 	SortRecent       SortOrder = "recent"
 	SortOldest       SortOrder = "oldest"
 	SortAlphabetical SortOrder = "alphabetical"
+	SortRandom       SortOrder = "random"
+)
+
+type TermType string
+
+const (
+	TermTypeWord       TermType = "word"
+	TermTypeExpression TermType = "expression"
 )
 
 type DictionaryLookupInput struct {
@@ -81,13 +89,18 @@ type VocabularyGetOutput struct {
 
 type VocabularyListInput struct {
 	Query                string                  `json:"query,omitempty" jsonschema:"case-insensitive term substring search"`
-	Statuses             []domain.LearningStatus `json:"statuses,omitempty" jsonschema:"match any supplied learning status"`
+	Statuses             []domain.LearningStatus `json:"statuses,omitempty" jsonschema:"match any supplied learning status; omit or pass an empty array for all statuses including archived; use learning and learned for exercises"`
 	Tags                 []string                `json:"tags,omitempty" jsonschema:"require all supplied normalized tags"`
+	TermType             TermType                `json:"termType,omitempty" jsonschema:"lexical term shape: word has no space in its whitespace-normalized term; expression contains a space; not semantic idiom classification"`
+	PartsOfSpeech        []string                `json:"partsOfSpeech,omitempty" jsonschema:"match any supplied part of speech of the resolved selected sense only; lowercase and collapse whitespace; missing or unresolved senses do not match; at most 50 values of 1 to 50 Unicode characters"`
+	Usefulness           domain.Usefulness       `json:"usefulness,omitempty" jsonschema:"match the saved effective general usefulness exactly: low, normal, or high"`
+	PersonalInterest     domain.PersonalInterest `json:"personalInterest,omitempty" jsonschema:"match the saved personal interest exactly: low, normal, or high"`
+	ExcludeItemIDs       []string                `json:"excludeItemIds,omitempty" jsonschema:"exclude exact saved item IDs to avoid session repetition without excluding other senses of the same term; trim surrounding whitespace but preserve case; at most 1000 IDs of 1 to 200 Unicode characters"`
 	HasLookup            *bool                   `json:"hasLookup,omitempty" jsonschema:"filter by presence of a linked dictionary lookup"`
 	HasCustomDescription *bool                   `json:"hasCustomDescription,omitempty" jsonschema:"filter by presence of a custom description"`
-	Sort                 SortOrder               `json:"sort,omitempty" jsonschema:"result ordering"`
-	Limit                int                     `json:"limit,omitempty" jsonschema:"page size from 1 to 100"`
-	Cursor               string                  `json:"cursor,omitempty" jsonschema:"opaque cursor returned by the previous page"`
+	Sort                 SortOrder               `json:"sort,omitempty" jsonschema:"recent, oldest, or alphabetical use cursor pagination; random returns a fresh sample across all matching saved items without pagination"`
+	Limit                int                     `json:"limit,omitempty" jsonschema:"maximum page or random sample size from 1 to 100"`
+	Cursor               string                  `json:"cursor,omitempty" jsonschema:"opaque cursor returned by the previous page; must be omitted or empty with random sort"`
 }
 
 type VocabularyListOutput struct {

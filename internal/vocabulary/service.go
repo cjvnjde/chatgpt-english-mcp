@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -86,6 +88,11 @@ type ListOptions struct {
 	Query                string
 	Statuses             []domain.LearningStatus
 	Tags                 []string
+	TermType             string
+	PartsOfSpeech        []string
+	Usefulness           domain.Usefulness
+	PersonalInterest     domain.PersonalInterest
+	ExcludeItemIDs       []string
 	HasLookup            *bool
 	HasCustomDescription *bool
 	Sort                 string
@@ -102,6 +109,11 @@ type listFilter struct {
 	Query                string                  `json:"query"`
 	Statuses             []domain.LearningStatus `json:"statuses"`
 	Tags                 []string                `json:"tags"`
+	TermType             string                  `json:"termType,omitempty"`
+	PartsOfSpeech        []string                `json:"partsOfSpeech,omitempty"`
+	Usefulness           domain.Usefulness       `json:"usefulness,omitempty"`
+	PersonalInterest     domain.PersonalInterest `json:"personalInterest,omitempty"`
+	ExcludeItemIDs       []string                `json:"excludeItemIds,omitempty"`
 	HasLookup            *bool                   `json:"hasLookup,omitempty"`
 	HasCustomDescription *bool                   `json:"hasCustomDescription,omitempty"`
 }
@@ -306,8 +318,8 @@ func (service *Service) List(ctx context.Context, options ListOptions) (ListResu
 	if sortOrder == "" {
 		sortOrder = "recent"
 	}
-	if sortOrder != "recent" && sortOrder != "oldest" && sortOrder != "alphabetical" {
-		return ListResult{}, apperr.New(apperr.InvalidArgument, "sort must be recent, oldest, or alphabetical")
+	if sortOrder != "recent" && sortOrder != "oldest" && sortOrder != "alphabetical" && sortOrder != "random" {
+		return ListResult{}, apperr.New(apperr.InvalidArgument, "sort must be recent, oldest, alphabetical, or random")
 	}
 	limit := options.Limit
 	if limit == 0 {
@@ -316,12 +328,27 @@ func (service *Service) List(ctx context.Context, options ListOptions) (ListResu
 	if limit < 1 || limit > 100 {
 		return ListResult{}, apperr.New(apperr.InvalidArgument, "limit must be between 1 and 100")
 	}
+	if sortOrder == "random" && options.Cursor != "" {
+		return ListResult{}, apperr.New(apperr.InvalidArgument, "random selection does not support a cursor; use excludeItemIds to avoid repeats")
+	}
+	if options.TermType != "" && options.TermType != "word" && options.TermType != "expression" {
+		return ListResult{}, apperr.New(apperr.InvalidArgument, "termType must be word or expression")
+	}
+	if options.Usefulness != "" && !options.Usefulness.Valid() {
+		return ListResult{}, apperr.New(apperr.InvalidArgument, "usefulness is unsupported")
+	}
+	if options.PersonalInterest != "" && !options.PersonalInterest.Valid() {
+		return ListResult{}, apperr.New(apperr.InvalidArgument, "personalInterest is unsupported")
+	}
 
 	if !utf8.ValidString(options.Query) {
 		return ListResult{}, apperr.New(apperr.InvalidArgument, "query must contain valid UTF-8")
 	}
 	filter := listFilter{
 		Query:                domain.NormalizeTerm(options.Query),
+		TermType:             options.TermType,
+		Usefulness:           options.Usefulness,
+		PersonalInterest:     options.PersonalInterest,
 		HasLookup:            options.HasLookup,
 		HasCustomDescription: options.HasCustomDescription,
 	}
@@ -335,33 +362,57 @@ func (service *Service) List(ctx context.Context, options ListOptions) (ListResu
 		return ListResult{}, err
 	}
 	filter.Tags = tags
-	filterDigest, digestErr := storage.FilterDigest(filter)
-	if digestErr != nil {
-		return ListResult{}, apperr.Wrap(apperr.InternalError, "failed to prepare vocabulary pagination", digestErr)
+	partsOfSpeech, err := normalizeTextList("partsOfSpeech", options.PartsOfSpeech, 50, 50)
+	if err != nil {
+		return ListResult{}, err
 	}
-	cursorPrimary, cursorID, cursorErr := storage.DecodeCursor(options.Cursor, "vocabulary", sortOrder, filterDigest)
-	if cursorErr != nil {
-		return ListResult{}, apperr.New(apperr.InvalidArgument, "cursor is invalid or does not match these filters")
+	for index, part := range partsOfSpeech {
+		partsOfSpeech[index] = strings.ToLower(domain.DisplayTerm(part))
 	}
+	sort.Strings(partsOfSpeech)
+	filter.PartsOfSpeech = slices.Compact(partsOfSpeech)
+	excludedIDs, err := normalizeTextList("excludeItemIds", options.ExcludeItemIDs, 1000, 200)
+	if err != nil {
+		return ListResult{}, err
+	}
+	sort.Strings(excludedIDs)
+	filter.ExcludeItemIDs = slices.Compact(excludedIDs)
 
-	items, err := service.store.ListVocabulary(ctx, storage.VocabularyListQuery{
+	query := storage.VocabularyListQuery{
 		OwnerKey:             service.ownerKey,
 		Query:                filter.Query,
 		Statuses:             filter.Statuses,
 		Tags:                 filter.Tags,
+		TermType:             filter.TermType,
+		PartsOfSpeech:        filter.PartsOfSpeech,
+		Usefulness:           filter.Usefulness,
+		PersonalInterest:     filter.PersonalInterest,
+		ExcludeItemIDs:       filter.ExcludeItemIDs,
 		HasLookup:            filter.HasLookup,
 		HasCustomDescription: filter.HasCustomDescription,
 		Sort:                 sortOrder,
-		Limit:                limit + 1,
-		CursorPrimary:        cursorPrimary,
-		CursorID:             cursorID,
-	})
+		Limit:                limit,
+	}
+	var filterDigest string
+	if sortOrder != "random" {
+		filterDigest, err = storage.FilterDigest(filter)
+		if err != nil {
+			return ListResult{}, apperr.Wrap(apperr.InternalError, "failed to prepare vocabulary pagination", err)
+		}
+		query.CursorPrimary, query.CursorID, err = storage.DecodeCursor(options.Cursor, "vocabulary", sortOrder, filterDigest)
+		if err != nil {
+			return ListResult{}, apperr.New(apperr.InvalidArgument, "cursor is invalid or does not match these filters")
+		}
+		query.Limit++
+	}
+
+	items, err := service.store.ListVocabulary(ctx, query)
 	if err != nil {
 		return ListResult{}, apperr.Wrap(apperr.InternalError, "failed to list vocabulary items", err)
 	}
 
 	result := ListResult{Items: items}
-	if len(items) <= limit {
+	if sortOrder == "random" || len(items) <= limit {
 		return result, nil
 	}
 	result.Items = items[:limit]
@@ -701,7 +752,7 @@ func normalizeTextList(name string, values []string, maximumItems, maximumLength
 		if text == "" || utf8.RuneCountInString(text) > maximumLength {
 			return nil, apperr.New(
 				apperr.InvalidArgument,
-				"each "+name+" value must contain 1 to 1000 Unicode characters",
+				fmt.Sprintf("each %s value must contain 1 to %d Unicode characters", name, maximumLength),
 			)
 		}
 		result = append(result, text)

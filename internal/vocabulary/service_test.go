@@ -299,6 +299,79 @@ func TestListFiltersLearningMetadataAndUsesBoundCursor(t *testing.T) {
 	assertApplicationError(t, err, apperr.InvalidArgument)
 }
 
+func TestListCursorBindsNormalizedExerciseFilters(t *testing.T) {
+	ctx := context.Background()
+	service := newTestService(t, "owner")
+	store := service.store.(*storage.DB)
+	now := time.Now().UTC()
+	saved := make(map[string]SaveResult)
+	for _, term := range []string{"bring up", "carry on", "leave out", "wind down"} {
+		definition := "The saved meaning of " + term
+		_, err := store.InsertDictionarySnapshot(ctx, storage.DictionarySnapshotInsert{
+			Provider: "cambridge", ParserVersion: 12, NormalizedTerm: term,
+			Data: domain.DictionarySnapshotData{
+				Status: 200,
+				Entries: []domain.DictionaryEntry{{
+					Headword: term, PartOfSpeech: "phrasal verb",
+					Definitions: []domain.DictionaryDefinition{{Definition: definition}},
+				}},
+			},
+			FetchedAt: now, ExpiresAt: now.Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		saved[term], err = service.Save(ctx, term, InitialValues{
+			Status: domain.LearningStatusLearned, PersonalInterest: domain.PersonalInterestHigh,
+			Definition: definition,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	options := ListOptions{
+		Statuses: []domain.LearningStatus{domain.LearningStatusLearned},
+		TermType: "expression", PartsOfSpeech: []string{" PHRASAL\tVERB ", "noun", "phrasal verb"},
+		PersonalInterest: domain.PersonalInterestHigh,
+		ExcludeItemIDs:   []string{" " + saved["leave out"].ItemID + " ", saved["leave out"].ItemID},
+		Sort:             "alphabetical", Limit: 1,
+	}
+	first, err := service.List(ctx, options)
+	if err != nil || len(first.Items) != 1 || first.Items[0].ItemID != saved["bring up"].ItemID || first.NextCursor == "" {
+		t.Fatalf("first exercise page = %#v, error %v", first, err)
+	}
+	// Equivalent sets, casing, and whitespace must not invalidate the cursor.
+	options.Cursor = first.NextCursor
+	options.PartsOfSpeech = []string{"noun", "phrasal verb"}
+	options.ExcludeItemIDs = []string{saved["leave out"].ItemID}
+	second, err := service.List(ctx, options)
+	if err != nil || len(second.Items) != 1 || second.Items[0].ItemID != saved["carry on"].ItemID || second.NextCursor == "" {
+		t.Fatalf("second exercise page = %#v, error %v", second, err)
+	}
+	options.Cursor = second.NextCursor
+	last, err := service.List(ctx, options)
+	if err != nil || len(last.Items) != 1 || last.Items[0].ItemID != saved["wind down"].ItemID || last.NextCursor != "" {
+		t.Fatalf("last exercise page = %#v, error %v", last, err)
+	}
+
+	for name, change := range map[string]func(*ListOptions){
+		"term type":         func(o *ListOptions) { o.TermType = "word" },
+		"part of speech":    func(o *ListOptions) { o.PartsOfSpeech = []string{"verb"} },
+		"usefulness":        func(o *ListOptions) { o.Usefulness = domain.UsefulnessHigh },
+		"personal interest": func(o *ListOptions) { o.PersonalInterest = domain.PersonalInterestLow },
+		"exclusions":        func(o *ListOptions) { o.ExcludeItemIDs = nil },
+		"random cursor":     func(o *ListOptions) { o.Sort = "random" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := options
+			change(&changed)
+			_, err := service.List(ctx, changed)
+			assertApplicationError(t, err, apperr.InvalidArgument)
+		})
+	}
+}
+
 func TestDescriptionSourceRequiresDescriptionAndHTTPURL(t *testing.T) {
 	service := newTestService(t, "owner-one")
 	ctx := context.Background()

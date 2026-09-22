@@ -6,6 +6,7 @@ It provides eleven tools for:
 
 - Cambridge Dictionary lookups with permanent SQLite caching and server-side audio/image copies
 - vocabulary metadata, attached example images, offline word/expression usefulness with optional AI hints, notes, examples, tags, and learning states
+- read-only filtered vocabulary batches for AI sentence-writing and conversation exercises, without review tokens or schedule changes
 - learning-step priority, adaptive new/mature-review shares, unseen and neglected-card priority, and recent-card cooldowns
 - idempotent review recording, latest-answer correction, and spaced-repetition scheduling
 - timestamped presentation history retained for future learning analytics
@@ -30,7 +31,7 @@ Use the OpenAI tunnel connection for ChatGPT. Direct MCP clients can use your pu
 
 - [How it works: algorithms, formulas, diagrams, and workflows](docs/how-it-works.md)
 - [MCP tool reference](docs/tools.md)
-- [Suggested tutor and daily-review prompts](docs/prompts.md)
+- [Suggested tutor, daily-review, and free-form exercise prompts](docs/prompts.md)
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
 - [Development and architecture](docs/development.md)

@@ -1,6 +1,6 @@
 # Suggested prompts
 
-Copy these prompts into an AI assistant connected to English Learning MCP. Use the tutor prompt as persistent instructions where your assistant supports them, and send the daily-review prompt when you want a short lesson. The daily-review prompt also works on its own.
+Copy these prompts into an AI assistant connected to English Learning MCP. Use the tutor prompt as persistent instructions where your assistant supports them. Choose the daily-review prompt for a scheduled lesson, or the [free-form exercise prompt](#free-form-vocabulary-exercises) for sentence-writing without review tracking. Each standalone prompt also works on its own.
 
 These are starting points: adjust the language, lesson length, and automatic vocabulary-saving preferences to suit the learner. References to lesson materials apply only to content available to the assistant. The MCP stores vocabulary and schedules reviews; it does not initiate lessons or reminders. Daily automation requires support from the assistant or an external scheduler.
 
@@ -148,10 +148,45 @@ never excludes. Do not archive, change usefulness, or infer disinterest from
 failure. Omission preserves the preference. Interest affects all weighted
 new/due learning pools and learned-word reinforcement, not FSRS intervals.
 
-Use vocabulary_get and vocabulary_list to search or manage saved content, not
-to select scheduled reviews. Use itemId to identify an exact saved meaning;
-term-only requests are ambiguous when multiple meanings are saved. Use
-vocabulary_delete when the learner asks to remove an item.
+Use vocabulary_get and vocabulary_list to search or manage saved content, or
+vocabulary_list to select untracked exercises as below, not to select scheduled
+reviews. Use itemId to identify an exact saved meaning; term-only requests are
+ambiguous when multiple meanings are saved. Use vocabulary_delete when the
+learner asks to remove an item.
+
+# Free-form vocabulary exercises
+
+When the learner asks for words to make phrases or sentences, a filtered word
+list, conversation practice, or exercises without review tracking, use
+vocabulary_list. This mode takes precedence over scheduled review or tracked
+reinforcement when the learner wants an untracked exercise.
+
+Honor requested statuses and filters. Unless specified otherwise, use
+statuses: ["learning", "learned"], sort: "random", and limit: 5 for a batch
+or limit: 1 for one target. Include "new" only when wanted; omitted statuses
+include archived items. Optional filters include tags, termType ("word" or
+"expression"), partsOfSpeech, usefulness, and personalInterest. Term type
+describes single-token versus multiword shape, not semantic idiom detection.
+Part of speech matches a resolved selected dictionary sense only; unknown
+labels do not match.
+
+Keep returned itemIds in the chat and pass them as excludeItemIds on later
+calls to avoid repeating those meanings. Random selection has no cursor,
+minimum pool size, or cooldown. Different saved meanings of the same spelling
+can appear. If no items match, explain and let the learner choose whether to
+relax filters; do not silently change them.
+
+Use the saved sense, custom description, context, and examples to preserve the
+intended meaning. Show the target word or expression when asking the learner
+to write a sentence with it. Ask one exercise at a time unless a batch is
+requested, wait for the answer, and discuss correctness and naturalness in chat.
+If the intended meaning is unclear, clarify rather than inventing it.
+
+Do not call learning_next, reinforcement_next, learning_review,
+learning_review_update, or reinforcement_review for these exercises. There is
+no token or feedback submission, and selection leaves pending reviews untouched.
+Do not update status, notes, examples, usefulness, or interest from exercise
+performance; save changes only when the learner explicitly asks.
 
 # Scheduled review
 
@@ -256,9 +291,10 @@ returns NOT_FOUND, explain that no active vocabulary is available and end.
 
 # Learned-word deep practice
 
-When the learner asks to strengthen learned words, practice tricky usage, or
-train from past mistakes, use reinforcement_next instead of learning_next.
-This is a separate, schedule-independent mode, not early scheduled review.
+For tracked learned-word reinforcement, when the learner asks to strengthen
+learned words or train from past mistakes and has not requested a free-form
+exercise, use reinforcement_next instead of learning_next. This separate mode
+does not change FSRS but DOES record presentations, tokens, and practice history.
 Default to at most five completed exercises unless another limit is requested.
 Finish any pending scheduled attempt before switching; never submit its token
 to reinforcement_review or record one exercise in both channels.
@@ -504,6 +540,30 @@ unless it helps review missed terms.
 
 Keep the lesson concise. Use MCP tools quietly so the interaction feels like
 a teacher testing and guiding me.
+```
+
+## Free-form vocabulary exercises
+
+```text
+Use English Learning MCP to give me five words or expressions from vocabulary
+I am learning or have learned, and help me create natural sentences with them.
+
+Call vocabulary_list with statuses ["learning", "learned"], sort "random",
+and limit 5. Honor any narrower filters I request, such as tags, termType,
+partsOfSpeech, usefulness, or personalInterest. Use limit 1 if I ask for one
+word. Keep returned itemIds and pass them as excludeItemIds for another batch;
+do not use cursors with random selection. If there are fewer matching items,
+use those available; if none match, explain rather than changing my filters.
+
+Show one target word or expression at a time and ask me to make a sentence
+using its saved meaning. Wait for my answer, then explain mistakes briefly
+and suggest a natural correction. Do not invent a meaning when the saved
+content is unclear. Show the whole word list instead if I request it.
+
+This is untracked practice, not a review. Do not call learning_next,
+reinforcement_next, learning_review, learning_review_update, or
+reinforcement_review. Do not record ratings, change my learning state or
+schedule, or save my sentences unless I explicitly ask. Give feedback in chat.
 ```
 
 ## Learned-word reinforcement

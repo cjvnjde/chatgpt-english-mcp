@@ -69,6 +69,11 @@ type VocabularyListQuery struct {
 	Query                string
 	Statuses             []domain.LearningStatus
 	Tags                 []string
+	TermType             string
+	PartsOfSpeech        []string
+	Usefulness           domain.Usefulness
+	PersonalInterest     domain.PersonalInterest
+	ExcludeItemIDs       []string
 	HasLookup            *bool
 	HasCustomDescription *bool
 	Sort                 string
@@ -359,6 +364,52 @@ func (db *DB) VocabularyBySense(ctx context.Context, ownerKey, normalizedTerm, s
 func (db *DB) ListVocabulary(ctx context.Context, input VocabularyListQuery) ([]domain.VocabularyItem, error) {
 	query := vocabularySelect + " WHERE v.owner_key = ?"
 	arguments := []any{input.OwnerKey}
+	switch input.TermType {
+	case "":
+	case "word":
+		query += " AND instr(v.normalized_term, ' ') = 0"
+	case "expression":
+		query += " AND instr(v.normalized_term, ' ') > 0"
+	default:
+		return nil, fmt.Errorf("unsupported vocabulary term type %q", input.TermType)
+	}
+	if len(input.PartsOfSpeech) > 0 {
+		// Match scanVocabularyItem: prefer valid saved indices, otherwise use
+		// the first definition with the saved text, even when that text repeats.
+		// Resolve the sense before filtering its POS, not the other way around.
+		query += ` AND v.selected_definition_json IS NOT NULL AND (
+			SELECT part_of_speech FROM (
+				SELECT lower(trim(json_extract(entry.value, '$.partOfSpeech'))) AS part_of_speech,
+					CASE WHEN entry.key = COALESCE(v.selected_entry_index, 0)
+						AND definition.key = COALESCE(v.selected_definition_index, 0)
+						THEN 0 ELSE 1 END AS priority,
+					entry.key AS entry_index, definition.key AS definition_index
+				FROM json_each(snapshot.data_json, '$.entries') entry,
+					json_each(entry.value, '$.definitions') definition
+				WHERE COALESCE(json_extract(definition.value, '$.definition'), '') =
+					COALESCE(json_extract(v.selected_definition_json, '$.definition'), '')
+			)
+			ORDER BY priority, entry_index, definition_index
+			LIMIT 1
+		) IN (` + placeholders(len(input.PartsOfSpeech)) + ")"
+		for _, partOfSpeech := range input.PartsOfSpeech {
+			arguments = append(arguments, partOfSpeech)
+		}
+	}
+	if input.Usefulness != "" {
+		query += " AND v.usefulness = ?"
+		arguments = append(arguments, input.Usefulness)
+	}
+	if input.PersonalInterest != "" {
+		query += " AND v.personal_interest = ?"
+		arguments = append(arguments, input.PersonalInterest)
+	}
+	if len(input.ExcludeItemIDs) > 0 {
+		query += " AND v.id NOT IN (" + placeholders(len(input.ExcludeItemIDs)) + ")"
+		for _, itemID := range input.ExcludeItemIDs {
+			arguments = append(arguments, itemID)
+		}
+	}
 	if input.Query != "" {
 		query += " AND instr(v.normalized_term, ?) > 0"
 		arguments = append(arguments, input.Query)
@@ -393,6 +444,11 @@ func (db *DB) ListVocabulary(ctx context.Context, input VocabularyListQuery) ([]
 	// TimeString emits UTC RFC3339Nano. Removing its trailing Z makes
 	// different fractional precisions sort chronologically without rounding.
 	switch input.Sort {
+	case "random":
+		if input.CursorPrimary != "" || input.CursorID != "" {
+			return nil, errors.New("random vocabulary sort does not support a cursor")
+		}
+		query += " ORDER BY random()"
 	case "recent":
 		if input.CursorPrimary != "" {
 			query += " AND (rtrim(v.updated_at, 'Z') < rtrim(?, 'Z') OR (rtrim(v.updated_at, 'Z') = rtrim(?, 'Z') AND v.id > ?))"
