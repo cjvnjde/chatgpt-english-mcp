@@ -73,6 +73,7 @@ func run() (runErr error) {
 		Dictionary: dictionary.NewService(store, provider, logger),
 		Vocabulary: vocabularyService,
 		Learning:   learning.NewService(store, configuration.OwnerKey),
+		Media:      store,
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("create MCP server: %w", err)

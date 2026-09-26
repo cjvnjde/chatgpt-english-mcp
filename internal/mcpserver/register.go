@@ -81,15 +81,30 @@ func registerTool[Input, Output any](
 		}
 		var outputInstance any
 		outputDecoder := json.NewDecoder(bytes.NewReader(encoded))
+		// Image metadata is re-encoded below; preserve exact int64 values.
+		outputDecoder.UseNumber()
 		if err := outputDecoder.Decode(&outputInstance); err != nil {
 			return toolErrorResult(logger, tool.Name, apperr.Wrap(apperr.InternalError, "failed to validate the tool result", err)), nil
 		}
-		if err := outputResolved.Validate(outputInstance); err != nil {
+		images, changed := embedDictionaryImages(ctx, outputInstance)
+		if changed {
+			encoded, err = json.Marshal(outputInstance)
+			if err != nil {
+				return toolErrorResult(logger, tool.Name, apperr.Wrap(apperr.InternalError, "failed to encode image metadata", err)), nil
+			}
+		}
+		// The schema validator expects ordinary JSON numbers, while the wire
+		// representation above retains full integer precision.
+		var validationInstance any
+		if err := json.Unmarshal(encoded, &validationInstance); err != nil {
+			return toolErrorResult(logger, tool.Name, apperr.Wrap(apperr.InternalError, "failed to validate image metadata", err)), nil
+		}
+		if err := outputResolved.Validate(validationInstance); err != nil {
 			return toolErrorResult(logger, tool.Name, apperr.Wrap(apperr.InternalError, "tool result did not match its declared schema", err)), nil
 		}
 
 		return &mcp.CallToolResult{
-			Content:           []mcp.Content{&mcp.TextContent{Text: string(encoded)}},
+			Content:           append([]mcp.Content{&mcp.TextContent{Text: string(encoded)}}, images...),
 			StructuredContent: json.RawMessage(encoded),
 		}, nil
 	})

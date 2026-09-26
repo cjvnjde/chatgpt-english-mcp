@@ -18,6 +18,7 @@ type Services struct {
 	Dictionary *dictionary.Service
 	Vocabulary *vocabulary.Service
 	Learning   *learning.Service
+	Media      MediaReader
 }
 
 func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
@@ -33,6 +34,15 @@ func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
 		Description: "Look up English words and expressions, save the meanings you want to learn, and build lasting vocabulary with personalized spaced-repetition reviews and contextual practice.",
 		Version:     Version,
 	}, &mcp.ServerOptions{Logger: logger})
+
+	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+			if services.Media != nil && method == "tools/call" {
+				ctx = context.WithValue(ctx, imageMediaReaderKey{}, services.Media)
+			}
+			return next(ctx, method, request)
+		}
+	})
 
 	if err := registerDictionaryLookup(server, services.Dictionary, logger); err != nil {
 		return nil, err

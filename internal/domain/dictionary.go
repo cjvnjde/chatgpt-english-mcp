@@ -22,10 +22,12 @@ type DictionaryAudio struct {
 	MediaID     string `json:"mediaId,omitempty"`
 }
 
+// DictionaryImage retains provider URLs in storage. MCP responses omit those
+// URLs and deliver saved copies in separate image content blocks.
 type DictionaryImage struct {
 	Title            string `json:"title,omitempty"`
 	Alt              string `json:"alt,omitempty"`
-	ImageURL         string `json:"imageUrl"`
+	ImageURL         string `json:"imageUrl,omitempty"`
 	ThumbnailURL     string `json:"thumbnailUrl,omitempty"`
 	Credit           string `json:"credit,omitempty"`
 	MediaID          string `json:"mediaId,omitempty"`
