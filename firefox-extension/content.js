@@ -49,7 +49,15 @@
     return Boolean(element?.closest(privateSelector));
   }
 
+  function reportFocusedFrame() {
+    // Remember the source before native-sidebar focus moves away. Only frame
+    // identity is sent here; content is captured after an explanation action.
+    if (!document.hasFocus() || ['IFRAME', 'FRAME'].includes(document.activeElement?.tagName)) return;
+    browser.runtime.sendMessage({ type: 'SELECTION_FRAME_FOCUSED' }).catch(() => {});
+  }
+
   function updateSelection() {
+    reportFocusedFrame();
     const selection = window.getSelection();
     if (!selection?.rangeCount || selection.isCollapsed || isPrivate(selection.anchorNode) || isPrivate(selection.focusNode) || isPrivate(document.activeElement)) {
       hide();
@@ -229,7 +237,8 @@
   }
 
   function capture(mode) {
-    if (!selectedRange || !selectedRange.startContainer.isConnected || !selectedRange.endContainer.isConnected || isPrivate(selectedRange.startContainer) || isPrivate(selectedRange.endContainer)) return null;
+    if (!selectedRange || !selectedRange.startContainer.isConnected || !selectedRange.endContainer.isConnected) return null;
+    if (isPrivate(selectedRange.startContainer) || isPrivate(selectedRange.endContainer)) return { privacyDenied: true };
     if (selectionUrl !== location.href || selectedRange.toString().replace(/\s+/gu, ' ').trim() !== selectedTerm) return null;
     const anchor = selectedRange.commonAncestorContainer;
     const element = anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement;
@@ -243,6 +252,9 @@
     return { term: selectedTerm, context, title: mode === 'none' ? '' : document.title, url: mode === 'none' ? '' : location.href, sourceId: selectionSourceId };
   }
 
+  document.addEventListener('focusin', reportFocusedFrame);
+  window.addEventListener('focus', reportFocusedFrame);
+  reportFocusedFrame();
   document.addEventListener('pointerup', event => {
     if (event.target === host) return;
     clearTimeout(selectionTimer);
@@ -278,11 +290,13 @@
       return undefined;
     }
     if (message?.type === 'CAPTURE_SELECTION') {
+      // Input/textarea selections may not appear in window.getSelection().
+      if (isPrivate(document.activeElement)) return Promise.resolve({ privacyDenied: true });
       // Toolbar/context-menu actions can precede the pointerup debounce.
       if (!message.useCachedSelection) {
         const current = window.getSelection();
         if (current?.rangeCount && !current.isCollapsed) {
-          if (isPrivate(current.anchorNode) || isPrivate(current.focusNode) || isPrivate(document.activeElement)) return Promise.resolve(null);
+          if (isPrivate(current.anchorNode) || isPrivate(current.focusNode)) return Promise.resolve({ privacyDenied: true });
           if (!matchesSelection(current)) hide();
           cacheSelection(current);
         } else {
@@ -290,7 +304,7 @@
         }
       } else {
         const current = window.getSelection();
-        if (isPrivate(document.activeElement) || (current?.rangeCount && !current.isCollapsed && !matchesSelection(current))) return Promise.resolve(null);
+        if (current?.rangeCount && !current.isCollapsed && !matchesSelection(current)) return Promise.resolve(null);
         if (message.sourceId !== undefined && message.sourceId !== selectionSourceId) return Promise.resolve(null);
         if (message.expectedTerm !== undefined && message.expectedTerm !== selectedTerm) return Promise.resolve(null);
       }

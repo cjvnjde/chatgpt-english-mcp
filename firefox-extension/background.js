@@ -5,6 +5,8 @@ import { HOST_SYSTEM_GUARD, SAVE_DRAFT_SYSTEM_PROMPT } from './prompt.js';
 
 let settings = await loadSettings();
 const windows = new Map();
+const focusedFrames = new Map();
+const privateSelectionMessage = 'Editable fields are excluded. Type a word in the sidebar instead.';
 const extensionURL = browser.runtime.getURL('');
 const MAX_TERM = 200;
 const MAX_SAVE_CONTEXT = 400;
@@ -25,7 +27,7 @@ function blankState(revision = 0) {
 
 function windowRecord(windowId) {
   if (!Number.isInteger(windowId) || windowId < 0) throw new Error('No Firefox window is available.');
-  if (!windows.has(windowId)) windows.set(windowId, { state: blankState(), controller: null, quickController: null, selectionRequest: 0, ports: new Set(), pendingDeep: false, needsDeepCapture: false, source: null, saveSense: null });
+  if (!windows.has(windowId)) windows.set(windowId, { state: blankState(), controller: null, quickController: null, saveController: null, selectionRequest: 0, ports: new Set(), pendingDeep: false, needsDeepCapture: false, source: null, saveSense: null });
   return windows.get(windowId);
 }
 
@@ -239,8 +241,15 @@ async function respond(record, initial = false) {
   }
 }
 
+function invalidateSave(record) {
+  record.saveController?.abort();
+  record.saveController = null;
+  record.saveSense = null;
+}
+
 function beginSelection(record, selection, mode = settings.contextMode, source = null, needsDeepCapture = false) {
   const cleaned = cleanSelection(selection, mode);
+  invalidateSave(record);
   record.controller?.abort();
   record.controller = null;
   record.quickController?.abort();
@@ -324,6 +333,7 @@ REFERENCE DATA: ${JSON.stringify({ selection: state.selection })}` },
 
 async function explainFromTab(tab, frameId, useCachedSelection = false, fallbackTerm, requestId) {
   if (!tab?.id) throw new Error('Select a word on a web page first.');
+  frameId ??= focusedFrames.get(tab.id) ?? 0;
   const record = recordFor(tab.windowId);
   const request = ++record.selectionRequest;
   record.quickController?.abort(); record.quickController = null;
@@ -340,13 +350,14 @@ async function explainFromTab(tab, frameId, useCachedSelection = false, fallback
   const mode = initiallyOpen ? settings.contextMode : settings.quickContextMode;
   let captured;
   try {
-    captured = await browser.tabs.sendMessage(tab.id, { type: 'CAPTURE_SELECTION', useCachedSelection, contextMode: mode }, { frameId: frameId ?? 0 });
+    captured = await browser.tabs.sendMessage(tab.id, { type: 'CAPTURE_SELECTION', useCachedSelection, contextMode: mode }, { frameId });
   } catch { /* Firefox-protected pages do not permit content scripts. */ }
   if (request !== record.selectionRequest) return { ok: true, mode: 'canceled' };
+  if (captured?.privacyDenied) throw new Error(privateSelectionMessage);
   if (captured && fallbackTerm && normalizeTerm(captured.term) !== normalizeTerm(fallbackTerm)) captured = null;
   if (!captured && fallbackTerm) captured = { term: fallbackTerm, context: '', title: '', url: '' };
   if (!captured) throw new Error('Select text on a regular web page, or type a word in the sidebar. Firefox blocks extensions on some pages, including its PDF viewer.');
-  const source = { tabId: tab.id, frameId: frameId ?? 0, sourceId: captured.sourceId };
+  const source = { tabId: tab.id, frameId, sourceId: captured.sourceId };
   beginSelection(record, captured, mode, source, !initiallyOpen);
   const state = record.state;
   const open = record.ports.size || await browser.sidebarAction.isOpen({ windowId: tab.windowId });
@@ -393,6 +404,9 @@ async function prepareSaveDraft(record, message) {
   if (!explanation) throw new Error('Get an explanation before adding this word.');
   const senses = saveSenses(state);
   const requestSettings = { ...settings };
+  const controller = new AbortController();
+  record.saveController = controller;
+  const current = () => record.state === state && record.saveController === controller && !controller.signal.aborted;
   state.saveStatus = 'preparing'; state.saveError = ''; state.saveNotice = ''; publish(record);
   try {
     const decision = await completeChat(requestSettings, [
@@ -406,8 +420,8 @@ async function prepareSaveDraft(record, message) {
           senses,
         }),
       },
-    ]);
-    if (record.state !== state) return;
+    ], { signal: controller.signal });
+    if (!current()) return;
     const generated = modelJSON(decision, 'Could not prepare editable save details. Try again.');
     const index = generated.index ?? null;
     if (index !== null && (!Number.isInteger(index) || !senses[index])) {
@@ -431,13 +445,13 @@ async function prepareSaveDraft(record, message) {
     };
     state.saveStatus = 'ready';
   } catch (error) {
-    if (record.state !== state) return;
+    if (!current()) return;
     record.saveSense = null;
     state.saveDraft = null;
     state.saveStatus = 'error';
     state.saveError = error.message || 'Save details could not be prepared.';
   }
-  if (record.state === state) publish(record);
+  if (current()) { record.saveController = null; publish(record); }
 }
 
 async function saveToDictionary(record, message) {
@@ -448,11 +462,16 @@ async function saveToDictionary(record, message) {
   if (!settings.mcpUrl) throw new Error('Connect English MCP in Settings before saving.');
   if (!state.saveDraft) throw new Error('Open Save and review the details first.');
   const draft = editableSaveDraft(message.draft || state.saveDraft, state.saveDraft);
+  const sense = record.saveSense;
   const requestSettings = { ...settings };
+  const controller = new AbortController();
+  record.saveController = controller;
+  const current = () => record.state === state && record.saveController === controller && !controller.signal.aborted;
   state.saveStatus = 'saving'; state.saveError = ''; state.saveNotice = ''; publish(record);
   try {
     const client = new MCPClient(requestSettings);
-    await client.connect();
+    await client.connect({ signal: controller.signal });
+    if (!current()) return;
     const args = {
       term: draft.term,
       status: 'new',
@@ -462,13 +481,15 @@ async function saveToDictionary(record, message) {
       examples: draft.examples,
       tags: draft.tags,
     };
-    if (record.saveSense) args.definition = record.saveSense.definition;
+    if (sense) args.definition = sense.definition;
     if (draft.personalInterest) args.personalInterest = draft.personalInterest;
     if (draft.sourceTitle || draft.sourceUrl) {
       args.descriptionSource = { title: draft.sourceTitle, url: draft.sourceUrl };
     }
+    // Once sent, a write cannot be undone. Do not cancel/replay the transport;
+    // only suppress stale results and any subsequent update.
     let result = await client.callTool('vocabulary_save', args);
-    if (record.state !== state) return;
+    if (!current()) return;
     if (!result.itemId) throw new Error('The MCP response did not confirm a saved vocabulary item.');
     if (!result.created) {
       const changes = {
@@ -483,7 +504,7 @@ async function saveToDictionary(record, message) {
       };
       if (draft.personalInterest) changes.personalInterest = draft.personalInterest;
       result = await client.callTool('vocabulary_update', { itemId: result.itemId, changes });
-      if (record.state !== state) return;
+      if (!current()) return;
       if (!result.itemId) throw new Error('English MCP did not confirm the vocabulary update.');
     }
     state.saveStatus = 'saved';
@@ -492,10 +513,10 @@ async function saveToDictionary(record, message) {
       ? 'Added to your vocabulary.'
       : 'Existing vocabulary updated with your details.';
   } catch (error) {
-    if (record.state !== state) return;
+    if (!current()) return;
     state.saveStatus = 'error'; state.saveError = error.message || 'Dictionary saving failed.';
   }
-  if (record.state === state) publish(record);
+  if (current()) { record.saveController = null; publish(record); }
 }
 
 function isPage(sender, name) {
@@ -506,6 +527,11 @@ function isPage(sender, name) {
 async function handleMessage(message, sender) {
   if (!message || typeof message.type !== 'string') return undefined;
   if (message.type === 'STATE_UPDATED') return undefined;
+  if (message.type === 'SELECTION_FRAME_FOCUSED') {
+    if (sender.id !== browser.runtime.id || !sender.tab || !/^https?:/u.test(sender.url || '') || !Number.isInteger(sender.frameId)) return;
+    focusedFrames.set(sender.tab.id, sender.frameId);
+    return;
+  }
   if (message.type === 'EXPLAIN_SELECTION') {
     if (sender.id !== browser.runtime.id || !sender.tab || !/^https?:/u.test(sender.url || '')) throw new Error('Unsupported selection source.');
     return explainFromTab(sender.tab, sender.frameId, true, undefined, message.requestId);
@@ -522,7 +548,7 @@ async function handleMessage(message, sender) {
       record.controller?.abort(); record.controller = null;
       void dismissQuick(record);
       record.source = null;
-      record.saveSense = null;
+      invalidateSave(record);
       record.pendingDeep = false;
       record.needsDeepCapture = false;
       record.state = blankState(record.state.revision);
@@ -536,15 +562,15 @@ async function handleMessage(message, sender) {
       publish(record); break;
     case 'CHAT_SEND': {
       checkConversation(record, message);
+      if (record.state.status === 'loading') throw new Error('Wait for the reply or press Stop.');
+      const text = String(message.text || '').trim();
+      if (!text || text.length > 6000 || text.includes('\0')) throw new Error('Enter a question of 1–6,000 characters.');
       if (record.state.saveStatus !== 'saved') {
-        record.saveSense = null;
+        invalidateSave(record);
         record.state.saveDraft = null;
         record.state.saveStatus = 'idle';
         record.state.saveError = '';
       }
-      if (record.state.status === 'loading') throw new Error('Wait for the reply or press Stop.');
-      const text = String(message.text || '').trim();
-      if (!text || text.length > 6000 || text.includes('\0')) throw new Error('Enter a question of 1–6,000 characters.');
       if (!record.state.selection) {
         record.selectionRequest++;
         beginSelection(record, { term: text }, 'none');
@@ -560,7 +586,7 @@ async function handleMessage(message, sender) {
     case 'SAVE_CANCEL':
       checkConversation(record, message);
       if (record.state.saveStatus !== 'saving' && record.state.saveStatus !== 'saved') {
-        record.saveSense = null;
+        invalidateSave(record);
         record.state.saveDraft = null;
         record.state.saveStatus = 'idle';
         record.state.saveError = '';
@@ -583,6 +609,7 @@ browser.runtime.onMessage.addListener((message, sender) => {
 browser.menus.create({ id: 'english-dictionary-explain', title: 'Explain “%s” in sidebar', contexts: ['selection'] });
 browser.menus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== 'english-dictionary-explain') return;
+  if (info.editable) { reportActionError(tab?.windowId, new Error(privateSelectionMessage)); return; }
   browser.sidebarAction.open().then(() => explainFromTab(tab, info.frameId, false, info.selectionText))
     .catch(error => reportActionError(tab?.windowId, error));
 });
@@ -627,9 +654,13 @@ function openFromToolbar(explain = false) {
 }
 browser.browserAction.onClicked.addListener(() => openFromToolbar());
 browser.commands.onCommand.addListener(command => { if (command === 'explain-selection') openFromToolbar(true); });
+browser.tabs.onRemoved?.addListener(tabId => focusedFrames.delete(tabId));
+browser.tabs.onUpdated?.addListener((tabId, change) => {
+  if (change.status === 'loading') focusedFrames.delete(tabId);
+});
 browser.windows.onRemoved.addListener(windowId => {
   const record = windows.get(windowId);
-  if (record) record.selectionRequest++;
+  if (record) { record.selectionRequest++; invalidateSave(record); }
   record?.controller?.abort(); record?.quickController?.abort(); windows.delete(windowId);
 });
 browser.storage.onChanged.addListener(async (changes, area) => {
