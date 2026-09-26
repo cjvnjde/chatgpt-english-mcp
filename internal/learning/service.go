@@ -50,20 +50,26 @@ type ReviewFeedback struct {
 }
 
 type NextResult struct {
-	ItemID           string                  `json:"itemId"`
-	PresentationID   int64                   `json:"presentationId"`
-	ShownAt          string                  `json:"shownAt"`
-	ReviewToken      string                  `json:"reviewToken"`
-	Term             string                  `json:"term"`
-	Context          string                  `json:"context,omitempty"`
-	Usefulness       domain.Usefulness       `json:"usefulness"`
-	PersonalInterest domain.PersonalInterest `json:"personalInterest"`
-	Definition       string                  `json:"definition,omitempty"`
-	Example          string                  `json:"example,omitempty"`
-	Reason           string                  `json:"reason"`
-	Troublesome      bool                    `json:"troublesome"`
-	LatestComment    *ReviewFeedback         `json:"latestComment,omitempty"`
-	Comments         []ReviewFeedback        `json:"comments,omitempty"`
+	ItemID            string                    `json:"itemId"`
+	PresentationID    int64                     `json:"presentationId"`
+	ShownAt           string                    `json:"shownAt"`
+	ReviewToken       string                    `json:"reviewToken"`
+	Term              string                    `json:"term"`
+	Context           string                    `json:"context,omitempty"`
+	Usefulness        domain.Usefulness         `json:"usefulness"`
+	PersonalInterest  domain.PersonalInterest   `json:"personalInterest"`
+	Definition        string                    `json:"definition,omitempty"`
+	Example           string                    `json:"example,omitempty"`
+	CustomDescription string                    `json:"customDescription,omitempty"`
+	DescriptionSource *domain.DescriptionSource `json:"descriptionSource,omitempty"`
+	Notes             []string                  `json:"notes,omitempty"`
+	Examples          []string                  `json:"examples,omitempty"`
+	Tags              []string                  `json:"tags,omitempty"`
+	Sense             *domain.VocabularySense   `json:"sense,omitempty"`
+	Reason            string                    `json:"reason"`
+	Troublesome       bool                      `json:"troublesome"`
+	LatestComment     *ReviewFeedback           `json:"latestComment,omitempty"`
+	Comments          []ReviewFeedback          `json:"comments,omitempty"`
 }
 
 type RecordOptions struct {
@@ -115,18 +121,24 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 
 	definition, example := tutoringContent(candidate.Vocabulary)
 	result := NextResult{
-		ItemID:           candidate.Vocabulary.ItemID,
-		PresentationID:   candidate.PresentationID,
-		ShownAt:          storage.TimeString(candidate.ShownAt),
-		ReviewToken:      candidate.Card.ReviewToken,
-		Term:             candidate.Vocabulary.Term,
-		Context:          candidate.Vocabulary.Context,
-		Usefulness:       candidate.Vocabulary.Usefulness,
-		PersonalInterest: candidate.Vocabulary.PersonalInterest,
-		Definition:       definition,
-		Example:          example,
-		Reason:           selectionReason(candidate.Card, candidate.ShownAt),
-		Troublesome:      isTroublesome(candidate.Card),
+		ItemID:            candidate.Vocabulary.ItemID,
+		PresentationID:    candidate.PresentationID,
+		ShownAt:           storage.TimeString(candidate.ShownAt),
+		ReviewToken:       candidate.Card.ReviewToken,
+		Term:              candidate.Vocabulary.Term,
+		Context:           candidate.Vocabulary.Context,
+		Usefulness:        candidate.Vocabulary.Usefulness,
+		PersonalInterest:  candidate.Vocabulary.PersonalInterest,
+		Definition:        definition,
+		Example:           example,
+		CustomDescription: candidate.Vocabulary.CustomDescription,
+		DescriptionSource: candidate.Vocabulary.DescriptionSource,
+		Notes:             candidate.Vocabulary.Notes,
+		Examples:          candidate.Vocabulary.Examples,
+		Tags:              candidate.Vocabulary.Tags,
+		Sense:             candidate.Vocabulary.Sense,
+		Reason:            selectionReason(candidate.Card, candidate.ShownAt),
+		Troublesome:       isTroublesome(candidate.Card),
 	}
 	if len(comments) > 0 {
 		latest := reviewFeedback(comments[0])

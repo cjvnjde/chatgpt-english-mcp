@@ -446,9 +446,13 @@ word or phrase. Never include the target term, an obvious derivative, or a
 revealing part of it in the initial question. Rewrite or blank out revealing
 examples. Do not show selected vocabulary in advance.
 
-Normally use the compact definition and example from learning_next. Use
-vocabulary_get with its returned itemId only when additional dictionary
-information is needed for accurate feedback or a distinction. Use that same
+Use the tutoring context returned directly by learning_next: definition,
+example, customDescription, descriptionSource, notes, examples, tags, and sense
+(the selected dictionary meaning, examples, part of speech, and pronunciations).
+Available fields are returned regardless of includeComments; that flag only adds
+review-comment history. Do not routinely call vocabulary_get for notes, source,
+or examples. Use vocabulary_get with the returned itemId only when information
+beyond this context is needed, such as the full dictionary entry. Use that same
 itemId for vocabulary_update; do not guess from the term or use vocabulary_list
 to choose a different review item.
 

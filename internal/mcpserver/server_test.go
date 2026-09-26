@@ -112,7 +112,7 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 			URL:   "https://example.test/bank",
 		},
 		Notes:    []string{"Personal note."},
-		Examples: []string{"I visited the bank."},
+		Examples: []string{"I visited the bank.", "The bank approved my loan."},
 	})
 	if saved.Lookup != nil || saved.CustomDescription != description || saved.Status != domain.LearningStatusLearning {
 		t.Fatalf("bare saved item = %#v", saved.VocabularyItem)
@@ -124,6 +124,12 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	}
 	if next.Definition != description || next.LatestComment != nil || next.Comments != nil {
 		t.Fatalf("compact learning content = %#v", next)
+	}
+	if next.CustomDescription != saved.CustomDescription ||
+		next.DescriptionSource == nil || *next.DescriptionSource != *saved.DescriptionSource ||
+		!equalStrings(next.Notes, saved.Notes) || !equalStrings(next.Examples, saved.Examples) ||
+		!equalStrings(next.Tags, saved.Tags) {
+		t.Fatalf("learning next lost saved tutoring context: %#v, saved = %#v", next, saved)
 	}
 	repeated := callTool[learning.NextResult](t, ctx, clientSession, "learning_next", LearningNextInput{})
 	if next.PresentationID <= 0 || repeated.PresentationID == next.PresentationID {
@@ -150,6 +156,9 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		t.Fatalf("duplicate learning review = %#v, first = %#v", duplicateReview, review)
 	}
 	withComment := callTool[learning.NextResult](t, ctx, clientSession, "learning_next", LearningNextInput{})
+	if withComment.CustomDescription != saved.CustomDescription || !equalStrings(withComment.Notes, saved.Notes) {
+		t.Fatalf("learning next lost tutoring context after review: %#v", withComment)
+	}
 	if withComment.LatestComment == nil || withComment.LatestComment.Text != "Needed a moment to separate the meanings." {
 		t.Fatalf("learning next comment = %#v", withComment)
 	}
@@ -184,7 +193,7 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 		updatedMetadata.Context != contextValue {
 		t.Fatalf("vocabulary update = %#v", updatedMetadata)
 	}
-	if updatedMetadata.CustomDescription != description || len(updatedMetadata.Examples) != 1 {
+	if updatedMetadata.CustomDescription != description || !equalStrings(updatedMetadata.Examples, saved.Examples) {
 		t.Fatalf("vocabulary update lost omitted fields = %#v", updatedMetadata)
 	}
 

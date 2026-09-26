@@ -79,6 +79,61 @@ func TestNextReturnsOneCompactNewItemThenClosestFutureReview(t *testing.T) {
 	}
 }
 
+func TestNextIncludesSelectedSenseAndPersonalContext(t *testing.T) {
+	ctx := context.Background()
+	store, service := newTestService(t)
+	now := time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	definition := domain.DictionaryDefinition{
+		Definition: "a financial institution",
+		Examples:   []string{"I went to the bank.", "The bank is closed."},
+	}
+	snapshot, err := store.InsertDictionarySnapshot(ctx, storage.DictionarySnapshotInsert{
+		Provider: "cambridge", NormalizedTerm: "bank", ParserVersion: 12,
+		Data: domain.DictionarySnapshotData{Status: 200, Entries: []domain.DictionaryEntry{{
+			Headword: "bank", PartOfSpeech: "noun",
+			Pronunciations: domain.DictionaryPronunciations{UK: "bæŋk", US: "bæŋk"},
+			Definitions:    []domain.DictionaryDefinition{definition, {Definition: "the side of a river"}},
+		}}}, FetchedAt: now, ExpiresAt: now.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := 0
+	_, saved, err := store.SaveVocabulary(ctx, storage.VocabularyCreate{
+		OwnerKey: "owner", Term: "bank", NormalizedTerm: "bank", LookupID: snapshot.ID,
+		Status: domain.LearningStatusNew, SenseKey: "financial", Context: "money",
+		SelectedEntryIndex: &index, SelectedDefinitionIndex: &index, SelectedDefinition: &definition,
+		CustomDescription: "Where I keep my money.",
+		DescriptionSource: &domain.DescriptionSource{Title: "My textbook", URL: "https://example.test/book"},
+		Notes:             []string{"Not the river meaning."}, Tags: []string{"finance"},
+		Examples: []string{"My bank offers savings accounts.", "I called my bank."}, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, includeComments := range []bool{false, true} {
+		next := nextWord(t, service, includeComments)
+		if next.Sense == nil || !reflect.DeepEqual(next.Sense, saved.Sense) ||
+			next.Sense.PartOfSpeech != "noun" || next.Sense.Pronunciations.UK != "bæŋk" {
+			t.Fatalf("selected dictionary sense lost: %#v", next.Sense)
+		}
+		if next.Definition != saved.CustomDescription || next.CustomDescription != saved.CustomDescription ||
+			!reflect.DeepEqual(next.DescriptionSource, saved.DescriptionSource) ||
+			!reflect.DeepEqual(next.Notes, saved.Notes) || !reflect.DeepEqual(next.Tags, saved.Tags) ||
+			!reflect.DeepEqual(next.Examples, saved.Examples) || next.Example != saved.Examples[0] {
+			t.Fatalf("personal context lost: %#v", next)
+		}
+		encoded, err := json.Marshal(next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "the side of a river") || strings.Contains(string(encoded), `"lookup"`) {
+			t.Fatalf("response included unrelated dictionary content: %s", encoded)
+		}
+	}
+}
+
 func TestNextChoosesNewVocabularyBeforeEarlyReview(t *testing.T) {
 	store, service := newTestService(t)
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
