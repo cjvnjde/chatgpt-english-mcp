@@ -74,6 +74,8 @@ labels:
 
 Add the certificate resolver and Docker network required by your Traefik or Dokploy installation. In Dokploy, target the `english-learning-mcp` service, container port `8081`, and path `/mcp`.
 
+For admin images, any proxy in front of `english-admin` must permit at least **10 MiB + 64 KiB** of request body on `/admin/api/vocabulary/{id}/images`. The shipped nginx template raises only this route to `10304k`; other requests retain the 1 MiB default, and the Go backend still enforces a 10 MiB image ceiling. An outer proxy with a lower limit can still return 413 before the request reaches the application. Rebuild `english-admin` to apply template changes.
+
 ## Persistence
 
 Compose stores the SQLite database at `/app/data/english-mcp.sqlite` in the `english-learning-data` named volume. The file contains vocabulary, scheduling/history data, copied Cambridge audio/images, and custom vocabulary-image attachments. Rebuilding or replacing containers preserves all of it.
@@ -95,6 +97,8 @@ Container base images and the Dockerfile frontend are pinned by digest. The tunn
 Migration `015` adds vocabulary edit revisions without changing MCP or Anki export schemas. Redeploy the Go service and admin assets together: admin PATCH now requires `expectedRevision`, and stale edits must be reloaded or merged.
 
 Migration `016` adds content-addressed media objects and owner/item-scoped vocabulary-image attachments. MCP `VocabularyItem` / dictionary output and the private Anki snapshot schema gain media metadata, so deploy the Go service, admin assets, and Anki worker together. Parser version `14` causes successful legacy Cambridge cache entries to be fetched again so their audio and images can be copied locally; matching source URLs in older selected-meaning snapshots are linked to those copies without changing the saved dictionary facts.
+
+Migration `018` replaces the vocabulary edit-revision trigger to cover context and sense-key changes. No learner records or schedules are rewritten. After upgrading the Go service, stale context drafts conflict normally (409), including when MCP changed the context. Keep applied migration files unchanged.
 
 ## Security checklist
 

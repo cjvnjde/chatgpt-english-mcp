@@ -28,10 +28,17 @@ Both MCP handlers reject foreign browser origins while allowing same-origin and 
 
 ```sh
 go test -race ./...
+go vet ./...
 go build ./cmd/english-learning-mcp
+# Optional locally; runs in CI on Linux with Docker:
+ENGLISH_MCP_NGINX_TEST=1 go test -race ./internal/adminapi -run '^TestNginxImageUploadLimits$' -count=1
+# Independent Go-to-Python serialization/digest contract (standard library only):
+python -m unittest anki_worker.test_export_contract
 ```
 
-CI runs the Go race suite and production build, Anki worker and dictionary-builder tests, and admin tests and production build on every push and pull request. Toolchains and action revisions are pinned in `.github/workflows/ci.yml`; Python dependencies are hash-locked in `anki_worker/requirements.txt` and `.github/requirements-builders.txt`, and the admin uses `npm ci`.
+The nginx check runs the pinned runtime image from `admin/Dockerfile` with the shipped proxy template, a loopback-only port, a disposable real admin backend/SQLite database, and automatic container cleanup. It proves 2 MiB and 10 MiB image uploads reach the backend, checks backend and proxy oversize rejection, and keeps the 1 MiB limit for unrelated routes. No production stack or credentials are used. Linux Docker host networking is required; a missing image is pulled automatically.
+
+CI runs the Go race suite, real nginx upload check, and production build, Anki worker and dictionary-builder tests, and admin tests and production build on every push and pull request. Toolchains and action revisions are pinned in `.github/workflows/ci.yml`; Python dependencies are hash-locked in `anki_worker/requirements.txt` and `.github/requirements-builders.txt`, and the admin uses `npm ci`.
 
 JavaScript builds use Node 26.8.2 and npm 12.0.2; all GitHub Actions are pinned to current stable release commits and run on Node 24. These are separate runtimes: `setup-node` selects the project runtime, not the runtime embedded in other actions. Dependency locks retain upstream compatibility constraints rather than forcing unsupported transitive major upgrades. The latest `web-ext` still brings deprecated transitive tooling and an unpatched `image-size` denial-of-service advisory; it is development/signing tooling, not shipped extension code. Recheck upstream before changing that dependency; `npm audit fix --force` currently recommends a downgrade, not a supported fix.
 
@@ -59,7 +66,7 @@ Download `english-dictionary-<version>.xpi` directly from [GitHub Releases](http
 
 Release artwork in `firefox-extension/icons/` is resized from `docs/icon.png` with Lanczos filtering at 16, 32, 48, 64, 96, 128, and 256 pixels. The manifest uses these PNGs for the add-on, toolbar, and native sidebar; in-page action glyphs remain separate.
 
-The background page owns window-scoped conversations, independent quick/deep cancellation, MCP lookup, and vocabulary saving. A closed-sidebar selection invokes `quickModel` (falling back to `model`) without MCP. Cumulative `QUICK_UPDATED` messages target the originating tab/frame and local request ID; the content popup displays partial plain text immediately and rejects stale updates. A sidebar lifecycle port starts the pending deep explanation, cancels/dismisses Quick, and aborts unfinished Deep generation when disconnected. Before its first request after Quick, Deep recaptures its own context using the cached source ID and original term. Navigation, changed selection/text, and unavailable sources safely fall back to term-only. Content scripts capture bounded visible context and never receive credentials.
+The background page owns window-scoped conversations, independent quick/deep cancellation, MCP lookup, and vocabulary saving. A closed-sidebar selection invokes `quickModel` (falling back to `model`) without MCP. Cumulative `QUICK_UPDATED` messages target the originating tab/frame and local request ID; the content popup displays partial plain text immediately and rejects stale updates. A sidebar lifecycle port starts the pending deep explanation, cancels/dismisses Quick, and aborts unfinished Deep generation when disconnected. Before its first request after Quick, Deep recaptures its own context using the cached source ID and original term. Navigation, changed selection/text, and unavailable sources safely fall back to term-only. Content scripts capture bounded visible context and never receive credentials. Focus notifications retain the last focused tab/frame before the sidebar takes focus; they contain no selection text. Shortcut and toolbar actions target that frame, while explicit popup/menu actions retain their originating frame. Navigation and tab removal clear remembered focus. Content capture distinguishes privacy denial from unavailable capture: editable selections cannot be recovered through context-menu fallback text.
 
 The **Alt+Shift+E** command calls Firefox's native `sidebarAction.toggle()` synchronously to preserve the keyboard event's user activation. It captures/explains a selection only if the sidebar is open afterward; closing relies on the lifecycle port to cancel Deep. Toolbar and context-menu actions remain open-only.
 
@@ -67,7 +74,7 @@ The **Alt+Shift+E** command calls Firefox's native `sidebarAction.toggle()` sync
 
 `prompt.js` provides separate contextual-English defaults for Deep and Quick plus fixed save-draft instructions. The explanation prompts do not run lessons, reviews, repetition, or progress tracking. Deep can use dictionary facts and one relevant exact HTTPS image; Quick remains concise plain text without MCP. Settings expose both explanation prompts for multiline editing or independent reset (32,000 characters each); blank is allowed. A separately appended, read-only host guard treats references as untrusted and keeps tool availability and write consent outside editable instructions. The initial user request remains exactly `What does 'selected word' mean?`, hidden in the UI.
 
-`api.js` handles OpenAI-compatible JSON/SSE; `mcp.js` handles Streamable HTTP initialization, negotiated protocol/session headers, JSON/SSE tool results, and errors without replaying writes. Deep explanations use `dictionary_lookup`. Explicit Save first makes a separate Deep-model request with fixed JSON instructions to choose the dictionary sense and produce a concise editable draft. The host validates that choice and bounds context to one–four phrases and 400 characters. The review dialog exposes context, notes, examples, tags, personal interest, description, and source attribution. Only confirmation calls `vocabulary_save`; an existing item is merged through `vocabulary_update`, including replacing its reviewed context while preserving its item ID and learning history. Invalid choices, identity conflicts, and canceled or stale conversations never write. No MCP tools are exposed to the model.
+`api.js` handles OpenAI-compatible JSON/SSE; `mcp.js` handles Streamable HTTP initialization, negotiated protocol/session headers, JSON/SSE tool results, and errors without replaying writes. Deep explanations use `dictionary_lookup`. Explicit Save first makes a separate Deep-model request with fixed JSON instructions to choose the dictionary sense and produce a concise editable draft. The host validates that choice and bounds context to one–four phrases and 400 characters. The review dialog exposes context, notes, examples, tags, personal interest, description, and source attribution. Only confirmation calls `vocabulary_save`; an existing item is merged through `vocabulary_update`, including replacing its reviewed context while preserving its item ID and learning history. Preparation and saving have independent operation identities and abortable pre-write work. Accepted follow-ups, cancellation of preparation, clearing, and selection replacement discard stale draft successes and failures. The selected sense is snapshotted with the draft; saving rechecks identity after MCP initialization and before dispatch. Already-dispatched writes are not canceled or replayed, and stale results cannot start a follow-on update. Invalid choices, identity conflicts, and operations invalidated before dispatch never write. No MCP tools are exposed to the model.
 
 `render.js` creates DOM nodes rather than evaluating model HTML. Links allow HTTP(S); images require exact, dictionary-provided HTTPS URLs. The sidebar reads the current window's Firefox theme colors and updates when that theme changes, falling back to native system colors when the theme omits a value; the settings page retains its custom interface styling. The sidebar preserves input during streaming, hides only the initial user message, and uses icon-only clear/save/settings controls plus a native modal for editable save details.
 
@@ -148,7 +155,7 @@ SQLite uses foreign keys, WAL journal mode, a five-second busy timeout, `synchro
 - unique, rotating review tokens;
 - automatic learning-card creation for new or reactivated items.
 
-Migration `015` adds an integer edit revision and a trigger that advances it only when editable vocabulary metadata changes, including MCP writes and usefulness recalculation. Admin PATCH requires a positive `expectedRevision`: missing preconditions return 428, malformed values return 400, and stale revisions return 409 without mutation. Revision comparison and the update share the writer transaction. Successful admin vocabulary responses expose `revision`; MCP and Anki export shapes are unchanged. Scheduler and presentation activity do not invalidate drafts.
+Migration `015` adds an integer edit revision; migration `018` replaces its trigger to include context and context-derived sense identity alongside the existing editable fields. Actual value changes advance the revision, including MCP writes and usefulness recalculation; no-op updates do not, and a coupled context/identity change increments once. Admin PATCH requires a positive `expectedRevision`: missing preconditions return 428, malformed values return 400, and stale revisions return 409 without mutation. Revision comparison and the update share the writer transaction. Successful admin vocabulary responses expose `revision`; MCP and Anki export shapes are unchanged. Scheduler and presentation activity do not invalidate drafts.
 
 `learning_next` is a mutating, non-destructive, non-idempotent operation. Candidate selection, vocabulary hydration, and presentation insertion share one SQLite transaction and connection. Both learning and reinforcement capture their selection clock after acquiring the write transaction, so database waits cannot leave due/early classification or cooldown eligibility using an old request-start timestamp. Learning uses the same instant for selection, persisted issuance, and response reason. Each committed selection records owner/item/card IDs, exercise mode, review token, issuance and due timestamps, and selection kind. Issuing an item does not modify FSRS scheduling state or rotate its review token.
 
@@ -188,6 +195,8 @@ Migration `014` separates context-only sense keys from dictionary-definition key
 
 Migration `017` adds `last_review_at_before` to review snapshots and an owner/insertion-order index. Existing timestamps are backfilled only from the immediately preceding same-card attempt when repetition counts match. Missing pre-review clocks on previously reviewed cards make corrections fail safely. New attempts persist that clock directly. The update trigger permits only the latest owner's attempt to change its grade, comment, and after-state; identity, before-state, and review time remain protected, as does deletion of any review attempt.
 
+Migration `018` replaces only the vocabulary edit-revision trigger. Context and sense-key changes now invalidate stale admin drafts, without rewriting existing vocabulary, media, schedules, or history. Migration `015` and its stored checksum remain unchanged. Regression tests cover fresh databases, upgrades from schema `017`, no-op edits, and competing admin/admin and MCP/admin context edits.
+
 ## Adding or changing a tool
 
 1. Add or update request/response types in `internal/mcpserver/types.go` or the relevant domain package.
@@ -201,7 +210,7 @@ All new errors exposed to callers should use a stable `apperr` code and avoid le
 
 ## Text validation and existing NUL data
 
-Vocabulary service writes reject NUL (`U+0000`) in all caller-supplied exported text. The admin API and both MCP HTTP listeners also reject malformed raw UTF-8 before JSON decoding can replace it with `U+FFFD`; valid replacement characters remain allowed. Existing request-size limits remain 1 MiB for admin writes and 4 MiB for MCP requests. Normal whitespace and Unicode content are preserved under existing normalization rules.
+Vocabulary service writes reject NUL (`U+0000`) in all caller-supplied exported text. The admin API and both MCP HTTP listeners also reject malformed raw UTF-8 before JSON decoding can replace it with `U+FFFD`; valid replacement characters remain allowed. JSON request-size limits remain 1 MiB for admin writes and 4 MiB for MCP requests. Only the image-upload route allows a 10 MiB file plus 64 KiB of multipart overhead, in both the backend and shipped nginx proxy. Normal whitespace and Unicode content are preserved under existing normalization rules.
 
 If a pre-upgrade record already contains NUL, the Anki worker continues to reject the complete snapshot rather than silently omit the item (which would authorize a remote deletion). Back up the database first and identify affected records with the admin raw inspector or a read-only query such as:
 
@@ -233,8 +242,10 @@ Install the pinned library into an isolated environment:
 ```sh
 uv venv --python 3.14.7 .venv
 uv pip install --python .venv/bin/python -r anki_worker/requirements.txt
-.venv/bin/python -W error::ResourceWarning -m unittest anki_worker.test_worker -v
+.venv/bin/python -W error::ResourceWarning -m unittest discover -s anki_worker -t . -v
 ```
+
+`internal/storage/testdata/export-*.json` are deterministic fixtures generated by the real Go SQLite exporter. Go tests detect fixture drift; Python tests consume those exact bytes and verify schema/digest agreement for Unicode, HTML-sensitive characters, null/empty lists, selected/context-only meanings, and nested media metadata. See [fixture regeneration instructions](../internal/storage/testdata/README.md); no AnkiWeb connection is involved.
 
 Routine worker checks use temporary real Anki collections and controlled sync boundaries, not AnkiWeb credentials. They cover authoritative deletion, remote edits, card/review preservation, malformed exports, ownership collisions, shared-note protection, crash recovery, locks, and full-sync direction safety. Structure creation records temporary identities before allocating Anki IDs, so an interrupted first run can recover without claiming unrelated deck names.
 

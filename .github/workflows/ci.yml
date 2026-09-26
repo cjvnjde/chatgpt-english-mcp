@@ -24,6 +24,10 @@ jobs:
         run: go mod download
       - name: Test with race detection
         run: go test -race ./...
+      - name: Test deployed nginx upload limits
+        env:
+          ENGLISH_MCP_NGINX_TEST: '1'
+        run: go test -race ./internal/adminapi -run '^TestNginxImageUploadLimits$' -count=1
       - name: Build production server
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/english-learning-mcp" ./cmd/english-learning-mcp
 

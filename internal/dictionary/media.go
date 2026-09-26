@@ -120,12 +120,7 @@ func (provider *CambridgeProvider) downloadMedia(ctx context.Context, sourceURL,
 	return downloadedMedia{contentType: contentType, data: contents, sourceURL: response.Request.URL.String()}, nil
 }
 
-func (service *Service) storeProviderMedia(ctx context.Context, normalizedTerm string, data *domain.DictionarySnapshotData, now time.Time) {
-	downloader, downloadable := service.provider.(mediaDownloader)
-	store, writable := service.store.(mediaStore)
-	if !downloadable || !writable {
-		return
-	}
+func mediaDownloads(data *domain.DictionarySnapshotData) ([]mediaDownload, int) {
 	downloads := make([]mediaDownload, 0)
 	byResource := make(map[string]int)
 	skipped := 0
@@ -170,6 +165,37 @@ func (service *Service) storeProviderMedia(ctx context.Context, normalizedTerm s
 		add(image.ThumbnailURL, storage.MediaKindImage, mediaTarget{image: image, thumbnail: true})
 	}
 
+	return downloads, skipped
+}
+
+func (service *Service) storeProviderMedia(ctx context.Context, normalizedTerm string, data, previous *domain.DictionarySnapshotData, now time.Time) {
+	downloader, downloadable := service.provider.(mediaDownloader)
+	store, writable := service.store.(mediaStore)
+	if !downloadable || !writable {
+		return
+	}
+	downloads, skipped := mediaDownloads(data)
+	storedLinks := make(map[string]storage.DictionaryMediaLink)
+	if previous != nil {
+		resources, _ := mediaDownloads(previous)
+		for _, resource := range resources {
+			for _, target := range resource.targets {
+				link := storage.DictionaryMediaLink{SourceURL: resource.sourceURL, Kind: resource.kind}
+				switch {
+				case target.audio != nil:
+					link.MediaID, link.ContentType = target.audio.MediaID, target.audio.ContentType
+				case target.thumbnail:
+					link.MediaID = target.image.ThumbnailMediaID
+				default:
+					link.MediaID = target.image.MediaID
+				}
+				if link.MediaID != "" {
+					storedLinks[resource.kind+"\x00"+resource.sourceURL] = link
+				}
+			}
+		}
+	}
+
 	downloadContext, cancel := context.WithTimeout(ctx, maxCambridgeMediaTime)
 	defer cancel()
 	var storedBytes atomic.Int64
@@ -212,7 +238,13 @@ func (service *Service) storeProviderMedia(ctx context.Context, normalizedTerm s
 		item := &downloads[index]
 		if item.err != nil {
 			failed++
-			continue
+			// A transient fetch failure must not unlink an existing local copy.
+			// Only the same kind and exact source URL can inherit a stored link.
+			previous, exists := storedLinks[item.kind+"\x00"+item.sourceURL]
+			if !exists {
+				continue
+			}
+			item.mediaID, item.contentType = previous.MediaID, previous.ContentType
 		}
 		links = append(links, storage.DictionaryMediaLink{
 			SourceURL: item.sourceURL, Kind: item.kind, MediaID: item.mediaID, ContentType: item.contentType,

@@ -165,7 +165,11 @@ func (service *Service) fetchSnapshot(ctx context.Context, normalizedTerm string
 	}
 
 	now := service.now().UTC()
-	service.storeProviderMedia(ctx, normalizedTerm, &data, now)
+	var previous *domain.DictionarySnapshotData
+	if cached != nil {
+		previous = &cached.Data
+	}
+	service.storeProviderMedia(ctx, normalizedTerm, &data, previous, now)
 	expiresAt := now
 	if data.Status == http.StatusNotFound && len(data.Entries) == 0 {
 		// Only a genuine missing-term response receives a negative cache TTL.

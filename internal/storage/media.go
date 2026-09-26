@@ -262,6 +262,12 @@ func ValidatedMediaContentType(header string, contents []byte, kind string) (str
 	declared, _, _ := mime.ParseMediaType(header)
 	declared = canonicalMediaType(declared)
 	detected := canonicalMediaType(http.DetectContentType(contents))
+	if kind == MediaKindAudio && (declared == "audio/mp4" || detected == "video/mp4") {
+		if isAudioMP4(contents) {
+			return "audio/mp4", nil
+		}
+		return "", fmt.Errorf("%w: MP4 must contain a valid audio-only container", ErrInvalidMedia)
+	}
 	if supportedMediaType(detected, kind) {
 		return detected, nil
 	}

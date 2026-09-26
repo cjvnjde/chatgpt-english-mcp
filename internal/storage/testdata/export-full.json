@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 4,
+  "namespace": "english-mcp",
+  "owner": "owner:日本語",
+  "digest": "38d96103f721d1c95ca7db7754335549b81d9d326344a7f8876969912167e7bc",
+  "itemCount": 2,
+  "complete": true,
+  "items": [
+    {
+      "sourceId": "english-mcp:b3duZXI65pel5pys6Kqe:item-minimal",
+      "vocabulary": {
+        "itemId": "item-minimal",
+        "term": "quiet",
+        "normalizedTerm": "quiet",
+        "status": "archived",
+        "usefulness": "normal",
+        "personalInterest": "normal",
+        "tags": [],
+        "notes": [],
+        "examples": [],
+        "images": [],
+        "context": "context-only meaning",
+        "createdAt": "2026-09-01T12:00:00.123456789Z",
+        "updatedAt": "2026-09-01T12:00:00.123456789Z"
+      }
+    },
+    {
+      "sourceId": "english-mcp:b3duZXI65pel5pys6Kqe:item-rich",
+      "vocabulary": {
+        "itemId": "item-rich",
+        "term": "bank",
+        "normalizedTerm": "bank",
+        "status": "learned",
+        "usefulness": "high",
+        "personalInterest": "low",
+        "tags": [
+          "nature",
+          "tag \u0026 \u003cquoted\u003e"
+        ],
+        "customDescription": "Saved \u003cmeaning\u003e \u0026 café\u2028line\u2029paragraph 🦆",
+        "descriptionSource": {
+          "title": "Page \u003cone\u003e \u0026 café",
+          "url": "https://example.test/café?a=1\u0026b=2"
+        },
+        "notes": [
+          "Use the river sense.",
+          "日本語"
+        ],
+        "examples": [
+          "A duck sat on the bank."
+        ],
+        "images": [
+          {
+            "attachmentId": "attachment-golden",
+            "mediaId": "f11fb145fb56636723b20f30e40aaac672e9de2c9677de363551d82668cbd5cd",
+            "contentType": "image/png",
+            "byteSize": 68,
+            "originalFilename": "café.png",
+            "example": "A duck \u0026 a river",
+            "createdAt": "2026-09-01T12:00:00.123456789Z"
+          }
+        ],
+        "context": "café beside water",
+        "sense": {
+          "context": "café beside water",
+          "entryIndex": 0,
+          "definitionIndex": 0,
+          "headword": "bank",
+          "partOfSpeech": "noun",
+          "pronunciations": {
+            "uk": "bæŋk"
+          },
+          "definition": {
+            "definition": "A river bank \u003cland\u003e \u0026 café\u2028line\u2029paragraph 🦆",
+            "examples": null,
+            "phrases": null,
+            "seeAlso": null,
+            "images": [
+              {
+                "imageUrl": "https://dictionary.example/image.png",
+                "thumbnailUrl": "https://dictionary.example/image.png",
+                "mediaId": "f11fb145fb56636723b20f30e40aaac672e9de2c9677de363551d82668cbd5cd",
+                "thumbnailMediaId": "f11fb145fb56636723b20f30e40aaac672e9de2c9677de363551d82668cbd5cd"
+              }
+            ],
+            "labels": null
+          }
+        },
+        "lookup": {
+          "lookupId": "lookup-golden",
+          "requestedTerm": "bank",
+          "normalizedTerm": "bank",
+          "cache": {
+            "state": "hit",
+            "fetchedAt": "2026-09-01T12:00:00.123456789Z"
+          },
+          "source": {
+            "provider": "cambridge",
+            "sourceUrl": "https://dictionary.example/bank?x=1\u0026y=2",
+            "parserVersion": 14
+          },
+          "status": 200,
+          "entries": [
+            {
+              "headword": "bank",
+              "partOfSpeech": "noun",
+              "pronunciations": {
+                "uk": "bæŋk"
+              },
+              "audio": {
+                "uk": {
+                  "audioUrl": "https://dictionary.example/audio.mp3",
+                  "contentType": "audio/mpeg",
+                  "mediaId": "52b922bbe0d43ed1b32bb6d8645bc5ddd6ab4919bb91ec01ddab3f040e99b676"
+                }
+              },
+              "definitions": [
+                {
+                  "definition": "A river bank \u003cland\u003e \u0026 café\u2028line\u2029paragraph 🦆",
+                  "examples": [],
+                  "phrases": [],
+                  "seeAlso": [],
+                  "images": [
+                    {
+                      "imageUrl": "https://dictionary.example/image.png",
+                      "thumbnailUrl": "https://dictionary.example/image.png",
+                      "mediaId": "f11fb145fb56636723b20f30e40aaac672e9de2c9677de363551d82668cbd5cd",
+                      "thumbnailMediaId": "f11fb145fb56636723b20f30e40aaac672e9de2c9677de363551d82668cbd5cd"
+                    }
+                  ],
+                  "labels": []
+                }
+              ]
+            }
+          ],
+          "suggestions": [],
+          "images": []
+        },
+        "createdAt": "2026-09-01T12:00:00.123456789Z",
+        "updatedAt": "2026-09-01T12:00:00.123456789Z"
+      }
+    }
+  ]
+}
