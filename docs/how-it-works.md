@@ -4,6 +4,8 @@ English Learning MCP is the persistence and scheduling layer behind an AI Englis
 
 This guide describes the implemented algorithm, not an idealized spaced-repetition system. The important distinction is **which item to ask now** versus **when that item should next be reviewed**. Those are separate decisions.
 
+Numeric examples and formulas below use the default settings. Admin → **Settings** exposes validated, owner-specific controls for timing, FSRS retention/intervals/steps, mastery, selection, and reinforcement. Changes apply to subsequent operations without restarting; existing schedules and history are not rewritten. See [runtime algorithm settings](configuration.md#runtime-algorithm-settings) for the controls and limits.
+
 Diagrams use Mermaid fenced blocks; formulas use LaTeX math. View this document in a Markdown renderer that supports both to see the rendered charts and equations.
 
 ## Reading map
@@ -305,9 +307,9 @@ Rating guidance:
 
 The tutor should add a short review comment only when a concrete confusion, failed cue, or useful hint will improve the next attempt.
 
-FSRS uses the **submitted grade unchanged**. A fast `good` remains `good`; only an explicit `easy` receives the corresponding schedule. Server issuance includes model processing and delivery, not a measurement of human recall time.
+The server applies one one-way timing rule: a submitted `good` becomes `easy` if the accepted review is strictly within the configured fast-answer window (default 30 seconds) after the token's first presentation. Server issuance includes model processing and delivery; this is a quick-response heuristic, not a measurement of pure human recall time.
 
-Neither the server nor the tutor should use chat latency to promote or penalize a grade. `learning_review` returns `effectiveRating`, which equals the submitted grade for new reviews. Historical retries preserve their saved effective grade and schedule; retry with the saved submitted rating and comment, using corrected values if an explicit correction has replaced them.
+Slow answers are never penalized and other grades never change. `learning_review` returns the final `rating`; the same grade is stored and used by FSRS. Retries preserve the saved grade and schedule. Retry with the original request rating and comment, even when `good` was promoted to `easy`; use corrected values after an explicit correction changes the attempt.
 
 ### Continue a lesson
 
@@ -402,7 +404,7 @@ When multiple surviving candidates belong to the chosen pool, this permits a wei
 
 “Oldest” compares each card's latest **event ID**, not its timestamp; ties use ascending card ID. This preserves issuance order even when events share a timestamp. Archived/deleted items' retained events can still occupy positions in the owner's last-three-event window; the latest active presentation is the greatest event ID among the loaded cards.
 
-The implementation treats a negative elapsed interval after a backward clock change as recent when its ID is in the window. The recency weight clamps that interval to zero. Review grades are independent of presentation timing.
+The implementation treats a negative elapsed interval after a backward clock change as recent when its ID is in the window. The recency weight clamps that interval to zero. A backward-clock interval never earns a fast-answer promotion.
 
 ### 3. Prioritize learning steps, then reserve learned maintenance
 
@@ -624,17 +626,18 @@ sequenceDiagram
     alt Matching attempt already exists
         DB-->>MCP: Original saved result, duplicate = true
     else First submission with a valid active-card token
-        DB->>Schedule: Card, transaction review time, submitted rating
-        Schedule-->>DB: Effective rating and updated scheduling state
+        DB->>DB: Promote fast good to easy using first presentation and settings
+        DB->>Schedule: Card, transaction review time, final rating, settings
+        Schedule-->>DB: Updated scheduling state
         DB->>DB: Save attempt and daily mastery, update card/status, rotate token, commit
         DB-->>MCP: New saved result, duplicate = false
     end
-    MCP-->>Tutor: nextReviewAt, effectiveRating, status, masteryStreak, troublesome
+    MCP-->>Tutor: nextReviewAt, rating, status, masteryStreak, troublesome
 ```
 
 The service trims the token and comment and validates the rating. After acquiring its write transaction, persistence checks for an existing attempt **before** resolving the current card or capturing the new review's UTC timestamp:
 
-- Same token, submitted rating, and trimmed comment: return the original saved result without scheduling again.
+- Same token and original request fingerprint (submitted rating plus trimmed comment): return the saved result without scheduling again, even if its final grade was promoted.
 - Same token with a different rating or comment: `INVALID_ARGUMENT`.
 - No existing attempt and no current card for that owner's token: `NOT_FOUND`.
 - A current token for an archived item: `INVALID_ARGUMENT`.
@@ -642,23 +645,25 @@ The service trims the token and comment and validates the rating. After acquirin
 
 Consequently, a valid duplicate can still return its original result after later reviews, archiving, or deletion. It returns that attempt's schedule, not the latest schedule. A failed transaction does not partially record a review.
 
-A due date is not an acceptance gate: a valid active-card token can be reviewed early. A presentation is also not a storage-level prerequisite, although the normal tutor workflow gets the token from `learning_next`. Neither missing nor repeated presentation history changes the grade.
+A due date is not an acceptance gate: a valid active-card token can be reviewed early. A presentation is also not a storage-level prerequisite, although the normal tutor workflow gets the token from `learning_next`. Missing presentation history keeps the submitted grade. Repeated presentations do not restart the fast-answer timer.
 
 `learning_review_update` acquires the same writer lock, resolves the owner's original token, and checks that its attempt has the greatest insertion row ID for that owner **before** considering duplicate corrections. It requires an existing, non-archived card. Scheduling starts from the stored pre-review state at the original review time, not from the current card or correction time. The saved result and card update commit together, preserving the pending token and attempt count. Identical corrections replay without scheduling; older attempts are always rejected. Legacy pre-review clocks are restored only from recorded predecessor reviews with matching repetition counts; missing history causes a safe failure, never an invented timestamp.
 
 Corrections also restore and replay the original mastery streak, last credited UTC day, and status. Changed corrections are rejected after newer reinforcement feedback for the same meaning, detected by a persisted review-count snapshot rather than timestamps. Identical corrections return their saved result without undoing later reinforcement. Legacy reviews lacking status evidence preserve current manual status and do not fabricate mastery.
 
-### Submitted rating versus effective rating
+### One stored rating and fast-answer promotion
 
-Map `again`, `hard`, `good`, and `easy` to grades 1, 2, 3, and 4. For a new review, the effective grade is exactly the submitted grade. Presentation timestamps and counts do not influence it.
+Map `again`, `hard`, `good`, and `easy` to grades 1, 2, 3, and 4. Before scheduling a new review, read the first presentation for the same owner, card, and token. Promote only `good` when `0 <= reviewedAt - firstShownAt < fastAnswerSeconds`; the default threshold is 30 seconds and zero disables it. Exactly at the threshold, slower responses, missing presentations, and negative elapsed intervals keep the submitted grade. `again`, `hard`, and `easy` are unchanged at any speed.
 
-The attempt retains both grades to preserve historical results. Some older attempts submitted as `good` were scheduled as `easy` under the previous timing policy; those attempts are immutable and retries still return their original grade and schedule. Comment history retains the submitted grade. Always retry with the **original submitted** grade and comment, not a historical effective grade.
+The review stores only the final `rating`, used consistently by FSRS, comment history, and analytics. A request fingerprint preserves original-payload retries without retaining a second rating. Migration preserves the actual scheduling grade of older attempts and fingerprints their original payloads, without recalculating schedules.
+
+Explicit `learning_review_update` corrections bypass promotion so an accidental `easy` can be corrected to `good`. Changed corrections use the current algorithm settings with the original pre-review state and timestamp; identical corrections and review retries do not reschedule.
 
 ### The FSRS model actually used here
 
-The dependency is [`go-fsrs/v4` at `v4.0.0`](https://github.com/open-spaced-repetition/go-fsrs/tree/v4.0.0), whose implementation uses the **FSRS v6 model**. The module's `v4` is not the model's equation version. The service uses its default parameters:
+The dependency is [`go-fsrs/v4` at `v4.0.0`](https://github.com/open-spaced-repetition/go-fsrs/tree/v4.0.0), whose implementation uses the **FSRS v6 model**. The service starts with these defaults; retention, maximum interval, and step lists are editable in Admin → Settings:
 
-| Parameter | Current value | Meaning |
+| Parameter | Default value | Meaning |
 |---|---|---|
 | Requested retention $q$ | 0.9 | Target modeled recall probability when setting a day-scale interval |
 | Maximum due delay $M$ | 36,500 days | Upper bound on the actual day-scale due delay |
@@ -668,7 +673,7 @@ The dependency is [`go-fsrs/v4` at `v4.0.0`](https://github.com/open-spaced-repe
 | Fuzz | Disabled | No random jitter in the FSRS due date |
 | Model weights | Fixed defaults | No per-user fitting or history optimizer runs |
 
-The selector is random; this scheduler is deterministic for the same card state, effective rating, and review time.
+The selector is random; this scheduler is deterministic for the same card state, final rating, settings, and review time.
 
 #### Card memory and counters
 
@@ -697,7 +702,7 @@ c+1 & \text{submitted rating is again}\\
 \end{cases}
 \qquad
 \ell'=\ell+
-\mathbf{1}[\text{previous state is Review and effective rating is again}]
+\mathbf{1}[\text{previous state is Review and final rating is again}]
 $$
 
 $$
@@ -710,7 +715,7 @@ Vocabulary `new`/`learning`/`learned` labels remain unchanged by these transitio
 
 ### State transitions and concrete first-review results
 
-This diagram shows normal reachable states under the current learning steps. All grades shown are **effective grades**, after any timing promotion.
+This diagram shows normal reachable states under the default learning steps. All grades shown are **final stored grades**, after any timing promotion.
 
 ```mermaid
 stateDiagram-v2
@@ -731,7 +736,7 @@ stateDiagram-v2
 
 **First review of an FSRS-new card:**
 
-| Effective rating | Initialized stability | Next state | Due after review | Remaining steps |
+| Final rating | Initialized stability | Next state | Due after review | Remaining steps |
 |---|---|---|---|---|
 | `again` | 0.212 days | Learning | 1 minute | 2 |
 | `hard` | 1.2931 days | Learning | 6 minutes | 2 |
@@ -740,7 +745,7 @@ stateDiagram-v2
 
 The initial hard step is $\operatorname{round}((1+10)/2)=6$ minutes, not 5 or 5.5.
 
-**Important consequence:** a first submitted `good` always takes the **10-minute** Learning step with the current FSRS defaults, even when answered immediately. Only a submitted `easy` goes directly to an **8-day** review.
+**Important consequence:** with default settings a final `good` takes the **10-minute** Learning step, whereas `easy` goes directly to an **8-day** review. A submitted `good` inside the fast-answer window is stored and scheduled as `easy`.
 
 **Subsequent step behavior:**
 
@@ -985,10 +990,10 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 | Term spelling, bundled ranks, expression evidence | Indirectly through calculated usefulness; no separate raw-rank weight | No direct effect | Determine inference matches and votes |
 | Optional usefulness hint | Indirectly through effective category | No direct effect | Weight 2 in inference; not a forced override |
 | Consecutive failures and lapses | Bounded extra due-card weight; troublesome label | Not direct equation multipliers; rating/state update counters | No usefulness effect |
-| Latest presentation and recent event IDs | Global adaptive cooldown; new/mature-review recency weight; future exposure ordering | No direct scheduling or grading effect | Issuance is not proof of human visibility |
-| Repeated `learning_next` calls | Change future selection history, even without an answer | Do not reschedule or change grades | New presentation event each time |
-| Rating | Through updated status, due/state/failures; Again can return learned to active acquisition | Effective grade is a direct input on every accepted attempt | Good/easy mastery credit at most once per UTC day; every hard/again resets it |
-| Answer latency | No separate speed-based selection score | Does not change the grade; FSRS still measures elapsed time since the previous review | Includes model/delivery time, not pure recall time |
+| Latest presentation and recent event IDs | Global adaptive cooldown; new/mature-review recency weight; future exposure ordering | First presentation for the pending token supplies fast-answer timing | Issuance is not proof of human visibility |
+| Repeated `learning_next` calls | Change future selection history, even without an answer | Do not reschedule or restart the fast-answer timer | New presentation event each time |
+| Rating | Through updated status, due/state/failures; Again can return learned to active acquisition | Final stored grade is a direct input on every accepted attempt | Good/easy mastery credit at most once per UTC day; every hard/again resets it |
+| Answer latency | No separate speed-based selection score | Only fast good can become easy; slow responses are never penalized | Includes model/delivery time, not pure recall time |
 | Tags, notes, personal examples | Not filters or weights for `learning_next` | No direct effect | Can choose a fallback definition by word overlap |
 | Custom description and selected sense | Do not change lottery weight | No direct effect | Control returned definition/example; sense identity gives an independent card |
 | Review comment text / `includeComments` | No selection effect | No direct effect | Feedback for the tutor, not automated scoring |
@@ -1007,7 +1012,7 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 - **A troublesome card does not always outrank everything.** Its due-card weight is larger but capped, and the usual pool/fallback rules still apply.
 - **Repeated spelling does not always mean a failed cooldown.** Different saved meanings have different cards; cooldown is card-based.
 - **Skipping an answer is not a failed review.** Presentation affects selection history, but only a submitted review updates FSRS and failure counters.
-- **Waiting hours is not graded as hesitation.** Answer latency never changes the submitted grade; answer quality controls scheduling.
+- **Waiting hours is not graded as hesitation.** The timing rule only promotes quick `good` responses; it never lowers a grade.
 - **Completing all due cards does not make `learning_next` empty.** It can return new items or early reviews until the tutor/learner stops.
 - **Daily mastery and review quotas are different.** Success earns at most one mastery credit per UTC day, while every genuine graded attempt is recorded. Due steps take priority; otherwise learned maintenance receives 10%–40% against active work, whose remaining new/review split uses 20%–80% exposure bounds. There is no enforced lesson length or guarantee that every due card is covered.
 
@@ -1015,7 +1020,7 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 
 Tool callers can save/archive items, update usefulness hints, personal interest and metadata, submit scheduled or reinforcement ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
 
-The five-day mastery requirement, 21-day interval gate, 10%–40% learned share, inner 20%–80% new/nonlearned-review bounds, adaptive last-three/30-minute cooldown, exposure growth, learning urgency denominator, and weight caps are source-level policies. FSRS settings remain dependency defaults. None is exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
+The admin can change the fast-answer threshold, mastery requirements, active/learned pool-share bounds, cooldown window/count, exposure recovery/unseen bonus, usefulness/interest multipliers, troublesome thresholds, reinforcement cooldown/cap, and FSRS retention/maximum interval/step lists. Values persist per owner with optimistic revisions; next-item likelihood previews use the same snapshot policy as the selector. [Configuration](configuration.md#runtime-algorithm-settings) lists the defaults and explains application timing. FSRS fitted weights, fuzz-off policy, and low-level equation shapes remain fixed; deployment credentials and listeners remain environment configuration.
 
 ## Implementation map
 
@@ -1033,8 +1038,9 @@ These are the source-of-truth entry points for checking or changing the document
 | Revision-gated usefulness backfill | [`refreshUsefulness`](../internal/storage/usefulness_refresh.go) |
 | Candidate pools, cooldown, lottery, weights, fallbacks | [`loadSelectionCards`, `selectLearningCard`, `selectionWeight`, `presentedBefore`](../internal/storage/selection.go) |
 | Presentation transaction and review idempotency | [`NextLearningItem`, `RecordReview`](../internal/storage/learning.go) |
+| Runtime parameter validation and persistence | [`internal/settings/settings.go`](../internal/settings/settings.go), [`internal/storage/settings.go`](../internal/storage/settings.go) |
 | Learned-word capped lottery and independent feedback | [`internal/storage/reinforcement.go`](../internal/storage/reinforcement.go), [`internal/learning/reinforcement.go`](../internal/learning/reinforcement.go) |
-| Submitted-grade FSRS adapter, reasons, question content | [`Service.schedule`, `selectionReason`, `tutoringContent`, `contextualDefinition`](../internal/learning/service.go) |
+| Final-grade FSRS adapter, reasons, question content | [`Service.schedule`, `selectionReason`, `tutoringContent`, `contextualDefinition`](../internal/learning/service.go) |
 | Actual FSRS equations and state machine | Dependency [`arithmetic.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/arithmetic.go), [`scheduler_basic.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/scheduler_basic.go) |
 | FSRS defaults and elapsed-time helpers | Dependency [`parameters.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/parameters.go), [`weights.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/weights.go), [`steps.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/steps.go), [`fsrs.go`](https://github.com/open-spaced-repetition/go-fsrs/blob/v4.0.0/fsrs.go) |
 

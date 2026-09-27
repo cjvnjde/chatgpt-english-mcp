@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
 func TestSelectLearningCardBalancesNewAndDueWithoutShortlists(t *testing.T) {
@@ -23,7 +24,7 @@ func TestSelectLearningCardBalancesNewAndDueWithoutShortlists(t *testing.T) {
 		{draw: 0.5, want: "troublesome"},
 		{draw: 0.999999, want: "troublesome"},
 	} {
-		selected, ok := selectLearningCard(cards, 0, now, func() float64 { return test.draw })
+		selected, ok := selectLearningCard(cards, 0, now, func() float64 { return test.draw }, settings.Defaults())
 		if !ok || selected.cardID != test.want {
 			t.Fatalf("draw %g selected %q, want %q", test.draw, selected.cardID, test.want)
 		}
@@ -33,7 +34,7 @@ func TestSelectLearningCardBalancesNewAndDueWithoutShortlists(t *testing.T) {
 	for index := range unseen {
 		unseen[index] = selectionCard{cardID: fmt.Sprintf("new-%03d", index), dueAt: now}
 	}
-	selected, ok := selectLearningCard(unseen, 0, now, func() float64 { return 0.999999 })
+	selected, ok := selectLearningCard(unseen, 0, now, func() float64 { return 0.999999 }, settings.Defaults())
 	if !ok || selected.cardID != "new-127" {
 		t.Fatalf("unseen pool selected %q, want final card beyond any oldest-only shortlist", selected.cardID)
 	}
@@ -81,7 +82,7 @@ func TestSelectLearningCardUsesWeightedSamplingWithinPools(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			selected, ok := selectLearningCard(test.cards, 2, now, func() float64 { return test.draw })
+			selected, ok := selectLearningCard(test.cards, 2, now, func() float64 { return test.draw }, settings.Defaults())
 			if !ok || selected.cardID != test.want {
 				t.Fatalf("selected %q, want %q", selected.cardID, test.want)
 			}
@@ -98,7 +99,7 @@ func TestPersonalInterestWeightsEveryPoolWithoutChangingPoolShares(t *testing.T)
 				{cardID: "normal", fsrsState: state, dueAt: now, personalInterest: domain.PersonalInterestNormal},
 				{cardID: "high", fsrsState: state, dueAt: now, personalInterest: domain.PersonalInterestHigh},
 			}
-			plan := planLearningSelection(cards, 0, now)
+			plan := planLearningSelection(cards, 0, now, settings.Defaults())
 			for index, want := range []float64{1.0 / 7, 2.0 / 7, 4.0 / 7} {
 				probability, _ := plan.likelihood(&cards[index])
 				if probability != want {
@@ -111,7 +112,7 @@ func TestPersonalInterestWeightsEveryPoolWithoutChangingPoolShares(t *testing.T)
 			}{
 				{0, "low"}, {0.14, "low"}, {0.15, "normal"}, {0.42, "normal"}, {0.43, "high"}, {0.999, "high"},
 			} {
-				selected, ok := selectLearningCard(cards, 0, now, func() float64 { return test.draw })
+				selected, ok := selectLearningCard(cards, 0, now, func() float64 { return test.draw }, settings.Defaults())
 				if !ok || selected.cardID != test.want {
 					t.Fatalf("draw %g selected %s, want %s", test.draw, selected.cardID, test.want)
 				}
@@ -122,7 +123,7 @@ func TestPersonalInterestWeightsEveryPoolWithoutChangingPoolShares(t *testing.T)
 		{cardID: "new", personalInterest: domain.PersonalInterestHigh},
 		{cardID: "due", fsrsState: 2, dueAt: now, personalInterest: domain.PersonalInterestLow},
 	}
-	plan := planLearningSelection(cards, 0, now)
+	plan := planLearningSelection(cards, 0, now, settings.Defaults())
 	for index, want := range []float64{0.5, 0.5} {
 		probability, _ := plan.likelihood(&cards[index])
 		if probability != want {
@@ -135,14 +136,14 @@ func TestPersonalInterestWeightsEveryPoolWithoutChangingPoolShares(t *testing.T)
 	selected, ok := selectLearningCard(cards, 0, now, func() float64 {
 		t.Fatal("future rotation consumed randomness")
 		return 0
-	})
+	}, settings.Defaults())
 	if !ok || selected.cardID != "due" {
 		t.Fatalf("future selection = %#v, want earlier low-interest card", selected)
 	}
 	cards[0].dueAt = now
 	cards[0].lastPresentationID, cards[0].lastShownAt = 1, now
 	cards[1].dueAt = now
-	selected, ok = selectLearningCard(cards, 1, now, func() float64 { return 0 })
+	selected, ok = selectLearningCard(cards, 1, now, func() float64 { return 0 }, settings.Defaults())
 	if !ok || selected.cardID != "due" {
 		t.Fatalf("cooldown selection = %#v, want low-interest alternative", selected)
 	}
@@ -187,13 +188,13 @@ func TestSelectLearningCardPrioritizesUnseenAndLongNeglectedCards(t *testing.T) 
 		{cardID: "recent", lastPresentationID: 1, lastShownAt: now},
 		{cardID: "neglected", lastPresentationID: 2, lastShownAt: now.Add(-30 * 24 * time.Hour)},
 	}
-	selected, ok := selectLearningCard(cards, 3, now, func() float64 { return 0.2 })
+	selected, ok := selectLearningCard(cards, 3, now, func() float64 { return 0.2 }, settings.Defaults())
 	if !ok || selected.cardID != "neglected" {
 		t.Fatalf("recent versus neglected selected %q, want neglected", selected.cardID)
 	}
 
 	cards[0] = selectionCard{cardID: "unseen"}
-	selected, ok = selectLearningCard(cards, 3, now, func() float64 { return 0.4 })
+	selected, ok = selectLearningCard(cards, 3, now, func() float64 { return 0.4 }, settings.Defaults())
 	if !ok || selected.cardID != "unseen" {
 		t.Fatalf("unseen versus neglected selected %q, want unseen", selected.cardID)
 	}
@@ -212,7 +213,7 @@ func TestSelectLearningCardSmallPoolsLeaveMultipleChoices(t *testing.T) {
 			}
 			var firstChoice string
 			for index, draw := range []float64{0, 0.999999} {
-				selected, ok := selectLearningCard(cards, int64(max(1, size-2)), now, func() float64 { return draw })
+				selected, ok := selectLearningCard(cards, int64(max(1, size-2)), now, func() float64 { return draw }, settings.Defaults())
 				if !ok {
 					t.Fatal("eligible cards were not selectable")
 				}
@@ -246,7 +247,7 @@ func TestSelectLearningCardRelaxesCooldownWhenLatestCardIsNotDue(t *testing.T) {
 		{draw: 0, want: "first"},
 		{draw: 0.999999, want: "second"},
 	} {
-		selected, ok := selectLearningCard(cards, 2, now, func() float64 { return test.draw })
+		selected, ok := selectLearningCard(cards, 2, now, func() float64 { return test.draw }, settings.Defaults())
 		if !ok || selected.cardID != test.want {
 			t.Fatalf("draw %g selected %q, want due alternative %q", test.draw, selected.cardID, test.want)
 		}
@@ -266,7 +267,7 @@ func TestSelectLearningCardKeepsFreshAlternativeAheadOfCooldownRelaxation(t *tes
 				{cardID: "latest", fsrsState: 1, dueAt: now, lastPresentationID: 3, lastShownAt: now},
 			}
 			for _, draw := range []float64{0, 0.999999} {
-				selected, ok := selectLearningCard(cards, 1, now, func() float64 { return draw })
+				selected, ok := selectLearningCard(cards, 1, now, func() float64 { return draw }, settings.Defaults())
 				if !ok || selected.cardID != fresh.cardID {
 					t.Fatalf("draw %g selected %q, want fresh alternative %q", draw, selected.cardID, fresh.cardID)
 				}
@@ -300,7 +301,7 @@ func TestSelectLearningCardAdaptsNewShareToBacklog(t *testing.T) {
 			newSelections := 0
 			for index := range 100 {
 				draw := (float64(index) + 0.5) / 100
-				selected, ok := selectLearningCard(cards, 0, now, func() float64 { return draw })
+				selected, ok := selectLearningCard(cards, 0, now, func() float64 { return draw }, settings.Defaults())
 				if !ok {
 					t.Fatal("eligible cards were not selectable")
 				}
@@ -338,7 +339,7 @@ func TestSelectLearningCardExposureChangesPoolShare(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cards := []selectionCard{test.newCard, test.reviewCard}
-			plan := planLearningSelection(cards, 2, now)
+			plan := planLearningSelection(cards, 2, now, settings.Defaults())
 			newProbability, _ := plan.likelihood(&cards[0])
 			if newProbability != test.wantNew {
 				t.Fatalf("new probability = %g, want %g", newProbability, test.wantNew)
@@ -377,7 +378,7 @@ func TestSelectLearningCardPrioritizesDueLearningStepsAfterCooldown(t *testing.T
 				counts := make(map[int]int)
 				for index := range 100 {
 					draw := (float64(index) + 0.5) / 100
-					selected, ok := selectLearningCard(cards, 1, test.selectAt, func() float64 { return draw })
+					selected, ok := selectLearningCard(cards, 1, test.selectAt, func() float64 { return draw }, settings.Defaults())
 					if !ok {
 						t.Fatal("eligible cards were not selectable")
 					}
@@ -400,12 +401,12 @@ func TestSelectLearningCardLearningUrgencyRespondsToMinuteScaleOverdue(t *testin
 				{cardID: "on-time", fsrsState: state, dueAt: now, scheduledDays: 30},
 				{cardID: "overdue", fsrsState: state, dueAt: now, scheduledDays: 30},
 			}
-			selected, ok := selectLearningCard(cards, 0, now, func() float64 { return 0.45 })
+			selected, ok := selectLearningCard(cards, 0, now, func() float64 { return 0.45 }, settings.Defaults())
 			if !ok || selected.cardID != "on-time" {
 				t.Fatalf("equally due steps selected %q, want on-time", selected.cardID)
 			}
 			cards[1].dueAt = now.Add(-10 * time.Minute)
-			selected, ok = selectLearningCard(cards, 0, now, func() float64 { return 0.45 })
+			selected, ok = selectLearningCard(cards, 0, now, func() float64 { return 0.45 }, settings.Defaults())
 			if !ok || selected.cardID != "overdue" {
 				t.Fatalf("ten-minute overdue step selected %q, want overdue", selected.cardID)
 			}
@@ -444,7 +445,7 @@ func TestSelectLearningCardRecoveryIgnoresUsefulnessAndSoftRecency(t *testing.T)
 					if draw > 0.5 {
 						want = "step-1"
 					}
-					selected, ok := selectLearningCard(cards, 2, now, func() float64 { return draw })
+					selected, ok := selectLearningCard(cards, 2, now, func() float64 { return draw }, settings.Defaults())
 					if !ok || selected.cardID != want {
 						t.Fatalf("draw %g selected %q, want equally weighted %q", draw, selected.cardID, want)
 					}
@@ -467,7 +468,7 @@ func TestSelectLearningCardCooldownExpiresAndSmallPoolsRotate(t *testing.T) {
 		{elapsed: 30*time.Minute - time.Nanosecond, want: "unseen"},
 		{elapsed: 30 * time.Minute, want: "shown"},
 	} {
-		selected, ok := selectLearningCard(cards, 1, now.Add(test.elapsed), func() float64 { return 0 })
+		selected, ok := selectLearningCard(cards, 1, now.Add(test.elapsed), func() float64 { return 0 }, settings.Defaults())
 		if !ok || selected.cardID != test.want {
 			t.Fatalf("after %s selected %q, want %q", test.elapsed, selected.cardID, test.want)
 		}
@@ -477,14 +478,14 @@ func TestSelectLearningCardCooldownExpiresAndSmallPoolsRotate(t *testing.T) {
 	cards[1].lastPresentationID = 2
 	cards[1].lastShownAt = now
 	for index := range 6 {
-		selected, ok := selectLearningCard(cards, int64(max(1, index)), now, func() float64 { return 0.99 })
+		selected, ok := selectLearningCard(cards, int64(max(1, index)), now, func() float64 { return 0.99 }, settings.Defaults())
 		want := index % 2
 		if !ok || selected.cardID != cards[want].cardID {
 			t.Fatalf("small-pool turn %d selected %q, want %q", index, selected.cardID, cards[want].cardID)
 		}
 		cards[want].lastPresentationID = int64(index + 3)
 	}
-	selected, ok := selectLearningCard(cards[:1], 1, now, func() float64 { return 0 })
+	selected, ok := selectLearningCard(cards[:1], 1, now, func() float64 { return 0 }, settings.Defaults())
 	if !ok || selected.cardID != "shown" {
 		t.Fatalf("single active card selected %q, want shown", selected.cardID)
 	}
@@ -498,7 +499,7 @@ func TestSelectLearningCardAppliesCooldownBeforePoolChoice(t *testing.T) {
 			{cardID: "alternative", fsrsState: 2 - recentState, dueAt: now, usefulness: domain.UsefulnessLow},
 		}
 		for _, draw := range []float64{0, 0.99} {
-			selected, ok := selectLearningCard(cards, 1, now, func() float64 { return draw })
+			selected, ok := selectLearningCard(cards, 1, now, func() float64 { return draw }, settings.Defaults())
 			if !ok || selected.cardID != "alternative" {
 				t.Fatalf("recent state %d, draw %g selected %q, want alternative", recentState, draw, selected.cardID)
 			}
@@ -563,7 +564,7 @@ func TestSelectLearningCardFutureFallbackRespectsEligibilityAndCooldown(t *testi
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			selected, ok := selectLearningCard(test.cards, 1, now, func() float64 { return 0.99 })
+			selected, ok := selectLearningCard(test.cards, 1, now, func() float64 { return 0.99 }, settings.Defaults())
 			if !ok || selected.cardID != test.want {
 				t.Fatalf("selected %q, want %q", selected.cardID, test.want)
 			}
@@ -645,7 +646,7 @@ func TestLearningSelectionUsesCurrentPersistedUsefulness(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer transaction.Rollback()
-				cards, recentSinceID, err := loadSelectionCards(ctx, transaction, "owner")
+				cards, recentSinceID, err := loadSelectionCards(ctx, transaction, "owner", settings.Defaults())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -656,7 +657,7 @@ func TestLearningSelectionUsesCurrentPersistedUsefulness(t *testing.T) {
 				}
 				for index := range samples {
 					draw := (float64(index) + 0.5) / float64(samples)
-					selected, ok := selectLearningCard(cards, recentSinceID, now, func() float64 { return draw })
+					selected, ok := selectLearningCard(cards, recentSinceID, now, func() float64 { return draw }, settings.Defaults())
 					if !ok {
 						t.Fatal("persisted vocabulary was not selectable")
 					}

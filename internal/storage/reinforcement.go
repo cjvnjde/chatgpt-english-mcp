@@ -5,17 +5,17 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
-const reinforcementCooldown = 6 * time.Hour
-
 var (
-	ErrReinforcementShortage = errors.New("reinforcement requires at least four distinct learned words outside the six-hour cooldown")
+	ErrReinforcementShortage = errors.New("not enough distinct learned words outside the configured reinforcement cooldown for the configured probability cap")
 	ErrNotLearned            = errors.New("vocabulary item is not learned")
 )
 
@@ -55,23 +55,23 @@ type reinforcementWord struct {
 	lastShownAt time.Time
 }
 
-func reinforcementWeight(sense reinforcementSense, now time.Time) float64 {
+func reinforcementWeight(sense reinforcementSense, now time.Time, values settings.Values) float64 {
 	usefulness, interest := 1.0, 1.0
 	switch sense.usefulness {
 	case domain.UsefulnessLow:
-		usefulness = 0.5
+		usefulness = values.LowUsefulnessWeight
 	case domain.UsefulnessHigh:
-		usefulness = 2
+		usefulness = values.HighUsefulnessWeight
 	}
 	switch sense.interest {
 	case domain.PersonalInterestLow:
-		interest = 0.5
+		interest = values.LowInterestWeight
 	case domain.PersonalInterestHigh:
-		interest = 2
+		interest = values.HighInterestWeight
 	}
 	recency := 1.0
 	if !sense.lastShownAt.IsZero() {
-		recency = 0.25 + 0.75*max(0, min(now.Sub(sense.lastShownAt).Hours()/24, 1))
+		recency = 0.25 + 0.75*max(0, min(now.Sub(sense.lastShownAt).Hours()/values.ExposureRecoveryHours, 1))
 	}
 	// Historical comments add priority only while difficulty remains unresolved.
 	// Good/easy reviews reduce both difficulty and its share of the comment bonus.
@@ -81,8 +81,8 @@ func reinforcementWeight(sense reinforcementSense, now time.Time) float64 {
 
 // Word mass uses its strongest sense, not the sum: adding meanings cannot buy
 // additional word probability. Water filling redistributes capped mass before
-// sampling; clamping and renormalizing would violate the 25 percent ceiling.
-func planReinforcementSelection(senses []reinforcementSense, now time.Time) []reinforcementWord {
+// sampling; clamping and renormalizing would violate the configured ceiling.
+func planReinforcementSelection(senses []reinforcementSense, now time.Time, values settings.Values) []reinforcementWord {
 	words := make([]reinforcementWord, 0)
 	byTerm := make(map[string]int)
 	for index, sense := range senses {
@@ -94,7 +94,7 @@ func planReinforcementSelection(senses []reinforcementSense, now time.Time) []re
 		}
 		word := &words[wordIndex]
 		word.senses = append(word.senses, index)
-		word.weight = max(word.weight, reinforcementWeight(sense, now))
+		word.weight = max(word.weight, reinforcementWeight(sense, now, values))
 		if sense.lastShownAt.After(word.lastShownAt) {
 			word.lastShownAt = sense.lastShownAt
 		}
@@ -104,18 +104,12 @@ func planReinforcementSelection(senses []reinforcementSense, now time.Time) []re
 	}
 	eligible := words[:0]
 	for _, word := range words {
-		if word.lastShownAt.IsZero() || now.Sub(word.lastShownAt) >= reinforcementCooldown {
+		if word.lastShownAt.IsZero() || now.Sub(word.lastShownAt).Hours() >= values.ReinforcementCooldownHours {
 			eligible = append(eligible, word)
 		}
 	}
 	words = eligible
-	if len(words) < 4 {
-		return words
-	}
-	if len(words) == 4 {
-		for index := range words {
-			words[index].probability = 0.25
-		}
+	if len(words) < reinforcementMinimumWords(values) {
 		return words
 	}
 	sort.SliceStable(words, func(i, j int) bool { return words[i].weight > words[j].weight })
@@ -126,21 +120,25 @@ func planReinforcementSelection(senses []reinforcementSense, now time.Time) []re
 	remainingMass := 1.0
 	for index := range words {
 		probability := remainingMass * words[index].weight / remainingWeight
-		if probability >= 0.25 {
-			words[index].probability = 0.25
-			remainingMass -= 0.25
+		if probability >= values.ReinforcementMaxWordShare {
+			words[index].probability = values.ReinforcementMaxWordShare
+			remainingMass -= values.ReinforcementMaxWordShare
 			remainingWeight -= words[index].weight
 			continue
 		}
 		for rest := index; rest < len(words); rest++ {
-			words[rest].probability = min(0.25, remainingMass*words[rest].weight/remainingWeight)
+			words[rest].probability = min(values.ReinforcementMaxWordShare, remainingMass*words[rest].weight/remainingWeight)
 		}
 		break
 	}
 	return words
 }
 
-func selectReinforcementSense(senses []reinforcementSense, words []reinforcementWord, now time.Time, random func() float64) (reinforcementSense, float64) {
+func reinforcementMinimumWords(values settings.Values) int {
+	return max(4, int(math.Ceil(1/values.ReinforcementMaxWordShare)))
+}
+
+func selectReinforcementSense(senses []reinforcementSense, words []reinforcementWord, now time.Time, random func() float64, values settings.Values) (reinforcementSense, float64) {
 	draw := random()
 	word := &words[len(words)-1]
 	for index := range words {
@@ -152,11 +150,11 @@ func selectReinforcementSense(senses []reinforcementSense, words []reinforcement
 	}
 	total := 0.0
 	for _, index := range word.senses {
-		total += reinforcementWeight(senses[index], now)
+		total += reinforcementWeight(senses[index], now, values)
 	}
 	draw = random() * total
 	for _, index := range word.senses {
-		draw -= reinforcementWeight(senses[index], now)
+		draw -= reinforcementWeight(senses[index], now, values)
 		if draw < 0 {
 			return senses[index], word.probability
 		}
@@ -170,6 +168,10 @@ func (db *DB) NextReinforcementItem(ctx context.Context, ownerKey string, clock 
 		return ReinforcementCandidate{}, fmt.Errorf("begin reinforcement presentation: %w", err)
 	}
 	defer transaction.Rollback()
+	snapshot, err := algorithmSettings(ctx, transaction, ownerKey)
+	if err != nil {
+		return ReinforcementCandidate{}, err
+	}
 	now := clock().UTC()
 	senses, err := loadReinforcementSenses(ctx, transaction, ownerKey)
 	if err != nil {
@@ -178,11 +180,11 @@ func (db *DB) NextReinforcementItem(ctx context.Context, ownerKey string, clock 
 	if len(senses) == 0 {
 		return ReinforcementCandidate{}, ErrNotFound
 	}
-	words := planReinforcementSelection(senses, now)
-	if len(words) < 4 {
+	words := planReinforcementSelection(senses, now, snapshot.Values)
+	if len(words) < reinforcementMinimumWords(snapshot.Values) {
 		return ReinforcementCandidate{}, ErrReinforcementShortage
 	}
-	selected, probability := selectReinforcementSense(senses, words, now, rand.Float64)
+	selected, probability := selectReinforcementSense(senses, words, now, rand.Float64, snapshot.Values)
 	item, err := scanVocabularyItem(transaction.QueryRowContext(ctx,
 		vocabularySelect+" WHERE v.owner_key = ? AND v.id = ?", ownerKey, selected.itemID))
 	if err != nil {

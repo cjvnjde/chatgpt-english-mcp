@@ -171,7 +171,6 @@ await page.route("**/admin/api/**", async (route) => {
             { label: "good", count: 20 },
             { label: "again", count: 4 },
           ],
-      effectiveRatings: [],
       activity: emptyAnalytics
         ? []
         : [

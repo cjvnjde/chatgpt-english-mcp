@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
 func TestReinforcementDistributionCapsWordsAndDoesNotRewardExtraSenses(t *testing.T) {
@@ -26,7 +27,7 @@ func TestReinforcementDistributionCapsWordsAndDoesNotRewardExtraSenses(t *testin
 	probabilities := func(senses []reinforcementSense) map[string]float64 {
 		result := make(map[string]float64)
 		total := 0.0
-		for _, word := range planReinforcementSelection(senses, now) {
+		for _, word := range planReinforcementSelection(senses, now, settings.Defaults()) {
 			if word.probability <= 0 || word.probability > 0.25 {
 				t.Fatalf("word probability outside (0,.25]: %g", word.probability)
 			}
@@ -46,7 +47,7 @@ func TestReinforcementDistributionCapsWordsAndDoesNotRewardExtraSenses(t *testin
 	if after := probabilities(senses); !reflect.DeepEqual(before, after) {
 		t.Fatalf("extra meaning changed word distribution: before=%v after=%v", before, after)
 	}
-	words := planReinforcementSelection(senses, now)
+	words := planReinforcementSelection(senses, now, settings.Defaults())
 	for _, test := range []struct {
 		senseDraw float64
 		itemID    string
@@ -58,7 +59,7 @@ func TestReinforcementDistributionCapsWordsAndDoesNotRewardExtraSenses(t *testin
 			draw := draws[0]
 			draws = draws[1:]
 			return draw
-		})
+		}, settings.Defaults())
 		if selected.itemID != test.itemID || probability != 0.25 {
 			t.Fatalf("sense draw %g selected %s with word probability %g", test.senseDraw, selected.itemID, probability)
 		}
@@ -102,7 +103,7 @@ func TestReinforcementProbabilityUsesInterestUsefulnessFeedbackAndRecency(t *tes
 			senses[0] = test.sense
 			senses[0].normalizedTerm = "target"
 			var target, reference float64
-			for _, word := range planReinforcementSelection(senses, now) {
+			for _, word := range planReinforcementSelection(senses, now, settings.Defaults()) {
 				switch word.senses[0] {
 				case 0:
 					target = word.probability
@@ -463,7 +464,7 @@ func TestReinforcementCombinesCommentEvidenceAndRetainsItAfterReopen(t *testing.
 		t.Fatal(err)
 	}
 	_, _, err = store.RecordReview(ctx, RecordReviewInput{OwnerKey: "owner", ReviewToken: normal.Card.ReviewToken,
-		Rating: domain.ReviewRatingHard, Comment: "Ordinary evidence", Now: clockAt(now)}, func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
+		Rating: domain.ReviewRatingHard, Comment: "Ordinary evidence", Now: clockAt(now)}, func(card LearningCard, now time.Time, rating domain.ReviewRating, values settings.Values) (LearningCard, float64, error) {
 		card.LastRating = rating
 		card.LastReviewAt = now
 		return card, 0, nil

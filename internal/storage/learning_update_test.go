@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
 func TestUpdateLatestReviewUsesOwnerInsertionOrderBeforeDuplicateCheck(t *testing.T) {
@@ -114,7 +115,7 @@ func TestReviewCorrectionMigrationRestoresOnlyKnownPreviousReviewTimes(t *testin
 				t.Fatal(err)
 			}
 			if missing {
-				before, _, err = coreStorageReviewSchedule(before, now, domain.ReviewRatingGood)
+				before, _, err = coreStorageReviewSchedule(before, now, domain.ReviewRatingGood, settings.Defaults())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -138,14 +139,14 @@ func TestReviewCorrectionMigrationRestoresOnlyKnownPreviousReviewTimes(t *testin
 			t.Cleanup(func() { _ = store.Close() })
 			corrected, _, err := store.UpdateLatestReview(ctx, UpdateReviewInput{
 				OwnerKey: "owner", ReviewToken: last.ReviewToken, Rating: domain.ReviewRatingAgain, Now: clockAt(reviewedAt.Add(time.Hour)),
-			}, func(card LearningCard, at time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
+			}, func(card LearningCard, at time.Time, rating domain.ReviewRating, values settings.Values) (LearningCard, float64, error) {
 				if missing {
 					t.Fatal("scheduler called without a restorable pre-review clock")
 				}
 				if !card.LastReviewAt.Equal(now) || card.Repetitions != before.Repetitions || !at.Equal(reviewedAt) {
 					t.Fatalf("incorrectly restored pre-review state: %#v at %v", card, at)
 				}
-				return coreStorageReviewSchedule(card, at, rating)
+				return coreStorageReviewSchedule(card, at, rating, settings.Defaults())
 			})
 			if missing {
 				if !errors.Is(err, ErrCorruptData) {

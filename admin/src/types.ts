@@ -81,7 +81,6 @@ export type AnalyticsData = {
   owner: string;
   statuses: { label: string; count: number }[];
   ratings: { label: string; count: number }[];
-  effectiveRatings: { label: string; count: number }[];
   activity: { day: string; reviews: number; recalled: number }[];
   due: { count: number }[];
   comments: { count: number }[];

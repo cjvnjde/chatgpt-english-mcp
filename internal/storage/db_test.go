@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
 func TestOpenConfiguresAndMigratesPersistentSQLite(t *testing.T) {
@@ -230,7 +231,7 @@ func TestSpacedRepetitionMigrationInitializesActiveVocabularyAndImmutableHistory
 	attempt, duplicate, err := store.RecordReview(ctx, RecordReviewInput{OwnerKey: "owner",
 		ReviewToken: reviewToken,
 		Rating:      domain.ReviewRatingGood,
-		Comment:     "Needed a context clue.", Now: clockAt(reviewedAt)}, func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
+		Comment:     "Needed a context clue.", Now: clockAt(reviewedAt)}, func(card LearningCard, now time.Time, rating domain.ReviewRating, values settings.Values) (LearningCard, float64, error) {
 		card.DueAt = now.Add(24 * time.Hour)
 		card.Stability = 1
 		card.Difficulty = 5

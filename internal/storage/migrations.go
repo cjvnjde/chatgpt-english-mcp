@@ -95,6 +95,11 @@ func (db *DB) migrate(ctx context.Context) error {
 				return fmt.Errorf("apply migration %03d: %w", item.version, err)
 			}
 		}
+		if item.version == 20 {
+			if err := migrateSingleReviewRating(ctx, transaction); err != nil {
+				return fmt.Errorf("apply migration %03d: %w", item.version, err)
+			}
+		}
 		if _, err := transaction.ExecContext(
 			ctx,
 			"INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",

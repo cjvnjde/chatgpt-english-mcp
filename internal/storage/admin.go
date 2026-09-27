@@ -271,7 +271,6 @@ func (db *DB) AdminAnalytics(ctx context.Context, owner string) (map[string]any,
 	}{
 		{"statuses", `SELECT learning_status AS label, COUNT(*) AS count FROM vocabulary_items WHERE owner_key = ? GROUP BY learning_status`, []any{owner}},
 		{"ratings", `SELECT rating AS label, COUNT(*) AS count FROM review_attempts WHERE owner_key = ? GROUP BY rating`, []any{owner}},
-		{"effectiveRatings", `SELECT COALESCE(effective_rating, rating) AS label, COUNT(*) AS count FROM review_attempts WHERE owner_key = ? GROUP BY COALESCE(effective_rating, rating)`, []any{owner}},
 		{"activity", `SELECT substr(reviewed_at, 1, 10) AS day, COUNT(*) AS reviews, SUM(CASE WHEN rating IN ('good', 'easy') THEN 1 ELSE 0 END) AS recalled FROM review_attempts WHERE owner_key = ? AND substr(reviewed_at, 1, 10) >= ? AND substr(reviewed_at, 1, 10) <= ? GROUP BY day ORDER BY day`, []any{owner, now.AddDate(0, 0, -29).Format("2006-01-02"), now.Format("2006-01-02")}},
 		{"due", `SELECT COUNT(*) AS count FROM learning_cards c JOIN vocabulary_items v ON v.id = c.vocabulary_item_id WHERE v.owner_key = ? AND v.learning_status <> 'archived' AND rtrim(c.due_at, 'Z') <= ?`, []any{owner, strings.TrimSuffix(TimeString(now), "Z")}},
 		{"comments", `SELECT COUNT(*) AS count FROM review_attempts WHERE owner_key = ? AND trim(comment) <> ''`, []any{owner}},

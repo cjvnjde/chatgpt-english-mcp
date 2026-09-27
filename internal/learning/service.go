@@ -10,6 +10,7 @@ import (
 
 	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 	"english-learning-mcp/internal/storage"
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
 )
@@ -37,10 +38,9 @@ type Store interface {
 }
 
 type Service struct {
-	store     Store
-	ownerKey  string
-	scheduler *fsrs.FSRS
-	now       func() time.Time
+	store    Store
+	ownerKey string
+	now      func() time.Time
 }
 
 type ReviewFeedback struct {
@@ -87,21 +87,20 @@ type UpdateOptions struct {
 }
 
 type RecordResult struct {
-	Recorded        bool                  `json:"recorded"`
-	Duplicate       bool                  `json:"duplicate"`
-	Status          domain.LearningStatus `json:"status"`
-	MasteryStreak   uint64                `json:"masteryStreak"`
-	NextReviewAt    string                `json:"nextReviewAt"`
-	Troublesome     bool                  `json:"troublesome"`
-	EffectiveRating domain.ReviewRating   `json:"effectiveRating"`
+	Recorded      bool                  `json:"recorded"`
+	Duplicate     bool                  `json:"duplicate"`
+	Status        domain.LearningStatus `json:"status"`
+	MasteryStreak uint64                `json:"masteryStreak"`
+	NextReviewAt  string                `json:"nextReviewAt"`
+	Troublesome   bool                  `json:"troublesome"`
+	Rating        domain.ReviewRating   `json:"rating"`
 }
 
 func NewService(store Store, ownerKey string) *Service {
 	return &Service{
-		store:     store,
-		ownerKey:  ownerKey,
-		scheduler: fsrs.NewFSRS(fsrs.DefaultParam()),
-		now:       time.Now,
+		store:    store,
+		ownerKey: ownerKey,
+		now:      time.Now,
 	}
 }
 
@@ -143,8 +142,8 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 		Examples:          candidate.Vocabulary.Examples,
 		Tags:              candidate.Vocabulary.Tags,
 		Sense:             candidate.Vocabulary.Sense,
-		Reason:            selectionReason(candidate.Card, candidate.ShownAt),
-		Troublesome:       isTroublesome(candidate.Card),
+		Reason:            selectionReason(candidate.Card, candidate.ShownAt, candidate.Settings),
+		Troublesome:       isTroublesome(candidate.Card, candidate.Settings),
 	}
 	if len(comments) > 0 {
 		latest := reviewFeedback(comments[0])
@@ -185,13 +184,13 @@ func (service *Service) Record(ctx context.Context, options RecordOptions) (Reco
 		return RecordResult{}, apperr.Wrap(apperr.InternalError, "failed to record the review", err)
 	}
 	return RecordResult{
-		Recorded:        true,
-		Duplicate:       duplicate,
-		Status:          attempt.StatusAfter,
-		MasteryStreak:   attempt.After.MasteryStreak,
-		NextReviewAt:    storage.TimeString(attempt.After.DueAt),
-		Troublesome:     isTroublesome(attempt.After),
-		EffectiveRating: attempt.After.LastRating,
+		Recorded:      true,
+		Duplicate:     duplicate,
+		Status:        attempt.StatusAfter,
+		MasteryStreak: attempt.After.MasteryStreak,
+		NextReviewAt:  storage.TimeString(attempt.After.DueAt),
+		Troublesome:   isTroublesome(attempt.After, attempt.Settings),
+		Rating:        attempt.Rating,
 	}, nil
 }
 
@@ -234,13 +233,13 @@ func (service *Service) UpdateLatest(ctx context.Context, options UpdateOptions)
 		return RecordResult{}, apperr.Wrap(apperr.InternalError, "failed to update the review", err)
 	}
 	return RecordResult{
-		Recorded:        true,
-		Duplicate:       duplicate,
-		Status:          attempt.StatusAfter,
-		MasteryStreak:   attempt.After.MasteryStreak,
-		NextReviewAt:    storage.TimeString(attempt.After.DueAt),
-		Troublesome:     isTroublesome(attempt.After),
-		EffectiveRating: attempt.After.LastRating,
+		Recorded:      true,
+		Duplicate:     duplicate,
+		Status:        attempt.StatusAfter,
+		MasteryStreak: attempt.After.MasteryStreak,
+		NextReviewAt:  storage.TimeString(attempt.After.DueAt),
+		Troublesome:   isTroublesome(attempt.After, attempt.Settings),
+		Rating:        attempt.Rating,
 	}, nil
 }
 
@@ -264,20 +263,29 @@ func (service *Service) schedule(
 	card storage.LearningCard,
 	now time.Time,
 	rating domain.ReviewRating,
+	values settings.Values,
 ) (storage.LearningCard, float64, error) {
 	fsrsCard, err := toFSRSCard(card)
 	if err != nil {
 		return storage.LearningCard{}, 0, err
 	}
-	previousRetrievability, err := service.scheduler.Retrievability(fsrsCard, now)
+	scheduler := fsrs.NewFSRS(fsrs.Parameters{
+		RequestRetention: values.RequestedRetention,
+		MaximumInterval:  float64(values.MaximumIntervalDays),
+		W:                fsrs.DefaultWeights(),
+		EnableShortTerm:  true,
+		LearningSteps:    values.LearningStepsMinutes,
+		RelearningSteps:  values.RelearningStepsMinutes,
+	})
+	previousRetrievability, err := scheduler.Retrievability(fsrsCard, now)
 	if err != nil {
 		return storage.LearningCard{}, 0, fmt.Errorf("calculate FSRS retrievability: %w", err)
 	}
-	result, err := service.scheduler.Next(fsrsCard, now, toFSRSRating(rating))
+	result, err := scheduler.Next(fsrsCard, now, toFSRSRating(rating))
 	if err != nil {
 		return storage.LearningCard{}, 0, fmt.Errorf("schedule FSRS review: %w", err)
 	}
-	afterRetrievability, err := service.scheduler.Retrievability(result.Card, now)
+	afterRetrievability, err := scheduler.Retrievability(result.Card, now)
 	if err != nil {
 		return storage.LearningCard{}, 0, fmt.Errorf("calculate next FSRS retrievability: %w", err)
 	}
@@ -425,14 +433,14 @@ func reviewFeedback(comment storage.ReviewComment) ReviewFeedback {
 	}
 }
 
-func selectionReason(card storage.LearningCard, now time.Time) string {
+func selectionReason(card storage.LearningCard, now time.Time, values settings.Values) string {
 	if card.FSRSState == int(fsrs.New) {
 		return "new"
 	}
 	if card.DueAt.After(now) {
 		return "early"
 	}
-	if isTroublesome(card) {
+	if isTroublesome(card, values) {
 		return "troublesome"
 	}
 	if card.ConsecutiveFailures > 0 {
@@ -444,8 +452,8 @@ func selectionReason(card storage.LearningCard, now time.Time) string {
 	return "due"
 }
 
-func isTroublesome(card storage.LearningCard) bool {
-	return card.ConsecutiveFailures >= 2 || card.Lapses >= 3
+func isTroublesome(card storage.LearningCard, values settings.Values) bool {
+	return card.ConsecutiveFailures >= uint64(values.TroublesomeConsecutiveFailures) || card.Lapses >= uint64(values.TroublesomeLapses)
 }
 
 func toFSRSCard(card storage.LearningCard) (fsrs.Card, error) {

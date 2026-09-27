@@ -154,7 +154,7 @@ export default function Analytics(props: {
           <div>
             <span>Good / easy</span>
             <strong>{recall()}</strong>
-            <small>Share of submitted ratings</small>
+            <small>Share of review ratings</small>
           </div>
         </div>
         <Show when={!props.overview}>
@@ -193,10 +193,10 @@ export default function Analytics(props: {
               </dl>
             </section>
             <section class="panel chart-panel">
-              <h2>Submitted ratings</h2>
+              <h2>Review ratings</h2>
               <dl
                 class="analytics-breakdown"
-                aria-label="Submitted rating distribution"
+                aria-label="Review rating distribution"
               >
                 <For each={["again", "hard", "good", "easy"]}>
                   {(rating) => {
@@ -216,7 +216,7 @@ export default function Analytics(props: {
                             {reviews()
                               ? Math.round((count() / reviews()) * 100)
                               : 0}
-                            % of submitted
+                            % of reviews
                           </small>
                         </dd>
                       </div>
@@ -224,21 +224,10 @@ export default function Analytics(props: {
                   }}
                 </For>
               </dl>
-              <details>
-                <summary>Effective scheduling ratings</summary>
-                <p class="muted">
-                  New reviews use the submitted rating unchanged. Historical
-                  reviews may retain a different effective rating from an older
-                  policy.
-                </p>
-                <For each={safe()!.effectiveRatings}>
-                  {(r) => (
-                    <p>
-                      {r.label}: {r.count}
-                    </p>
-                  )}
-                </For>
-              </details>
+              <p class="muted">
+                Final grades used for scheduling, including any fast-answer
+                Good-to-Easy promotion.
+              </p>
             </section>
           </div>
         </Show>

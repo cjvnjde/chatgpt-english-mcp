@@ -13,7 +13,6 @@ export const labels: Record<string, string> = {
   notes_json: "Notes",
   examples_json: "Examples",
   learning_status: "Status",
-  effective_rating: "Effective rating",
 };
 export function label(value: string) {
   return (

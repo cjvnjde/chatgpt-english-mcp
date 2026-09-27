@@ -20,6 +20,7 @@ import (
 	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/domain"
 	"english-learning-mcp/internal/mcpserver"
+	"english-learning-mcp/internal/settings"
 	"english-learning-mcp/internal/storage"
 	"english-learning-mcp/internal/vocabulary"
 )
@@ -33,6 +34,11 @@ type vocabularyResponse struct {
 
 func adminVocabulary(item domain.VocabularyItem) vocabularyResponse {
 	return vocabularyResponse{VocabularyItem: item, Revision: item.EditRevision}
+}
+
+type settingsResponse struct {
+	storage.AlgorithmSettings
+	Defaults settings.Values `json:"defaults"`
 }
 
 // NewHandler is mounted only on the external listener. An empty token disables it.
@@ -88,6 +94,27 @@ func NewHandler(store *storage.DB, service *vocabulary.Service, owner, token str
 	}
 	handle("GET /admin/api/session", func(w http.ResponseWriter, r *http.Request) (any, error) {
 		return map[string]any{"owner": owner, "version": 1}, nil
+	})
+	handle("GET /admin/api/settings", func(w http.ResponseWriter, r *http.Request) (any, error) {
+		snapshot, err := store.AlgorithmSettings(r.Context(), owner)
+		return settingsResponse{AlgorithmSettings: snapshot, Defaults: settings.Defaults()}, err
+	})
+	handle("PUT /admin/api/settings", func(w http.ResponseWriter, r *http.Request) (any, error) {
+		var request struct {
+			Values           *settings.Values `json:"values"`
+			ExpectedRevision *int64           `json:"expectedRevision"`
+		}
+		if err := decode(w, r, &request); err != nil {
+			return nil, err
+		}
+		if request.ExpectedRevision == nil {
+			return nil, apperr.New(apperr.PreconditionRequired, "expectedRevision is required")
+		}
+		if request.Values == nil {
+			return nil, apperr.New(apperr.InvalidArgument, "values is required")
+		}
+		snapshot, err := store.UpdateAlgorithmSettings(r.Context(), owner, *request.Values, *request.ExpectedRevision)
+		return settingsResponse{AlgorithmSettings: snapshot, Defaults: settings.Defaults()}, err
 	})
 	handle("GET /admin/api/tables", func(w http.ResponseWriter, r *http.Request) (any, error) { return store.AdminTables(r.Context()) })
 	handle("GET /admin/api/tables/{table}", func(w http.ResponseWriter, r *http.Request) (any, error) {

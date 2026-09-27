@@ -20,6 +20,7 @@ import Inspector from "./components/Inspector";
 import RecordTable from "./components/RecordTable";
 import Suggestions from "./components/Suggestions";
 import VocabularyEditor from "./components/VocabularyEditor";
+import Settings from "./components/Settings";
 import type { LeaveGuard } from "./vocabularyDraft";
 
 type Route = { view: string; column?: string; value?: string };
@@ -180,8 +181,10 @@ function Workspace(props: {
   const [route, setRoute] = createSignal(readRoute());
   const [mobileMenu, setMobileMenu] = createSignal(false);
   let editorGuard: LeaveGuard | undefined;
+  let settingsGuard: LeaveGuard | undefined;
   const requestLeave: LeaveGuard = (leave, cancel) => {
     if (editorGuard) return editorGuard(leave, cancel);
+    if (settingsGuard) return settingsGuard(leave, cancel);
     leave();
   };
   const navigation = createHashNavigation(window, requestLeave, () => {
@@ -278,6 +281,7 @@ function Workspace(props: {
     { name: "Comments", view: "comments", icon: "“" },
     { name: "Presentations", view: "learning_presentations", icon: "▤" },
     { name: "Analytics", view: "analytics", icon: "▥" },
+    { name: "Settings", view: "settings", icon: "⚙" },
   ];
   return (
     <div class="app-shell">
@@ -463,6 +467,9 @@ function Workspace(props: {
                 </Show>
               }
             >
+              <Match when={route().view === "settings"}>
+                <Settings api={props.api} registerGuard={(guard) => { settingsGuard = guard; }} />
+              </Match>
               <Match when={route().view === "suggestions"}>
                 <Suggestions
                   api={props.api}

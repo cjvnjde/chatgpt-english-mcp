@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
 const productionExerciseMode = domain.ExerciseModeProduction
@@ -43,6 +45,7 @@ type LearningCandidate struct {
 	Card           LearningCard
 	PresentationID int64
 	ShownAt        time.Time
+	Settings       settings.Values
 }
 
 // ReviewComment describes feedback saved with an accepted review attempt.
@@ -68,6 +71,8 @@ type ReviewAttempt struct {
 	StatusAfter            domain.LearningStatus
 	statusBefore           domain.LearningStatus
 	reinforcementCount     int
+	requestHash            string
+	Settings               settings.Values
 }
 
 type RecordReviewInput struct {
@@ -86,8 +91,8 @@ type UpdateReviewInput struct {
 	Now         func() time.Time
 }
 
-// ScheduleReview applies the submitted grade at the transaction's review time.
-type ScheduleReview func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error)
+// ScheduleReview applies the final grade using the transaction's settings snapshot.
+type ScheduleReview func(card LearningCard, now time.Time, rating domain.ReviewRating, values settings.Values) (LearningCard, float64, error)
 
 func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, clock func() time.Time) (LearningCandidate, error) {
 	transaction, err := db.sql.BeginTx(ctx, nil)
@@ -96,12 +101,16 @@ func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, clock func(
 	}
 	defer transaction.Rollback()
 
-	shownAt := clock().UTC()
-	cards, recentSinceID, err := loadSelectionCards(ctx, transaction, ownerKey)
+	configuration, err := algorithmSettings(ctx, transaction, ownerKey)
 	if err != nil {
 		return LearningCandidate{}, err
 	}
-	selected, ok := selectLearningCard(cards, recentSinceID, shownAt, rand.Float64)
+	shownAt := clock().UTC()
+	cards, recentSinceID, err := loadSelectionCards(ctx, transaction, ownerKey, configuration.Values)
+	if err != nil {
+		return LearningCandidate{}, err
+	}
+	selected, ok := selectLearningCard(cards, recentSinceID, shownAt, rand.Float64, configuration.Values)
 	if !ok {
 		return LearningCandidate{}, ErrNotFound
 	}
@@ -146,6 +155,7 @@ func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, clock func(
 
 	return LearningCandidate{
 		Vocabulary: item, Card: card, PresentationID: presentationID, ShownAt: shownAt,
+		Settings: configuration.Values,
 	}, nil
 }
 
@@ -199,11 +209,17 @@ func (db *DB) RecordReview(
 	}
 	defer transaction.Rollback()
 
+	configuration, err := algorithmSettings(ctx, transaction, input.OwnerKey)
+	if err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	requestHash := reviewRequestHash(input.Rating, input.Comment)
 	existing, err := reviewAttemptByToken(ctx, transaction, input.OwnerKey, input.ReviewToken)
 	if err == nil {
-		if existing.Rating != input.Rating || existing.Comment != input.Comment {
+		if existing.requestHash != requestHash {
 			return ReviewAttempt{}, false, ErrIdempotencyConflict
 		}
+		existing.Settings = configuration.Values
 		return existing, true, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -222,11 +238,15 @@ func (db *DB) RecordReview(
 	}
 
 	now := input.Now().UTC()
-	next, previousRetrievability, err := schedule(card, now, input.Rating)
+	rating, err := timedReviewRating(ctx, transaction, input, card.CardID, now, configuration.Values.FastAnswerSeconds)
 	if err != nil {
 		return ReviewAttempt{}, false, err
 	}
-	applyMasteryReview(&next, card, now, input.Rating)
+	next, previousRetrievability, err := schedule(card, now, rating, configuration.Values)
+	if err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	applyMasteryReview(&next, card, now, rating)
 	reinforcementCount, err := reinforcementReviewCount(ctx, transaction, card.VocabularyItemID)
 	if err != nil {
 		return ReviewAttempt{}, false, err
@@ -249,15 +269,17 @@ func (db *DB) RecordReview(
 		VocabularyItemID:       card.VocabularyItemID,
 		LearningCardID:         card.CardID,
 		ExerciseMode:           card.ExerciseMode,
-		Rating:                 input.Rating,
+		Rating:                 rating,
 		Comment:                input.Comment,
 		ReviewedAt:             now,
 		PreviousDueAt:          card.DueAt,
 		PreviousRetrievability: previousRetrievability,
 		After:                  next,
-		StatusAfter:            reviewStatusAfter(status, next, input.Rating),
+		StatusAfter:            reviewStatusAfter(status, next, rating, configuration.Values),
 		statusBefore:           status,
 		reinforcementCount:     reinforcementCount,
+		requestHash:            requestHash,
+		Settings:               configuration.Values,
 	}
 	if err := insertReviewAttempt(ctx, transaction, input.OwnerKey, attempt, card); err != nil {
 		return ReviewAttempt{}, false, err
@@ -287,6 +309,10 @@ func (db *DB) UpdateLatestReview(
 		return ReviewAttempt{}, false, fmt.Errorf("begin review correction transaction: %w", err)
 	}
 	defer transaction.Rollback()
+	configuration, err := algorithmSettings(ctx, transaction, input.OwnerKey)
+	if err != nil {
+		return ReviewAttempt{}, false, err
+	}
 
 	attempt, err := reviewAttemptByToken(ctx, transaction, input.OwnerKey, input.ReviewToken)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -327,6 +353,7 @@ func (db *DB) UpdateLatestReview(
 		comment = *input.Comment
 	}
 	attempt.After.ReviewToken = current.ReviewToken
+	attempt.Settings = configuration.Values
 	if attempt.Rating == input.Rating && attempt.Comment == comment {
 		return attempt, true, nil
 	}
@@ -342,7 +369,7 @@ func (db *DB) UpdateLatestReview(
 	if err != nil {
 		return ReviewAttempt{}, false, err
 	}
-	next, _, err := schedule(before, attempt.ReviewedAt, input.Rating)
+	next, _, err := schedule(before, attempt.ReviewedAt, input.Rating, configuration.Values)
 	if err != nil {
 		return ReviewAttempt{}, false, err
 	}
@@ -352,7 +379,7 @@ func (db *DB) UpdateLatestReview(
 		next.MasteryStreak, next.LastMasteryAt = 0, time.Time{}
 		attempt.StatusAfter = status
 	} else {
-		attempt.StatusAfter = reviewStatusAfter(attempt.statusBefore, next, input.Rating)
+		attempt.StatusAfter = reviewStatusAfter(attempt.statusBefore, next, input.Rating, configuration.Values)
 	}
 	next.CardID = current.CardID
 	next.VocabularyItemID = current.VocabularyItemID
@@ -360,6 +387,7 @@ func (db *DB) UpdateLatestReview(
 	next.ReviewToken = current.ReviewToken
 	attempt.Rating = input.Rating
 	attempt.Comment = comment
+	attempt.requestHash = reviewRequestHash(input.Rating, comment)
 	attempt.After = next
 	if err := updateReviewAttempt(ctx, transaction, attempt); err != nil {
 		return ReviewAttempt{}, false, err
@@ -390,7 +418,7 @@ func reviewCardBefore(ctx context.Context, transaction *sql.Tx, ownerKey string,
 			repetitions_before, lapses_before, fsrs_state_before,
 			remaining_steps_before, consecutive_failures_before, last_review_at_before,
 			mastery_streak_before, last_mastery_at_before,
-			COALESCE((SELECT COALESCE(previous.effective_rating, previous.rating)
+			COALESCE((SELECT previous.rating
 				FROM review_attempts previous
 				WHERE previous.owner_key = review.owner_key
 					AND previous.learning_card_id = review.learning_card_id
@@ -426,13 +454,13 @@ func reviewCardBefore(ctx context.Context, transaction *sql.Tx, ownerKey string,
 
 func updateReviewAttempt(ctx context.Context, transaction *sql.Tx, attempt ReviewAttempt) error {
 	_, err := transaction.ExecContext(ctx, `
-		UPDATE review_attempts SET rating = ?, effective_rating = ?, comment = ?,
+		UPDATE review_attempts SET rating = ?, request_hash = ?, comment = ?,
 			due_after = ?, stability_after = ?, difficulty_after = ?, retrievability_after = ?,
 			scheduled_days_after = ?, repetitions_after = ?, lapses_after = ?, fsrs_state_after = ?,
 			remaining_steps_after = ?, consecutive_failures_after = ?, status_after = ?,
 			mastery_streak_after = ?, last_mastery_at_after = ?
 		WHERE id = ?
-	`, attempt.Rating, attempt.After.LastRating, attempt.Comment,
+	`, attempt.Rating, attempt.requestHash, attempt.Comment,
 		TimeString(attempt.After.DueAt), attempt.After.Stability, attempt.After.Difficulty, attempt.After.Retrievability,
 		attempt.After.ScheduledDays, attempt.After.Repetitions, attempt.After.Lapses, attempt.After.FSRSState,
 		attempt.After.RemainingSteps, attempt.After.ConsecutiveFailures, attempt.StatusAfter,
@@ -560,7 +588,7 @@ func reviewAttemptByToken(
 			learning_card_id,
 			exercise_mode,
 			rating,
-			COALESCE(effective_rating, rating),
+			request_hash,
 			comment,
 			reviewed_at,
 			due_before,
@@ -593,7 +621,7 @@ func reviewAttemptByToken(
 		&attempt.LearningCardID,
 		&attempt.ExerciseMode,
 		&attempt.Rating,
-		&attempt.After.LastRating,
+		&attempt.requestHash,
 		&attempt.Comment,
 		&reviewedAt,
 		&previousDueAt,
@@ -638,6 +666,7 @@ func reviewAttemptByToken(
 	attempt.After.VocabularyItemID = attempt.VocabularyItemID
 	attempt.After.ExerciseMode = attempt.ExerciseMode
 	attempt.After.LastReviewAt = attempt.ReviewedAt
+	attempt.After.LastRating = attempt.Rating
 
 	return attempt, nil
 }
@@ -656,7 +685,7 @@ func insertReviewAttempt(
 	_, err := transaction.ExecContext(ctx, `
 		INSERT INTO review_attempts(
 			id, owner_key, submission_id, vocabulary_item_id, learning_card_id,
-			exercise_mode, rating, effective_rating, comment, reviewed_at,
+			exercise_mode, rating, request_hash, comment, reviewed_at,
 			due_before, stability_before, difficulty_before, retrievability_before,
 			scheduled_days_before, repetitions_before, lapses_before, fsrs_state_before,
 			remaining_steps_before, consecutive_failures_before, last_review_at_before,
@@ -674,7 +703,7 @@ func insertReviewAttempt(
 		attempt.LearningCardID,
 		attempt.ExerciseMode,
 		attempt.Rating,
-		attempt.After.LastRating,
+		attempt.requestHash,
 		attempt.Comment,
 		TimeString(attempt.ReviewedAt),
 		TimeString(before.DueAt),
@@ -783,7 +812,7 @@ func applyMasteryReview(next *LearningCard, before LearningCard, now time.Time, 
 	}
 }
 
-func reviewStatusAfter(before domain.LearningStatus, next LearningCard, rating domain.ReviewRating) domain.LearningStatus {
+func reviewStatusAfter(before domain.LearningStatus, next LearningCard, rating domain.ReviewRating, values settings.Values) domain.LearningStatus {
 	if before == domain.LearningStatusArchived {
 		return before
 	}
@@ -794,7 +823,7 @@ func reviewStatusAfter(before domain.LearningStatus, next LearningCard, rating d
 		return before
 	}
 	if (rating == domain.ReviewRatingGood || rating == domain.ReviewRatingEasy) &&
-		next.MasteryStreak >= 5 && next.FSRSState == 2 && next.ScheduledDays >= 21 {
+		next.MasteryStreak >= uint64(values.MasteryDays) && next.FSRSState == 2 && next.ScheduledDays >= uint64(values.MasteryIntervalDays) {
 		return domain.LearningStatusLearned
 	}
 	return domain.LearningStatusLearning
@@ -827,4 +856,36 @@ func nullableReviewTime(at time.Time) any {
 		return nil
 	}
 	return TimeString(at)
+}
+
+// The fingerprint preserves exact request replay without storing a second grade.
+func reviewRequestHash(rating domain.ReviewRating, comment string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(string(rating)+"\x00"+comment)))
+}
+
+func timedReviewRating(ctx context.Context, tx *sql.Tx, input RecordReviewInput, cardID string, now time.Time, seconds int) (domain.ReviewRating, error) {
+	if input.Rating != domain.ReviewRatingGood || seconds == 0 {
+		return input.Rating, nil
+	}
+	var shownAt string
+	err := tx.QueryRowContext(ctx, `
+		SELECT shown_at FROM learning_presentations
+		WHERE owner_key = ? AND review_token = ? AND learning_card_id = ?
+		ORDER BY id LIMIT 1
+	`, input.OwnerKey, input.ReviewToken, cardID).Scan(&shownAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return input.Rating, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read first review presentation: %w", err)
+	}
+	shown, err := parseStoredTime(shownAt, "first review presentation")
+	if err != nil {
+		return "", err
+	}
+	elapsed := now.Sub(shown)
+	if elapsed >= 0 && elapsed < time.Duration(seconds)*time.Second {
+		return domain.ReviewRatingEasy, nil
+	}
+	return input.Rating, nil
 }

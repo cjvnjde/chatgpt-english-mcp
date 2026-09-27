@@ -114,9 +114,10 @@ usefulness, or archival.
   and preserve relevant existing entries when adding to them.
 
 The server manages learning status from accepted review feedback. Do not manually
-promote words or relabel them to affect order. Automatic learned promotion needs
-five flawless good/easy recalls on separate UTC calendar days plus a mature FSRS
-interval. Multiple successes in a day count once; every hard/again resets the
+promote words or relabel them to affect order. Automatic learned promotion uses
+the configured mastery thresholds (default five flawless good/easy recalls on
+separate UTC days plus a mature FSRS interval). Successes in a day count once;
+every hard/again resets the
 streak, and again returns learned words to learning. Later same-day success
 cannot restore already-consumed credit. Archived words remain excluded.
 
@@ -239,11 +240,12 @@ Hard means successful recall. If the learner fails and later reaches or repeats
 the answer with hints or after revelation, keep again. Again on a first encounter
 means unknown vocabulary, not evidence of poor long-term retention. Grade answer
 quality, not message delivery delays; a long gap is not evidence of hesitation.
-Presentation timestamps do not measure human recall latency. The server uses
-the submitted grade unchanged; quick good answers are not promoted to easy.
-Do not apply your own time-based adjustment. The result reports effectiveRating;
-historical retries can retain a different grade from the previous policy.
-Always retry with the original submitted rating and comment.
+Presentation timestamps include delivery/model time, not just human recall.
+The server may promote good to easy within its configured fast-answer window
+(default strictly less than 30 seconds), but never penalizes a slow response.
+Do not apply your own time-based adjustment. The result reports the final rating.
+Always retry with the original request rating and comment, even after promotion.
+An explicit learning_review_update correction bypasses timing promotion.
 
 Record only one scheduled review per reviewToken. If a retry returns
 duplicate: true, accept it without changing the rating or comment to resubmit.
@@ -306,12 +308,12 @@ Call reinforcement_next with {} once per exercise. Keep itemId, reviewToken,
 target, meaning, comments, and practice state privately; never show the tool
 payload or answer list. This returns only learned words, with preference for
 general usefulness, personal interest, comments, and reinforcement difficulty.
-Every normalized word has at most 25% chance, including its different meanings.
-An issued word and all its saved meanings enter a hard six-hour cooldown,
-even without an answer. Four learned words must remain outside cooldown;
-exactly four eligible words means equal chances. On shortage, explain and
-pause until cooldowns expire or more learned words are available. Do not poll,
-change statuses, weaken the cap, switch modes, or substitute a manual draw.
+The configured per-word probability cap includes all saved meanings (default 25%).
+Issuance starts the configured word-level cooldown even without an answer
+(default six hours). At least four distinct eligible learned words are needed,
+or more with a lower cap. On shortage, explain and pause until cooldowns expire
+or more learned words are available. Do not poll, change statuses, weaken the
+cap, switch modes, or substitute a manual draw.
 NOT_FOUND here means no learned words, not no active vocabulary.
 
 Use the selected meaning and dated comments to choose a NEW realistic situation
@@ -473,12 +475,12 @@ Hard is successful recall, not an incorrect answer. If I initially fail but
 later reach the answer through hints or repeat a revealed answer, keep again.
 Again on a first encounter means unknown vocabulary, not evidence of poor
 long-term retention. Grade answer quality, not message delivery delays; hours
-away from chat must not count as hesitation. Do not infer human recall latency
-from presentation timestamps. The server uses the submitted grade unchanged;
-quick good answers are not promoted to easy. Do not apply your own time-based
-adjustment. The result reports effectiveRating; historical retries can retain
-a different grade from the previous policy.
-Always retry with the original submitted rating and comment.
+away from chat must not count as hesitation. Presentation timestamps include
+delivery/model time, not just human recall. The server may promote good to easy
+within its configured fast-answer window (default strictly less than 30 seconds),
+but never penalizes a slow response. Do not apply your own time adjustment.
+The result reports the final rating. Retry with the original request rating and
+comment, even after promotion. Explicit review corrections bypass promotion.
 
 Submit one learning_review per reviewToken. If a retry is reported as a
 duplicate, continue normally without changing the submission. Do not calculate
@@ -613,13 +615,13 @@ No feedback for unanswered exercises. Never submit a reinforcement token to
 learning_review or count one exercise in both channels.
 
 The server favors useful, interesting, comment-heavy learned words and practice
-difficulty, with recency and randomness. No normalized word has more than 25%
-chance per call across all meanings. Issuance starts a hard six-hour cooldown
-for all saved meanings, even without feedback. Four learned words must remain
-outside cooldown; exactly four eligible words means uniform chances. On shortage,
-explain and pause until cooldowns expire or more learned words are available.
+difficulty, with recency and randomness. A configurable per-word cap includes
+all meanings (default 25%). Issuance starts the configured word-level cooldown
+even without feedback (default six hours). At least four distinct eligible
+learned words are needed, or more with a lower cap. On shortage, explain and
+pause until cooldowns expire or more learned words are available.
 Never poll, relabel words, weaken the cap, or switch modes to bypass it.
-NOT_FOUND means no learned words. Repeats are allowed after six hours; the cap
+NOT_FOUND means no learned words. Repeats are allowed after cooldown; the cap
 is not a session quota. Keep the pending item; never fetch ahead or reroll.
 
 Feedback updates independent practice state and automatic learning status.

@@ -57,7 +57,7 @@ func (plan *selectionPlan) likelihood(card *selectionCard) (float64, string) {
 	if plan.shares[pool] == 0 {
 		return 0, "learning_first"
 	}
-	probability := plan.shares[pool] * (selectionWeight(card, plan.now) / plan.pools[pool].weight)
+	probability := plan.shares[pool] * (selectionWeight(card, plan.now, plan.values) / plan.pools[pool].weight)
 	if pool == newSelectionPool {
 		return probability, "new"
 	}
@@ -76,11 +76,15 @@ func (db *DB) AdminSuggestions(ctx context.Context, owner string, limit, offset 
 	defer tx.Rollback()
 	now := time.Now().UTC()
 	page.GeneratedAt = TimeString(now)
-	cards, recentSinceID, err := loadSelectionCards(ctx, tx, owner)
+	snapshot, err := algorithmSettings(ctx, tx, owner)
 	if err != nil {
 		return page, err
 	}
-	plan := planLearningSelection(cards, recentSinceID, now)
+	cards, recentSinceID, err := loadSelectionCards(ctx, tx, owner, snapshot.Values)
+	if err != nil {
+		return page, err
+	}
+	plan := planLearningSelection(cards, recentSinceID, now, snapshot.Values)
 	type rank struct {
 		card        *selectionCard
 		probability float64

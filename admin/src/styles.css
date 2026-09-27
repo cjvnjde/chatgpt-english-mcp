@@ -2428,3 +2428,74 @@
     }
   }
 }
+
+@layer design {
+  .settings-page {
+    max-width: 1100px;
+  }
+  .settings-page > header p,
+  .settings-group > p,
+  .settings-field small {
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .settings-group {
+    min-width: 0;
+    margin: 24px 0;
+    padding: 24px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--surface-soft);
+  }
+  .settings-group legend {
+    padding: 0 8px;
+    font-weight: 700;
+    font-size: 1.1rem;
+  }
+  .settings-group > p {
+    margin-top: 0;
+  }
+  .settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+  }
+  .settings-field {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    min-width: 0;
+  }
+  .settings-field label {
+    font-weight: 600;
+  }
+  .settings-field input {
+    width: 100%;
+    min-width: 0;
+  }
+  .settings-field .settings-error {
+    color: #b91c1c;
+  }
+  .settings-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 16px 0 32px;
+  }
+  .settings-actions > span {
+    margin-right: auto;
+  }
+  @media (max-width: 760px) {
+    .settings-grid {
+      grid-template-columns: 1fr;
+    }
+    .settings-group {
+      padding: 16px;
+    }
+    .settings-actions > span {
+      flex-basis: 100%;
+    }
+  }
+}

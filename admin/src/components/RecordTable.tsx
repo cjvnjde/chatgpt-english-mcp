@@ -29,7 +29,6 @@ const preferred: Record<string, string[]> = {
   review_attempts: [
     "_term",
     "rating",
-    "effective_rating",
     "comment",
     "reviewed_at",
   ],
@@ -627,7 +626,6 @@ export default function RecordTable(props: {
                                       badge: [
                                         "learning_status",
                                         "rating",
-                                        "effective_rating",
                                         "selection_kind",
                                         "usefulness",
                                         "personal_interest",

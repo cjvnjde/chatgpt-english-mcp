@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
 func TestSuggestionLikelihoodMatchesSelectionBoundaries(t *testing.T) {
@@ -101,7 +102,7 @@ func TestSuggestionLikelihoodMatchesSelectionBoundaries(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			plan := planLearningSelection(test.cards, 1, now)
+			plan := planLearningSelection(test.cards, 1, now, settings.Defaults())
 			var total float64
 			for index := range test.cards {
 				probability, reason := plan.likelihood(&test.cards[index])
@@ -123,7 +124,7 @@ func TestSuggestionLikelihoodMatchesSelectionBoundaries(t *testing.T) {
 					value := draw.values[calls]
 					calls++
 					return value
-				})
+				}, settings.Defaults())
 				if !ok || selected.cardID != draw.want || calls != len(draw.values) {
 					t.Fatalf("draw %v selected %s (%d calls), want %s (%d calls)", draw.values,
 						selected.cardID, calls, draw.want, len(draw.values))
@@ -155,7 +156,7 @@ func TestLearnedSelectionWorkloadSharesAndReachability(t *testing.T) {
 				}
 				cards = append(cards, card)
 			}
-			plan := planLearningSelection(cards, 1, now)
+			plan := planLearningSelection(cards, 1, now, settings.Defaults())
 			var learnedTotal, total float64
 			for index := range cards {
 				probability, _ := plan.likelihood(&cards[index])
@@ -176,7 +177,7 @@ func TestLearnedSelectionWorkloadSharesAndReachability(t *testing.T) {
 					value := draws[call]
 					call++
 					return value
-				})
+				}, settings.Defaults())
 				if !ok || selected.cardID != cards[index].cardID {
 					t.Fatalf("learned draw selected %s, want %s", selected.cardID, cards[index].cardID)
 				}
@@ -201,7 +202,7 @@ func TestLearnedSelectionWeightsBacklogAndPreservesActiveMix(t *testing.T) {
 	// The remaining active share still splits equally by exposure, not by usefulness.
 	learnedShare := 44.0 / (9*12 + 44)
 	want := []float64{(1 - learnedShare) / 2, (1 - learnedShare) / 2, learnedShare / 11, learnedShare * 10 / 11}
-	plan := planLearningSelection(cards, 1, now)
+	plan := planLearningSelection(cards, 1, now, settings.Defaults())
 	for index := range cards {
 		got, _ := plan.likelihood(&cards[index])
 		if math.Abs(got-want[index]) > 1e-12 {
@@ -251,7 +252,7 @@ func TestLearnedSelectionEligibilityAndFallback(t *testing.T) {
 		}, []float64{0, 1}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			plan := planLearningSelection(test.cards, 1, now)
+			plan := planLearningSelection(test.cards, 1, now, settings.Defaults())
 			for index := range test.cards {
 				got, _ := plan.likelihood(&test.cards[index])
 				if math.Abs(got-test.want[index]) > 1e-12 {

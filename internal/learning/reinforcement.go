@@ -46,7 +46,7 @@ func (service *Service) ReinforcementNext(ctx context.Context) (ReinforcementNex
 		return ReinforcementNextResult{}, apperr.New(apperr.NotFound, "no learned vocabulary is available for reinforcement")
 	}
 	if errors.Is(err, storage.ErrReinforcementShortage) {
-		return ReinforcementNextResult{}, apperr.New(apperr.InvalidArgument, "reinforcement requires at least four distinct learned words outside the six-hour cooldown to keep each word's probability at or below 25 percent; wait for cooldowns to expire or add more learned vocabulary")
+		return ReinforcementNextResult{}, apperr.New(apperr.InvalidArgument, "not enough distinct learned words outside the configured reinforcement cooldown to honor the configured probability cap; wait for cooldowns to expire, add more learned vocabulary, or adjust algorithm settings")
 	}
 	if err != nil {
 		return ReinforcementNextResult{}, apperr.Wrap(apperr.InternalError, "failed to select reinforcement vocabulary", err)

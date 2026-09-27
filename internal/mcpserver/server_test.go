@@ -254,13 +254,13 @@ func TestMCPLearningReviewUpdateCorrectsLatestWithOriginalToken(t *testing.T) {
 		Rating:      domain.ReviewRatingAgain,
 	}
 	corrected := callTool[learning.RecordResult](t, ctx, session, "learning_review_update", correction)
-	if !corrected.Recorded || corrected.Duplicate || corrected.EffectiveRating != domain.ReviewRatingAgain ||
+	if !corrected.Recorded || corrected.Duplicate || corrected.Rating != domain.ReviewRatingAgain ||
 		corrected.NextReviewAt == original.NextReviewAt {
 		t.Fatalf("correction = %#v, original = %#v", corrected, original)
 	}
 	duplicate := callTool[learning.RecordResult](t, ctx, session, "learning_review_update", correction)
 	if !duplicate.Duplicate || duplicate.NextReviewAt != corrected.NextReviewAt ||
-		duplicate.EffectiveRating != domain.ReviewRatingAgain {
+		duplicate.Rating != domain.ReviewRatingAgain {
 		t.Fatalf("duplicate correction = %#v, corrected = %#v", duplicate, corrected)
 	}
 	withComment := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{IncludeComments: true})

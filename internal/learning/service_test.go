@@ -11,6 +11,7 @@ import (
 
 	"english-learning-mcp/internal/apperr"
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 	"english-learning-mcp/internal/storage"
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
 )
@@ -174,16 +175,23 @@ func TestRecordSupportsAllRatingsWithFSRSScheduling(t *testing.T) {
 	}
 }
 
-func TestGoodReviewPreservesGradeAcrossPresentationTiming(t *testing.T) {
+func TestFastAnswerPromotionBoundaries(t *testing.T) {
 	start := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
-		name     string
-		elapsed  time.Duration
-		repeated bool
+		name                     string
+		elapsed                  time.Duration
+		rating, want             domain.ReviewRating
+		repeated, noPresentation bool
 	}{
-		{"fast answer", 59 * time.Second, false},
-		{"slower answer", 61 * time.Second, false},
-		{"repeated presentation", 30 * time.Second, true},
+		{"fast good", 29*time.Second + 999*time.Millisecond, domain.ReviewRatingGood, domain.ReviewRatingEasy, false, false},
+		{"exact boundary", 30 * time.Second, domain.ReviewRatingGood, domain.ReviewRatingGood, false, false},
+		{"slow good", time.Hour, domain.ReviewRatingGood, domain.ReviewRatingGood, false, false},
+		{"fast failure", time.Second, domain.ReviewRatingAgain, domain.ReviewRatingAgain, false, false},
+		{"fast hard", time.Second, domain.ReviewRatingHard, domain.ReviewRatingHard, false, false},
+		{"slow easy", time.Hour, domain.ReviewRatingEasy, domain.ReviewRatingEasy, false, false},
+		{"repeated presentation does not restart timer", 31 * time.Second, domain.ReviewRatingGood, domain.ReviewRatingGood, true, false},
+		{"backwards clock", -time.Second, domain.ReviewRatingGood, domain.ReviewRatingGood, false, false},
+		{"missing presentation", time.Second, domain.ReviewRatingGood, domain.ReviewRatingGood, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, service := newTestService(t)
@@ -191,58 +199,107 @@ func TestGoodReviewPreservesGradeAcrossPresentationTiming(t *testing.T) {
 			service.now = func() time.Time { return now }
 			createdAt := start.Add(-time.Hour)
 			saveVocabulary(t, store, "meticulous", createdAt, domain.LearningStatusNew)
-			next := nextWord(t, service, false)
+			var token string
+			if test.noPresentation {
+				page, err := store.AdminRows(context.Background(), "learning_cards", storage.AdminQuery{Limit: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				token = page.Rows[0]["review_token"].(string)
+			} else {
+				token = nextWord(t, service, false).ReviewToken
+			}
 			if test.repeated {
 				now = start.Add(20 * time.Second)
 				nextWord(t, service, false)
 			}
 			now = start.Add(test.elapsed)
-			result := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "")
-			expected, err := fsrs.NewFSRS(fsrs.DefaultParam()).Next(fsrs.Card{Due: createdAt}, now, fsrs.Good)
+			result := recordReview(t, service, token, test.rating, "Independent attempt.")
+			expected, err := fsrs.NewFSRS(fsrs.DefaultParam()).Next(fsrs.Card{Due: createdAt}, now, toFSRSRating(test.want))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.EffectiveRating != domain.ReviewRatingGood || result.NextReviewAt != storage.TimeString(expected.Card.Due) {
-				t.Fatalf("answer timing changed the submitted grade's schedule: %#v, want due %s", result, expected.Card.Due)
+			if result.Rating != test.want || result.NextReviewAt != storage.TimeString(expected.Card.Due) {
+				t.Fatalf("review = %#v; want grade %s and due %s", result, test.want, expected.Card.Due)
+			}
+			page, err := store.AdminRows(context.Background(), "review_attempts", storage.AdminQuery{Limit: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if page.Rows[0]["rating"] != string(test.want) {
+				t.Fatalf("saved grade differs: %#v", page.Rows[0])
 			}
 		})
 	}
 }
 
-func TestHistoricalEffectiveRatingSurvivesRetryWithoutRegrading(t *testing.T) {
+func TestPromotedReviewRetryAndExplicitCorrection(t *testing.T) {
+	ctx := context.Background()
 	store, service := newTestService(t)
 	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 	saveVocabulary(t, store, "meticulous", now.Add(-time.Hour), domain.LearningStatusNew)
 	next := nextWord(t, service, false)
-	now = now.Add(45 * time.Second)
-	// Simulate an immutable review accepted by the previous timing policy.
-	previous, _, err := store.RecordReview(context.Background(), storage.RecordReviewInput{
-		OwnerKey: "owner", ReviewToken: next.ReviewToken, Rating: domain.ReviewRatingGood,
-		Comment: "Clear distinction.", Now: service.now,
-	}, func(card storage.LearningCard, at time.Time, _ domain.ReviewRating) (storage.LearningCard, float64, error) {
-		return service.schedule(card, at, domain.ReviewRatingEasy)
-	})
-	if err != nil {
+	now = now.Add(10 * time.Second)
+	original := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "Clear distinction.")
+	if original.Rating != domain.ReviewRatingEasy {
+		t.Fatalf("not promoted: %#v", original)
+	}
+	values := settings.Defaults()
+	values.FastAnswerSeconds = 0
+	if _, err := store.UpdateAlgorithmSettings(ctx, "owner", values, 0); err != nil {
 		t.Fatal(err)
 	}
-	service = NewService(store, "owner")
 	now = now.Add(4 * time.Hour)
-	service.now = func() time.Time { return now }
-	duplicate := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "Clear distinction.")
-	if !duplicate.Duplicate || duplicate.EffectiveRating != domain.ReviewRatingEasy || duplicate.NextReviewAt != storage.TimeString(previous.After.DueAt) {
-		t.Fatalf("historical retry must preserve its original grade and schedule: %#v", duplicate)
+	retry := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "Clear distinction.")
+	if !retry.Duplicate || retry.Rating != original.Rating || retry.NextReviewAt != original.NextReviewAt {
+		t.Fatalf("retry regraded saved result: %#v", retry)
 	}
-	_, err = service.Record(context.Background(), RecordOptions{
-		ReviewToken: next.ReviewToken, Rating: domain.ReviewRatingEasy, Comment: "Clear distinction.",
-	})
+	_, err := service.Record(ctx, RecordOptions{ReviewToken: next.ReviewToken, Rating: domain.ReviewRatingEasy, Comment: "Clear distinction."})
 	assertApplicationCode(t, err, apperr.InvalidArgument)
-	now = previous.After.DueAt.Add(time.Minute)
-	following := nextWord(t, service, false)
-	now = now.Add(45 * time.Second)
-	result := recordReview(t, service, following.ReviewToken, domain.ReviewRatingGood, "")
-	if result.EffectiveRating != domain.ReviewRatingGood || result.Duplicate {
-		t.Fatalf("new reviews must use their submitted grade: %#v", result)
+	values.FastAnswerSeconds = 30
+	if _, err := store.UpdateAlgorithmSettings(ctx, "owner", values, 1); err != nil {
+		t.Fatal(err)
+	}
+	corrected, err := service.UpdateLatest(ctx, UpdateOptions{ReviewToken: next.ReviewToken, Rating: domain.ReviewRatingGood})
+	if err != nil || corrected.Rating != domain.ReviewRatingGood || corrected.Duplicate ||
+		corrected.NextReviewAt != storage.TimeString(mustParseTime(t, next.ShownAt).Add(10*time.Second+10*time.Minute)) {
+		t.Fatalf("explicit correction did not undo promotion: %#v, %v", corrected, err)
+	}
+	retry = recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "Clear distinction.")
+	if !retry.Duplicate || retry.Rating != domain.ReviewRatingGood || retry.NextReviewAt != corrected.NextReviewAt {
+		t.Fatalf("corrected retry = %#v", retry)
+	}
+}
+
+func TestSchedulingUsesLiveSettings(t *testing.T) {
+	ctx := context.Background()
+	store, service := newTestService(t)
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	values := settings.Defaults()
+	values.FastAnswerSeconds = 5
+	values.LearningStepsMinutes = []float64{2, 20}
+	values.MaximumIntervalDays = 3
+	values.MasteryIntervalDays = 3
+	values.MasteryDays = 1
+	if _, err := store.UpdateAlgorithmSettings(ctx, "owner", values, 0); err != nil {
+		t.Fatal(err)
+	}
+	saveVocabulary(t, store, "meticulous", now.Add(-time.Hour), domain.LearningStatusNew)
+	next := nextWord(t, service, false)
+	now = now.Add(5 * time.Second)
+	first := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "")
+	if first.Rating != domain.ReviewRatingGood || first.NextReviewAt != storage.TimeString(now.Add(20*time.Minute)) {
+		t.Fatalf("configured threshold/steps ignored: %#v", first)
+	}
+	now = mustParseTime(t, first.NextReviewAt)
+	next = nextWord(t, service, false)
+	now = now.Add(time.Second)
+	second := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "")
+	if second.Rating != domain.ReviewRatingEasy || second.NextReviewAt != storage.TimeString(now.Add(3*24*time.Hour)) ||
+		second.Status != domain.LearningStatusLearned {
+		t.Fatalf("configured threshold/interval/mastery ignored: %#v", second)
 	}
 }
 
@@ -704,6 +761,7 @@ func TestUpdateLatestReplaysOriginalFSRSStateAndTime(t *testing.T) {
 				t.Fatalf("explicit empty comment did not clear feedback: %#v, %v", comments, err)
 			}
 			// A later real answer uses the corrected state, not the abandoned good schedule.
+			now = now.Add(time.Minute) // Both presentations are outside the fast-answer window.
 			next := recordReview(t, service, pending.ReviewToken, domain.ReviewRatingGood, "")
 			controlNext := recordReview(t, control, expected.Card.ReviewToken, domain.ReviewRatingGood, "")
 			if next != controlNext {

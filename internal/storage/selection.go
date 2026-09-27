@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
 // Selection only loads scheduling and presentation state; vocabulary content is
@@ -38,15 +39,15 @@ type selectionPool struct {
 	exposure float64
 }
 
-func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey string) ([]selectionCard, int64, error) {
+func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey string, values settings.Values) ([]selectionCard, int64, error) {
 	var recentSinceID int64
 	if err := transaction.QueryRowContext(ctx, `
 		SELECT COALESCE(MIN(id), 0) FROM (
 			SELECT id FROM learning_presentations
 			WHERE owner_key = ? AND exercise_mode = ?
-			ORDER BY id DESC LIMIT 3
+			ORDER BY id DESC LIMIT ?
 		)
-	`, ownerKey, productionExerciseMode).Scan(&recentSinceID); err != nil {
+	`, ownerKey, productionExerciseMode, values.RecentPresentationCount).Scan(&recentSinceID); err != nil {
 		return nil, 0, fmt.Errorf("read recent learning presentations: %w", err)
 	}
 
@@ -118,10 +119,11 @@ type selectionPlan struct {
 	future        *selectionCard
 	recentSinceID int64
 	now           time.Time
+	values        settings.Values
 }
 
-func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.Time) selectionPlan {
-	plan := selectionPlan{recentSinceID: recentSinceID, now: now}
+func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.Time, values settings.Values) selectionPlan {
+	plan := selectionPlan{recentSinceID: recentSinceID, now: now, values: values}
 	var hasEligible bool
 	var latestPresentationID int64
 	var onlyAvailable, oldestRecent, secondOldestRecent *selectionCard
@@ -143,7 +145,7 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 				continue
 			}
 			onlyAvailable = card
-			plan.pools[card.poolIndex()].add(card, now)
+			plan.pools[card.poolIndex()].add(card, now, values)
 			continue
 		}
 		if oldestFuture == nil || futureBefore(card, oldestFuture) {
@@ -162,7 +164,7 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 		}
 		return plan
 	}
-	// A rigid three-card exclusion forces four-card pools into a cycle.
+	// A rigid recent-card exclusion can force small pools into a cycle.
 	// Relax oldest exclusions only when fresh alternatives cannot break it.
 	availableCount := plan.pools[newSelectionPool].count + plan.pools[stepSelectionPool].count +
 		plan.pools[reviewSelectionPool].count + plan.pools[learnedSelectionPool].count
@@ -171,7 +173,7 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 		if secondOldestRecent != nil && secondOldestRecent.lastPresentationID < latestPresentationID {
 			plan.relaxed[1] = secondOldestRecent
 		}
-	} else if availableCount == 1 && presentedRecently(onlyAvailable, now) &&
+	} else if availableCount == 1 && presentedRecently(onlyAvailable, now, values) &&
 		oldestRecent != nil && oldestRecent.lastPresentationID < latestPresentationID {
 		plan.relaxed[0] = oldestRecent
 	}
@@ -179,7 +181,7 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 		if card == nil {
 			continue
 		}
-		plan.pools[card.poolIndex()].add(card, now)
+		plan.pools[card.poolIndex()].add(card, now, values)
 	}
 
 	// Complete selectable learning steps before introducing more material.
@@ -196,7 +198,7 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 	}
 	if learnedWeight > 0 {
 		// Workload allocation, independent of FSRS's target retention.
-		plan.shares[learnedSelectionPool] = max(0.10, min(learnedWeight/(9*activeWeight+learnedWeight), 0.40))
+		plan.shares[learnedSelectionPool] = max(values.LearnedShareMin, min(learnedWeight/(values.LearnedWeightDivisor*activeWeight+learnedWeight), values.LearnedShareMax))
 	}
 	if plan.pools[newSelectionPool].count == 0 {
 		plan.shares[reviewSelectionPool] = 1
@@ -205,7 +207,7 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 	} else {
 		newExposure := plan.pools[newSelectionPool].exposure
 		reviewExposure := plan.pools[reviewSelectionPool].exposure
-		plan.shares[newSelectionPool] = max(0.2, min(newExposure/(newExposure+reviewExposure), 0.8))
+		plan.shares[newSelectionPool] = max(values.NewShareMin, min(newExposure/(newExposure+reviewExposure), values.NewShareMax))
 		plan.shares[reviewSelectionPool] = 1 - plan.shares[newSelectionPool]
 	}
 	activeShare := 1 - plan.shares[learnedSelectionPool]
@@ -215,7 +217,7 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 }
 
 func (plan *selectionPlan) inCooldown(card *selectionCard) bool {
-	return card.lastPresentationID >= plan.recentSinceID && presentedRecently(card, plan.now)
+	return plan.values.RecentPresentationCount > 0 && card.lastPresentationID >= plan.recentSinceID && presentedRecently(card, plan.now, plan.values)
 }
 
 func (plan *selectionPlan) eligible(card *selectionCard) bool {
@@ -223,11 +225,11 @@ func (plan *selectionPlan) eligible(card *selectionCard) bool {
 		(card == plan.relaxed[0] || card == plan.relaxed[1] || !plan.inCooldown(card))
 }
 
-func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Time, random func() float64) (selectionCard, bool) {
+func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Time, random func() float64, values settings.Values) (selectionCard, bool) {
 	if len(cards) == 0 {
 		return selectionCard{}, false
 	}
-	plan := planLearningSelection(cards, recentSinceID, now)
+	plan := planLearningSelection(cards, recentSinceID, now, values)
 	if plan.future != nil {
 		return *plan.future, true
 	}
@@ -257,7 +259,7 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 			continue
 		}
 		last = card
-		remaining -= selectionWeight(card, now)
+		remaining -= selectionWeight(card, now, values)
 		if remaining < 0 {
 			return *card, true
 		}
@@ -300,44 +302,44 @@ func presentedBefore(card, other *selectionCard) bool {
 		(card.lastPresentationID == other.lastPresentationID && card.cardID < other.cardID)
 }
 
-func presentedRecently(card *selectionCard, now time.Time) bool {
-	return card.lastPresentationID > 0 && now.Sub(card.lastShownAt) < 30*time.Minute
+func presentedRecently(card *selectionCard, now time.Time, values settings.Values) bool {
+	return values.PresentationCooldownMinutes > 0 && card.lastPresentationID > 0 && now.Sub(card.lastShownAt) < time.Duration(values.PresentationCooldownMinutes)*time.Minute
 }
 
-func exposurePriority(card *selectionCard, now time.Time) float64 {
+func exposurePriority(card *selectionCard, now time.Time, values settings.Values) float64 {
 	if card.lastPresentationID == 0 {
-		return 4
+		return values.UnseenExposureWeight
 	}
 	elapsedHours := max(now.Sub(card.lastShownAt).Hours(), 0)
-	if elapsedHours <= 24 {
-		return 0.25 + 0.75*(elapsedHours/24)
+	if elapsedHours <= values.ExposureRecoveryHours {
+		return 0.25 + 0.75*(elapsedHours/values.ExposureRecoveryHours)
 	}
-	return 1 + min((elapsedHours-24)/(29*24), 1)
+	return 1 + min((elapsedHours-values.ExposureRecoveryHours)/(29*24), 1)
 }
 
-func (pool *selectionPool) add(card *selectionCard, now time.Time) {
+func (pool *selectionPool) add(card *selectionCard, now time.Time, values settings.Values) {
 	pool.count++
-	pool.weight += selectionWeight(card, now)
-	pool.exposure += exposurePriority(card, now)
+	pool.weight += selectionWeight(card, now, values)
+	pool.exposure += exposurePriority(card, now, values)
 }
 
-func selectionWeight(card *selectionCard, now time.Time) float64 {
+func selectionWeight(card *selectionCard, now time.Time, values settings.Values) float64 {
 	interest := 1.0
 	switch card.personalInterest {
 	case domain.PersonalInterestLow:
-		interest = 0.5
+		interest = values.LowInterestWeight
 	case domain.PersonalInterestHigh:
-		interest = 2
+		interest = values.HighInterestWeight
 	}
 	if card.fsrsState == 0 {
 		usefulness := 1.0
 		switch card.usefulness {
 		case domain.UsefulnessLow:
-			usefulness = 0.5
+			usefulness = values.LowUsefulnessWeight
 		case domain.UsefulnessHigh:
-			usefulness = 2
+			usefulness = values.HighUsefulnessWeight
 		}
-		return exposurePriority(card, now) * usefulness * interest
+		return exposurePriority(card, now, values) * usefulness * interest
 	}
 
 	intervalHours := max(float64(card.scheduledDays)*24, 24)
@@ -346,7 +348,7 @@ func selectionWeight(card *selectionCard, now time.Time) float64 {
 		// Learning steps operate in minutes; cooldown already supplies spacing.
 		intervalHours = (10 * time.Minute).Hours()
 	} else {
-		exposure = exposurePriority(card, now)
+		exposure = exposurePriority(card, now, values)
 	}
 	urgency := 1 + min(max(now.Sub(card.dueAt).Hours(), 0)/intervalHours, 4)
 	failures := 1 + 0.5*float64(min(card.consecutiveFailures, 2)) + 0.25*float64(min(card.lapses, 3))

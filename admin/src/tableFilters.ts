@@ -11,7 +11,7 @@ export function dateFilterColumn(columns: string[]) {
 export function filterOptions(column: string): string[] {
   if (column === "learning_status")
     return ["new", "learning", "learned", "archived"];
-  if (["rating", "effective_rating", "last_rating"].includes(column))
+  if (["rating", "last_rating"].includes(column))
     return ["again", "hard", "good", "easy"];
   if (["usefulness", "personal_interest"].includes(column))
     return ["low", "normal", "high"];

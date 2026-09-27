@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 )
 
-func lifecycleSchedule(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
-	card, retrievability, err := coreStorageReviewSchedule(card, now, rating)
+func lifecycleSchedule(card LearningCard, now time.Time, rating domain.ReviewRating, values settings.Values) (LearningCard, float64, error) {
+	card, retrievability, err := coreStorageReviewSchedule(card, now, rating, values)
 	card.ScheduledDays = 21
 	card.DueAt = now.Add(21 * 24 * time.Hour)
 	return card, retrievability, err
@@ -119,8 +120,8 @@ func TestMasteryRequiresMatureReviewSchedule(t *testing.T) {
 			lifecycleReview(t, store, item.ItemID, now.Add(time.Duration(day)*24*time.Hour), domain.ReviewRatingGood)
 		}
 		card := lifecycleCard(t, store, item.ItemID)
-		attempt, _, err := store.RecordReview(context.Background(), RecordReviewInput{OwnerKey: "owner", ReviewToken: card.ReviewToken, Rating: domain.ReviewRatingGood, Now: clockAt(now.Add(4 * 24 * time.Hour))}, func(card LearningCard, at time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
-			next, r, err := lifecycleSchedule(card, at, rating)
+		attempt, _, err := store.RecordReview(context.Background(), RecordReviewInput{OwnerKey: "owner", ReviewToken: card.ReviewToken, Rating: domain.ReviewRatingGood, Now: clockAt(now.Add(4 * 24 * time.Hour))}, func(card LearningCard, at time.Time, rating domain.ReviewRating, values settings.Values) (LearningCard, float64, error) {
+			next, r, err := lifecycleSchedule(card, at, rating, settings.Defaults())
 			next.FSRSState = state
 			if state == 2 {
 				next.ScheduledDays = 20

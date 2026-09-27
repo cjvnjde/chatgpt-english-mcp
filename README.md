@@ -8,15 +8,18 @@ It provides eleven tools for:
 - vocabulary metadata, attached example images, offline word/expression usefulness with optional AI hints, notes, examples, tags, and learning states
 - read-only filtered vocabulary batches for AI sentence-writing and conversation exercises, without review tokens or schedule changes
 - learning-step priority, adaptive active/learned review shares, unseen and neglected-card priority, and recent-card cooldowns
-- idempotent review recording, latest-answer correction, and spaced-repetition scheduling
-- automatic status progression after five flawless daily recalls, with one success credit per UTC day and immediate recovery after mistakes
+- idempotent review recording, latest-answer correction, and spaced-repetition scheduling, with one-way promotion of fast `good` answers to `easy`
+- configurable automatic status progression (default five flawless daily recalls), with one success credit per UTC day and immediate recovery after mistakes
 - timestamped presentation history retained for future learning analytics
-- learned-word reinforcement weighted by usefulness, comments, difficulty, and recency, with a strict 25% per-word probability cap
+- learned-word reinforcement weighted by usefulness, comments, difficulty, and recency, with a configurable per-word probability cap (default 25%)
 - personal-interest priorities that favor interesting words without excluding less-important ones
+- persistent admin settings for 24 useful timing, scheduling, mastery, and selection controls, without code changes or restart
 
 The MCP stores and schedules learning data; the connected AI tutor decides how to explain, quiz, and respond to the learner.
 
 Use `learning_next` followed by `learning_review`; the tutor submits the first-attempt grade, and the server manages status. `good`/`easy` earns at most one mastery credit per saved meaning per UTC day. Every `hard`/`again` resets the streak; `again` returns a learned meaning to learning. Automatic promotion requires five qualifying days and an FSRS Review interval of at least 21 days. Due learned words normally receive a 10% maintenance share, rising up to 40% with relative backlog; due learning steps take priority. See [daily mastery and scheduling](docs/how-it-works.md#automatic-status-and-daily-mastery).
+
+The numbers above are defaults. In Admin → **Settings**, adjust the fast-answer window (default strictly less than 30 seconds; zero disables), FSRS parameters, and selection policies. Only the final review `rating` is stored and returned. Settings affect subsequent operations rather than rewriting history or existing due dates. See [runtime algorithm settings](docs/configuration.md#runtime-algorithm-settings).
 
 The Compose stack includes [one-way AnkiWeb sync](docs/deployment.md#ankiweb-sync), publishing saved vocabulary to a dedicated managed deck. Server content overrides Anki edits; Anki scheduling remains independent.
 

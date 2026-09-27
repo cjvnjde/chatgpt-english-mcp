@@ -1,6 +1,6 @@
 # Configuration
 
-Configuration is read from environment variables at startup. The process exits when a required value is absent or invalid.
+Deployment configuration is read from environment variables at startup. The process exits when a required value is absent or invalid. Learning algorithm settings are stored separately in SQLite and can be changed live in Admin → **Settings**.
 
 ## Application
 
@@ -20,6 +20,44 @@ Configuration is read from environment variables at startup. The process exits w
 All enabled listen addresses must be different. The Anki export must never share an MCP listener or its bearer token.
 
 All bearer tokens must use HTTP bearer-token characters; embedded whitespace and controls are rejected. MCP POST requests reject foreign browser origins; same-origin and originless native clients remain supported. HTTP headers have a 10-second read deadline; complete MCP request reads, including bodies, are bounded to 30 seconds.
+
+## Runtime algorithm settings
+
+Open `/admin/#view=settings` with the admin token. Settings belong to `MCP_OWNER_KEY`, persist in the database (including backups), and apply without a restart. Saving does **not** rewrite past grades, recalculate existing due dates, or relabel vocabulary. Each next selection/review reads a consistent settings snapshot. A changed review correction uses current settings with the original review state/time; identical retries keep their saved schedule.
+
+The page includes units, explanations, bounds, validation, **Discard changes**, and **Restore defaults**. Restoring defaults changes only the draft until **Save changes** is pressed. Unsaved navigation is guarded; concurrent edits return a conflict and preserve the draft rather than overwriting newer values.
+
+| Setting / API key | Default | Allowed values and effect |
+|---|---|---|
+| `fastAnswerSeconds` | `30` seconds | Integer 0–300; `0` disables. Only `good` is promoted to `easy` when elapsed time from the token's first presentation is nonnegative and strictly below the threshold. Exactly at the threshold and slower answers keep their grade. Explicit corrections bypass promotion. |
+| `requestedRetention` | `0.9` (90%) | 0.7–0.99; FSRS target recall probability. Higher values generally increase review frequency. |
+| `maximumIntervalDays` | `36500` | Integer 1–36500; cap on newly scheduled long-term intervals. |
+| `learningStepsMinutes` | `[1, 10]` | Up to 10 strictly increasing positive minute values below 1440; `[]` skips learning steps. |
+| `relearningStepsMinutes` | `[10]` | Same bounds; steps after forgetting a review card. |
+| `masteryDays` | `5` | Integer 1–365; successful UTC review days without a failure/Hard reset, at most one credit per day. |
+| `masteryIntervalDays` | `21` | Integer 1–maximum interval; promotion also requires FSRS Review state. |
+| `presentationCooldownMinutes` | `30` | Integer 0–1440; time window for recent-card exclusion. Zero disables cooldown. Small pools can relax exclusions. |
+| `recentPresentationCount` | `3` | Integer 0–100; recent event window, combined with the cooldown duration. Zero disables cooldown. |
+| `newShareMin`, `newShareMax` | `0.2`, `0.8` | Each 0.01–0.99, min ≤ max. Bound the new share **within active work** when new and due-review pools both exist; due learning steps take priority. |
+| `learnedShareMin`, `learnedShareMax` | `0.1`, `0.4` | Each 0–0.99, min ≤ max. Bound learned maintenance when competing with active work; not a quota when only learned cards are available. |
+| `learnedWeightDivisor` | `9` | 1–100; learned share starts at `learnedWeight / (divisor × activeWeight + learnedWeight)`, then is bounded. |
+| `lowUsefulnessWeight`, `highUsefulnessWeight` | `0.5`, `2` | Each 0.05–20; new-card and reinforcement multipliers. Normal remains 1. |
+| `lowInterestWeight`, `highInterestWeight` | `0.5`, `2` | Each 0.05–20; selectable-card and reinforcement multipliers. Normal remains 1. |
+| `unseenExposureWeight` | `4` | 0.05–20; unseen-card exposure priority. |
+| `exposureRecoveryHours` | `24` | 1–168; exposure recovery from 0.25 to 1. Subsequent scheduled-selection rise from 1 to 2 still takes 29 days. Also controls reinforcement soft recency. |
+| `reinforcementCooldownHours` | `6` | 0–720; hard word-level issuance cooldown; zero disables. |
+| `reinforcementMaxWordShare` | `0.25` (25%) | 0.05–1; capped lottery requires at least `max(4, ceil(1 / cap))` distinct eligible learned words. |
+| `troublesomeConsecutiveFailures` | `2` | Integer 1–100; threshold for the troublesome flag/reason. |
+| `troublesomeLapses` | `3` | Integer 1–100; alternate threshold for the troublesome flag/reason. |
+
+Percentages are displayed as percentages in the UI and stored as fractions in the API. The admin API provides:
+
+- `GET /admin/api/settings` → `{ values, revision, defaults }`.
+- `PUT /admin/api/settings` with `{ values, expectedRevision }` → the saved snapshot and defaults.
+- An owner without saved overrides starts at revision `0`. PUT requires **all** values, rejects unknown/missing/null fields, and validates cross-field bounds atomically. A stale revision returns HTTP `409`; a missing revision returns `428`.
+
+FSRS fitted model coefficients are not manual controls. Model weights remain based on the dependency defaults, short-term scheduling stays enabled, and interval fuzz stays disabled. Network settings and credentials remain environment-only.
+
 
 ## OpenAI tunnel container
 

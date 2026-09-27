@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"english-learning-mcp/internal/domain"
+	"english-learning-mcp/internal/settings"
 	"english-learning-mcp/internal/usefulness"
 )
 
@@ -41,7 +42,7 @@ func TestConcurrentReviewHandlesKeepOneImmutableAttempt(t *testing.T) {
 	input := RecordReviewInput{OwnerKey: "owner", ReviewToken: candidate.Card.ReviewToken,
 		Rating: domain.ReviewRatingGood, Comment: "Remembered independently.", Now: clockAt(now.Add(time.Minute))}
 	var competingErr error
-	attempt, duplicate, err := first.RecordReview(ctx, input, func(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) { // Read-only snapshots must remain usable while a review is in flight.
+	attempt, duplicate, err := first.RecordReview(ctx, input, func(card LearningCard, now time.Time, rating domain.ReviewRating, values settings.Values) (LearningCard, float64, error) { // Read-only snapshots must remain usable while a review is in flight.
 		reader, err := second.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return LearningCard{}, 0, err
@@ -56,7 +57,7 @@ func TestConcurrentReviewHandlesKeepOneImmutableAttempt(t *testing.T) {
 			return LearningCard{}, 0, rollbackErr
 		}
 		_, _, competingErr = second.RecordReview(ctx, input, coreStorageReviewSchedule)
-		return coreStorageReviewSchedule(card, now, rating)
+		return coreStorageReviewSchedule(card, now, rating, settings.Defaults())
 	})
 	if err != nil || duplicate {
 		t.Fatalf("first in-flight review failed: duplicate=%t error=%v", duplicate, err)
@@ -211,7 +212,7 @@ func TestContextSenseMigrationConflictRollsBackWithoutLosingVocabulary(t *testin
 	}
 }
 
-func coreStorageReviewSchedule(card LearningCard, now time.Time, rating domain.ReviewRating) (LearningCard, float64, error) {
+func coreStorageReviewSchedule(card LearningCard, now time.Time, rating domain.ReviewRating, _ settings.Values) (LearningCard, float64, error) {
 	card.DueAt = now.Add(24 * time.Hour)
 	card.Stability = 1
 	card.Difficulty = 5
@@ -227,7 +228,7 @@ func coreStorageReviewSchedule(card LearningCard, now time.Time, rating domain.R
 func insertLegacyReview(t *testing.T, database *sql.DB, input RecordReviewInput, before LearningCard) ReviewAttempt {
 	t.Helper()
 	now := input.Now()
-	after, retrievability, err := coreStorageReviewSchedule(before, now, input.Rating)
+	after, retrievability, err := coreStorageReviewSchedule(before, now, input.Rating, settings.Defaults())
 	if err != nil {
 		t.Fatal(err)
 	}
