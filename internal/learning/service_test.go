@@ -714,3 +714,96 @@ func TestUpdateLatestReplaysOriginalFSRSStateAndTime(t *testing.T) {
 		})
 	}
 }
+
+func TestDailyMasteryRequiresFiveFlawlessSessions(t *testing.T) {
+	ctx := context.Background()
+	store, service := newTestService(t)
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	item := saveVocabulary(t, store, "resilient", now, domain.LearningStatusNew)
+	var fifth NextResult
+	for session := uint64(1); session <= 5; session++ {
+		next := nextWord(t, service, false)
+		result := recordReview(t, service, next.ReviewToken, domain.ReviewRatingEasy, "")
+		wantStatus := domain.LearningStatusLearning
+		if session == 5 {
+			wantStatus = domain.LearningStatusLearned
+			fifth = next
+		}
+		current, err := store.VocabularyByID(ctx, "owner", item.ItemID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.MasteryStreak != session || result.Status != wantStatus || current.Status != wantStatus {
+			t.Fatalf("session %d: result=%#v saved status=%s", session, result, current.Status)
+		}
+		if session < 5 {
+			// Follow the real FSRS schedule; no fabricated successful history.
+			now = mustParseTime(t, result.NextReviewAt)
+		}
+	}
+	corrected, err := service.UpdateLatest(ctx, UpdateOptions{ReviewToken: fifth.ReviewToken, Rating: domain.ReviewRatingAgain})
+	if err != nil || corrected.Status != domain.LearningStatusLearning || corrected.MasteryStreak != 0 {
+		t.Fatalf("corrected failure: %#v, %v", corrected, err)
+	}
+	restored, err := service.UpdateLatest(ctx, UpdateOptions{ReviewToken: fifth.ReviewToken, Rating: domain.ReviewRatingEasy})
+	if err != nil || restored.Status != domain.LearningStatusLearned || restored.MasteryStreak != 5 {
+		t.Fatalf("restored fifth success: %#v, %v", restored, err)
+	}
+	retry := recordReview(t, service, fifth.ReviewToken, domain.ReviewRatingEasy, "")
+	if !retry.Duplicate || retry.Status != restored.Status || retry.MasteryStreak != restored.MasteryStreak {
+		t.Fatalf("retry counted an extra session: %#v", retry)
+	}
+	pending := nextWord(t, service, false)
+	failed := recordReview(t, service, pending.ReviewToken, domain.ReviewRatingAgain, "")
+	if failed.Status != domain.LearningStatusLearning || failed.MasteryStreak != 0 {
+		t.Fatalf("learned word did not return to learning: %#v", failed)
+	}
+}
+
+func TestDailyMasteryCountsSuccessOnceButEveryFailure(t *testing.T) {
+	ctx := context.Background()
+	store, service := newTestService(t)
+	now := time.Date(2026, 9, 1, 23, 59, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	saveVocabulary(t, store, "persistent", now, domain.LearningStatusNew)
+	for _, rating := range []domain.ReviewRating{domain.ReviewRatingGood, domain.ReviewRatingEasy, domain.ReviewRatingGood} {
+		next := nextWord(t, service, false)
+		result := recordReview(t, service, next.ReviewToken, rating, "")
+		if result.MasteryStreak != 1 || result.Status != domain.LearningStatusLearning {
+			t.Fatalf("same UTC day counted more than once: %#v", result)
+		}
+	}
+	for range 2 {
+		next := nextWord(t, service, false)
+		result := recordReview(t, service, next.ReviewToken, domain.ReviewRatingAgain, "")
+		if result.MasteryStreak != 0 {
+			t.Fatalf("failure did not reset mastery: %#v", result)
+		}
+	}
+	candidate, err := store.NextLearningItem(ctx, "owner", service.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Card.ConsecutiveFailures != 2 || candidate.Card.Repetitions != 5 {
+		t.Fatalf("same-day failures must both update FSRS: %#v", candidate.Card)
+	}
+	recovered := recordReview(t, service, candidate.Card.ReviewToken, domain.ReviewRatingEasy, "")
+	if recovered.MasteryStreak != 0 {
+		t.Fatalf("recovery restored already-consumed daily credit: %#v", recovered)
+	}
+	now = now.Add(time.Minute) // A new UTC calendar day, not a rolling 24-hour window.
+	next := nextWord(t, service, false)
+	nextDay := recordReview(t, service, next.ReviewToken, domain.ReviewRatingGood, "")
+	if nextDay.MasteryStreak != 1 {
+		t.Fatalf("new UTC session did not count: %#v", nextDay)
+	}
+	hard := recordReview(t, service, nextWord(t, service, false).ReviewToken, domain.ReviewRatingHard, "")
+	if hard.MasteryStreak != 0 {
+		t.Fatalf("effortful recall counted as flawless: %#v", hard)
+	}
+	recovered = recordReview(t, service, nextWord(t, service, false).ReviewToken, domain.ReviewRatingGood, "")
+	if recovered.MasteryStreak != 0 {
+		t.Fatalf("same-day success after hard restored daily credit: %#v", recovered)
+	}
+}

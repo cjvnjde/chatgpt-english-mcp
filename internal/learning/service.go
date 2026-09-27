@@ -55,6 +55,8 @@ type NextResult struct {
 	ShownAt           string                    `json:"shownAt"`
 	ReviewToken       string                    `json:"reviewToken"`
 	Term              string                    `json:"term"`
+	Status            domain.LearningStatus     `json:"status"`
+	MasteryStreak     uint64                    `json:"masteryStreak"`
 	Context           string                    `json:"context,omitempty"`
 	Usefulness        domain.Usefulness         `json:"usefulness"`
 	PersonalInterest  domain.PersonalInterest   `json:"personalInterest"`
@@ -85,11 +87,13 @@ type UpdateOptions struct {
 }
 
 type RecordResult struct {
-	Recorded        bool                `json:"recorded"`
-	Duplicate       bool                `json:"duplicate"`
-	NextReviewAt    string              `json:"nextReviewAt"`
-	Troublesome     bool                `json:"troublesome"`
-	EffectiveRating domain.ReviewRating `json:"effectiveRating"`
+	Recorded        bool                  `json:"recorded"`
+	Duplicate       bool                  `json:"duplicate"`
+	Status          domain.LearningStatus `json:"status"`
+	MasteryStreak   uint64                `json:"masteryStreak"`
+	NextReviewAt    string                `json:"nextReviewAt"`
+	Troublesome     bool                  `json:"troublesome"`
+	EffectiveRating domain.ReviewRating   `json:"effectiveRating"`
 }
 
 func NewService(store Store, ownerKey string) *Service {
@@ -126,6 +130,8 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 		ShownAt:           storage.TimeString(candidate.ShownAt),
 		ReviewToken:       candidate.Card.ReviewToken,
 		Term:              candidate.Vocabulary.Term,
+		Status:            candidate.Vocabulary.Status,
+		MasteryStreak:     candidate.Card.MasteryStreak,
 		Context:           candidate.Vocabulary.Context,
 		Usefulness:        candidate.Vocabulary.Usefulness,
 		PersonalInterest:  candidate.Vocabulary.PersonalInterest,
@@ -181,6 +187,8 @@ func (service *Service) Record(ctx context.Context, options RecordOptions) (Reco
 	return RecordResult{
 		Recorded:        true,
 		Duplicate:       duplicate,
+		Status:          attempt.StatusAfter,
+		MasteryStreak:   attempt.After.MasteryStreak,
 		NextReviewAt:    storage.TimeString(attempt.After.DueAt),
 		Troublesome:     isTroublesome(attempt.After),
 		EffectiveRating: attempt.After.LastRating,
@@ -219,12 +227,17 @@ func (service *Service) UpdateLatest(ctx context.Context, options UpdateOptions)
 	if errors.Is(err, storage.ErrNotLatestReview) {
 		return RecordResult{}, apperr.New(apperr.InvalidArgument, "only the latest accepted learning_review can be corrected")
 	}
+	if errors.Is(err, storage.ErrReviewReinforced) {
+		return RecordResult{}, apperr.New(apperr.InvalidArgument, "this word received reinforcement feedback after the review; its earlier review can no longer be changed")
+	}
 	if err != nil {
 		return RecordResult{}, apperr.Wrap(apperr.InternalError, "failed to update the review", err)
 	}
 	return RecordResult{
 		Recorded:        true,
 		Duplicate:       duplicate,
+		Status:          attempt.StatusAfter,
+		MasteryStreak:   attempt.After.MasteryStreak,
 		NextReviewAt:    storage.TimeString(attempt.After.DueAt),
 		Troublesome:     isTroublesome(attempt.After),
 		EffectiveRating: attempt.After.LastRating,

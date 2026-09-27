@@ -215,7 +215,7 @@ func TestPresentationMigrationPreservesScheduleWithoutInventingHistory(t *testin
 	`, TimeString(now.Add(time.Hour)), TimeString(now.Add(-24*time.Hour)), itemID); err != nil {
 		t.Fatal(err)
 	}
-	before, err := scanLearningCard(legacy.QueryRowContext(ctx, "SELECT "+learningCardColumns+" FROM learning_cards card"))
+	before, err := scanLearningCard(legacy.QueryRowContext(ctx, "SELECT "+legacyLearningCardColumns+" FROM learning_cards card"))
 	if err != nil {
 		t.Fatal(err)
 	}

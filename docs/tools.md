@@ -55,6 +55,8 @@ A `VocabularyItem` contains `itemId`, `term`, `normalizedTerm`, status, usefulne
 
 Every item also returns `personalInterest`: personal priority, independent of general usefulness and recall quality. Existing items default to `normal`. Set `high` for “interesting” or “learn sooner,” `low` for “not interesting” or “less important,” and `normal` to reset. Low interest reduces selection weight but never excludes an otherwise eligible item.
 
+Statuses advance automatically from accepted learning feedback. Manual `status` updates remain explicit overrides; `archived` never auto-reactivates. A new item becomes `learning` after its first answer, not merely after being shown. Automatic `learned` promotion requires five flawless `good`/`easy` recalls counted on separate UTC days and an FSRS Review interval of at least 21 days. Every `hard`/`again` resets the streak; `again` demotes learned items. A day already credited cannot earn a second credit after a reset. Manual learned items and existing statuses are preserved on upgrade; historical mastery is not invented.
+
 Vocabulary text must be valid UTF-8 without NUL (`U+0000`) characters, including terms, context, descriptions, attribution, tags, notes, and examples. Invalid text is rejected rather than silently changed or allowed to block Anki snapshot validation.
 
 ## `dictionary_lookup`
@@ -265,6 +267,8 @@ This removes the vocabulary item and its learning card. It does not remove cache
   shownAt: string; // server issuance time, RFC3339Nano in UTC
   reviewToken: string;
   term: string;
+  status: LearningStatus;
+  masteryStreak: number; // qualifying daily recalls since the last hard/again
   usefulness: Usefulness;
   definition?: string;
   personalInterest: PersonalInterest;
@@ -289,13 +293,13 @@ The tool returns exactly one non-archived item. Use its `itemId` for follow-up v
 
 Selection starts with all FSRS-new and due cards, applying a global adaptive cooldown for the owner's last three presentation events less than 30 minutes old. When too few candidates remain, it readmits older eligible cards for variety without reintroducing the latest active presentation when alternatives exist. A sole unshown candidate or one last shown at least 30 minutes ago keeps priority over cooldown relaxation. With only one eligible card, it may repeat.
 
-After cooldown, selectable due FSRS Learning/Relearning cards take priority over both new introductions and mature Review-state cards. If every due learning step is excluded, other eligible cards supply spacing. Without a selectable learning step, new and mature-review shares follow each pool's total exposure need, bounded to **20%–80%** for either pool; a sole pool wins. Thus a large unseen backlog can receive 80% instead of being held to 20%, while due reviews always retain at least 20%. This is a per-call probability, not a daily/session quota.
+After cooldown, selectable nonlearned due FSRS Learning/Relearning cards take priority. Otherwise, learned vocabulary forms a separate maintenance pool, including manually learned FSRS-new cards. When both learned and active new/nonlearned-review candidates exist, learned share is **clamp(L / (9 × A + L), 0.10, 0.40)**, where `L` and `A` are their respective total selectable card weights. Equal weighted workloads yield 10%; a larger learned backlog raises the share up to 40%. A sole group receives 100%. The remaining active share is split between new and nonlearned reviews by exposure need, bounded to 20%–80% when both exist. These are per-call probabilities, not guaranteed session percentages.
 
 Within the new pool, weight is exposure × usefulness (`low`: `0.5`, `normal`: `1`, `high`: `2`). Due mature reviews use urgency × failure × exposure, without usefulness. Due learning/relearning steps use urgency × failure, without soft exposure. Presented-card exposure recovers from 0.25 to 1 over 24 hours and then rises to 2 by 30 days; never-presented cards receive 4. Urgency is bounded using a 10-minute interval for learning/relearning and at least one day for mature reviews; failure weight is also capped. See [the complete formulas and selection policy](how-it-works.md#how-the-next-item-is-selected). Usefulness never bypasses cooldowns or changes FSRS intervals.
 
-Personal interest multiplies weights within every selectable new, due learning/relearning, and mature-review pool: `low` ×0.5, `normal` ×1, `high` ×2. It does not change pool shares, cooldown eligibility, FSRS intervals, or the deterministic future-card rotation.
+Personal interest multiplies weights in every selectable pool: `low` ×0.5, `normal` ×1, `high` ×2. It can affect the learned/active workload share but not the exposure-based split within the active group, cooldown eligibility, or FSRS intervals.
 
-Future reviews are used only when no new or due cards exist. Among nonrecent future cards, choose the least recently presented by event ID (never presented first), then earliest due time, then card ID; use the same ordering across all future cards if all are recent. Due time is only an exposure tie-breaker, so a static future pool rotates fully as presentations are recorded.
+Future reviews are used only when no new or due cards exist. Restrict to nonrecent future cards if possible, then prefer nonlearned over learned status, then the least recent presentation event ID (never presented first), earliest due time, and card ID. If all are recent, apply the same ordering to all future cards. Rotation is within each status-priority group, not a promise to finish the learned group while nonlearned future cards remain.
 
 The API still issues an item with `reason: "early"` when only future cards exist; `NOT_FOUND` means there are no active cards, not that today's work is done. In the [normal tutor workflow](prompts.md), stop on `early` without asking or recording an answer unless the learner explicitly opts into early practice. There is no early-practice API mode or backend daily/session quota.
 
@@ -317,6 +321,8 @@ Presentation events and review attempts are retained after vocabulary deletion. 
 {
   recorded: true;
   duplicate: boolean;
+  status: LearningStatus; // resulting status for this accepted attempt
+  masteryStreak: number;
   nextReviewAt: string;
   troublesome: boolean;
   effectiveRating: ReviewRating; // rating actually used by FSRS
@@ -326,6 +332,8 @@ Presentation events and review attempts are retained after vocabulary deletion. 
 Comments are trimmed and limited to 1,000 Unicode characters. After acquiring the write transaction and validating a new attempt, the server captures the current UTC time, updates the FSRS card, and rotates the token atomically. Time spent waiting for the database is not mistaken for an earlier review time.
 
 Submit the answer-quality rating without adjusting it for chat delivery delays. FSRS uses that grade unchanged: a quick `good` remains `good`, not `easy`. Presentation counts, issuance timestamps, and message delays do not change grades.
+
+Grade the first attempt: `again` for failed, incorrect, revealed, or materially assisted recall; `hard` for successful but effortful unaided recall; `good`/`easy` for flawless independent recall. Every accepted attempt updates FSRS. Only mastery credit is daily-deduplicated: at most one `good`/`easy` credit per saved meaning per **UTC calendar day**, even after a same-day reset. `hard` and `again` always reset the streak; `again` demotes learned vocabulary immediately. `hard` alone retains already-learned status. Five credits plus Review state and a scheduled interval ≥21 days permit promotion. `masteryStreak` and `status` persist atomically with the review; identical retries return the original result rather than the word's later state.
 
 The response reports `effectiveRating`. For new reviews it equals the submitted rating. Historical attempts retain their original effective grade and schedule, including reviews accepted under the previous timing-promotion policy. Retries must send the original submitted rating and comment, not a historical effective rating. The obsolete `timingBoost` output field is no longer returned.
 
@@ -355,9 +363,11 @@ For example, to change the latest answer from `good` to `again`:
 
 Only the owner's latest accepted `learning_review` across all vocabulary items can be corrected. Latest means insertion order, not the largest timestamp. Fetching another item with `learning_next` does not prevent correction; accepting another answer does. Older reviews are rejected with `INVALID_ARGUMENT`, even when retrying a previously successful correction. Unknown, another owner's, unsubmitted, or deleted-card tokens return `NOT_FOUND`; archived vocabulary returns `INVALID_ARGUMENT`. Reinforcement reviews are separate and cannot be corrected with this tool.
 
-The server reuses the original pre-review FSRS state and review time, atomically replacing the saved rating, effective rating, optional comment, resulting schedule, and current card state. It does not create another attempt, increment repetitions twice, or change the pending next-review token. History, comments, and statistics reflect the corrected answer.
+The server reuses the original pre-review FSRS state, status, mastery evidence, and review time, atomically replacing the saved rating, effective rating, optional comment, resulting schedule/status/streak, and current card state. It does not create another attempt, increment repetitions or daily credits twice, or change the pending next-review token. Changed corrections are rejected with `INVALID_ARGUMENT` after subsequent reinforcement feedback for the same meaning; identical corrections still replay without undoing later feedback. History, comments, and statistics reflect the corrected answer.
 
 Multiple corrections are allowed while the answer remains latest. An identical correction returns the saved result with `duplicate: true` without rescheduling. Comments have the same trimming and 1,000-character limit as `learning_review`. If a legacy review lacks a recoverable pre-review timestamp, correction fails without mutation rather than inventing scheduling history.
+
+Pre-upgrade reviews have no trustworthy historical status/mastery snapshot. Correcting them preserves the item's current status and does not fabricate mastery credit. Upgrading does not relabel existing vocabulary or claim five historical successes.
 
 This tool is mutating, destructive (it replaces the accepted result), and idempotent.
 
@@ -372,6 +382,7 @@ This tool is mutating, destructive (it replaces the accepted result), and idempo
   itemId: string;
   reviewToken: string;
   term: string;
+  status: LearningStatus; // learned at issuance
   usefulness: Usefulness;
   personalInterest: PersonalInterest;
   definition?: string;
@@ -390,7 +401,7 @@ This tool is mutating, destructive (it replaces the accepted result), and idempo
 }
 ```
 
-Only items explicitly marked `learned` qualify, regardless of FSRS due dates. All usefulness and interest levels remain eligible. Selection favors useful words and unresolved reinforcement difficulty, with reduced weight after recent reinforcement presentations. Historical comments add priority only while difficulty remains unresolved.
+Only items currently `learned` qualify, whether promoted automatically or set manually, regardless of FSRS due dates. All usefulness and interest levels remain eligible. Selection favors useful words and unresolved reinforcement difficulty, with reduced weight after recent reinforcement presentations. Historical comments add priority only while difficulty remains unresolved.
 
 The probability of any **distinct normalized word** is at most **25% per call**, including all saved meanings of that word. Selection first applies a **hard six-hour word-level cooldown** from the latest reinforcement issuance across its saved meanings, including a meaning subsequently archived. The cooldown persists across restarts and applies even without feedback. Exactly six hours later the word is eligible again; normal `learning_next` presentations do not start or extend it.
 
@@ -400,7 +411,7 @@ Per-meaning weight is usefulness × interest × `(1 + min(commentCount, 8) * dif
 
 `comments` contains all nonempty comments from both review channels, newest first, including comments whose selection bonus has disappeared after successful practice. Use timestamps, ratings, and current answers rather than treating old comments as proof of present difficulty. Definition/example follow ordinary tutoring-content precedence. Ambiguous or irrelevant legacy context does not select a dictionary definition; clarify the intended meaning rather than guessing. The AI must hide the target, revealing derivatives, and examples until the learner attempts a sentence from a description or situation. These tool results contain the answer; a host exposing raw tool output can reveal it.
 
-Each call creates a fresh independent token and persists recency; do not reroll, fetch ahead, or retry casually. Keep the current response while awaiting an answer. Neither selection nor feedback changes status, usefulness, interest, or FSRS state. This mode does not consume scheduled-review tokens and does not use the normal review cooldown. Both selection paths capture their clock after acquiring the database transaction, so queued calls observe newly due cards and expired cooldowns.
+Each call creates a fresh independent token and persists recency; do not reroll, fetch ahead, or retry casually. Selection alone never changes status or FSRS. Feedback can demote a failed word and bring its normal review due sooner, as described below. This mode does not consume scheduled-review tokens or use the normal review cooldown. Both selection paths capture their clock after acquiring the database transaction, so queued calls observe newly due cards and expired cooldowns.
 
 ## `reinforcement_review`
 
@@ -412,6 +423,7 @@ Each call creates a fresh independent token and persists recency; do not reroll,
 {
   recorded: true;
   duplicate: boolean;
+  status: LearningStatus;
   practice: {
     reviewCount: number;
     difficulty: number;
@@ -421,9 +433,9 @@ Each call creates a fresh independent token and persists recency; do not reroll,
 }
 ```
 
-Use only a token from `reinforcement_next`. Grade the first genuine production attempt: `again` for failed recall or materially incorrect usage/revealed answers; `hard` for successful but effortful or materially hinted production; `good` for correct independent use; `easy` for effortless, precise use. Guided success does not erase an initial failure. An ambiguous clue or valid synonym needs clarification, not an automatic failure.
+Use only a token from `reinforcement_next`. Grade the first genuine production attempt: `again` for failed recall, materially incorrect usage, material assistance, or revealed answers; `hard` for successful but effortful unaided production; `good` for flawless independent use; `easy` for effortless, precise use. Guided success does not erase an initial failure. An ambiguous clue or valid synonym needs clarification, not an automatic failure.
 
-Feedback changes independent difficulty: `again` +1, `hard` +0.5, `good` −0.5, `easy` −1, clamped to 0–4. It increments review count and retains the rating, timestamp, and optional trimmed comment (at most 1,000 Unicode characters). More difficulty increases future reinforcement weight; successful practice reduces it. No FSRS date is returned or changed.
+Feedback changes independent difficulty: `again` +1, `hard` +0.5, `good` −0.5, `easy` −1, clamped to 0–4. It increments review count and retains the rating, timestamp, and optional trimmed comment (at most 1,000 Unicode characters). **Again also changes that meaning to `learning`, resets mastery, and advances a future normal-review due date to now.** Hard resets mastery but keeps learned status. Resets preserve consumed daily credit. Successful reinforcement retains learned status but does not add mastery credits. No FSRS repetition is fabricated; stability, difficulty, repetitions, and pending normal token remain unchanged. The next normal attempt resumes FSRS scheduling from its actual history. All feedback, status, and due-time changes commit together.
 
 Identical token/rating/comment retries return the original practice result with `duplicate: true`, without another update. Conflicting retries are rejected. Unanswered exercises have no review; tokens cannot be used for another owner or interchanged with `learning_review`. New feedback requires the item still to exist and be learned; accepted reviews retain their immutable retry result.
 

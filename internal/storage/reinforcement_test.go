@@ -125,7 +125,7 @@ func TestReinforcementSuccessRemovesCommentPriorityWithoutDeletingHistory(t *tes
 		saveReinforcementVocabulary(t, store, fmt.Sprintf("practice-peer-%d", index), now)
 	}
 	for index := range 16 {
-		rating := domain.ReviewRatingAgain
+		rating := domain.ReviewRatingHard
 		if index >= 8 {
 			rating = domain.ReviewRatingGood
 		}
@@ -210,6 +210,11 @@ func TestReinforcementFeedbackIsIndependentImmutableAndDurable(t *testing.T) {
 		{domain.ReviewRatingEasy, 1.5}, {domain.ReviewRatingEasy, 0.5},
 		{domain.ReviewRatingEasy, 0}, {domain.ReviewRatingGood, 0},
 	} {
+		// Explicit manual recovery allows another independent learned-only
+		// practice after a failure; the historical result must remain unchanged.
+		if _, err := store.sql.Exec("UPDATE vocabulary_items SET learning_status = 'learned' WHERE id = ?", item.ItemID); err != nil {
+			t.Fatal(err)
+		}
 		token := fmt.Sprintf("practice-%d", index)
 		seedReinforcementPresentation(t, store, item.ItemID, token, now)
 		practice, duplicate, err := store.RecordReinforcementReview(ctx, RecordReviewInput{OwnerKey: "owner", ReviewToken: token, Rating: test.rating, Comment: "Keep every comment", Now: clockAt(now.Add(time.Duration(index) * time.Nanosecond))})
@@ -234,8 +239,8 @@ func TestReinforcementFeedbackIsIndependentImmutableAndDurable(t *testing.T) {
 		t.Fatalf("reinforcement changed FSRS card: before=%#v after=%#v error=%v", before, after, err)
 	}
 	current, err := store.VocabularyByID(ctx, "owner", item.ItemID)
-	if err != nil || current.Status != domain.LearningStatusLearned || current.UpdatedAt != item.UpdatedAt {
-		t.Fatalf("reinforcement mutated vocabulary: %#v %v", current, err)
+	if err != nil || current.Status != domain.LearningStatusLearned {
+		t.Fatalf("successful reinforcement did not retain learned status: %#v %v", current, err)
 	}
 	assertReinforcementRowCount(t, store, "learning_presentations", 0)
 	assertReinforcementRowCount(t, store, "review_attempts", 0)
@@ -467,7 +472,7 @@ func TestReinforcementCombinesCommentEvidenceAndRetainsItAfterReopen(t *testing.
 		t.Fatal(err)
 	}
 	seedReinforcementPresentation(t, store, item.ItemID, "comment-token", now)
-	input := RecordReviewInput{OwnerKey: "owner", ReviewToken: "comment-token", Rating: domain.ReviewRatingAgain,
+	input := RecordReviewInput{OwnerKey: "owner", ReviewToken: "comment-token", Rating: domain.ReviewRatingHard,
 		Comment: "Reinforcement evidence", Now: clockAt(now.Add(time.Nanosecond))}
 	accepted, _, err := store.RecordReinforcementReview(ctx, input)
 	if err != nil {

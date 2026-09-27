@@ -109,7 +109,7 @@ func TestReviewCorrectionMigrationRestoresOnlyKnownPreviousReviewTimes(t *testin
 			oldStore := &DB{sql: legacy}
 			now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 			item := savePresentationVocabulary(t, oldStore, "owner", "legacy", now)
-			before, err := scanLearningCard(legacy.QueryRow("SELECT "+learningCardColumns+" FROM learning_cards card WHERE vocabulary_item_id = ?", item.ItemID))
+			before, err := scanLearningCard(legacy.QueryRow("SELECT "+legacyLearningCardColumns+" FROM learning_cards card WHERE vocabulary_item_id = ?", item.ItemID))
 			if err != nil {
 				t.Fatal(err)
 			}

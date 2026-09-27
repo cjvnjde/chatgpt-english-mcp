@@ -15,6 +15,7 @@ type selectionCard struct {
 	cardID              string
 	dueAt               time.Time
 	fsrsState           int
+	learningStatus      domain.LearningStatus
 	scheduledDays       uint64
 	consecutiveFailures uint64
 	lapses              uint64
@@ -28,6 +29,7 @@ const (
 	newSelectionPool = iota
 	stepSelectionPool
 	reviewSelectionPool
+	learnedSelectionPool
 )
 
 type selectionPool struct {
@@ -51,7 +53,8 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 	rows, err := transaction.QueryContext(ctx, `
 		SELECT card.id, card.due_at, card.fsrs_state, card.scheduled_days,
 			card.consecutive_failures, card.lapses,
-			COALESCE(presentation.id, 0), presentation.shown_at, vocabulary.usefulness, vocabulary.personal_interest
+			COALESCE(presentation.id, 0), presentation.shown_at, vocabulary.usefulness, vocabulary.personal_interest,
+			vocabulary.learning_status
 		FROM learning_cards card
 		JOIN vocabulary_items vocabulary ON vocabulary.id = card.vocabulary_item_id
 		LEFT JOIN learning_presentations presentation ON presentation.id = (
@@ -75,7 +78,7 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 		var shownAt sql.NullString
 		if err := rows.Scan(&card.cardID, &dueAt, &card.fsrsState, &card.scheduledDays,
 			&card.consecutiveFailures, &card.lapses, &card.lastPresentationID, &shownAt, &card.usefulness,
-			&card.personalInterest); err != nil {
+			&card.personalInterest, &card.learningStatus); err != nil {
 			return nil, 0, fmt.Errorf("scan learning selection card: %w", err)
 		}
 		if !card.usefulness.Valid() {
@@ -109,8 +112,8 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 // A plan borrows the input cards. Building it never draws randomness or mutates
 // scheduling state, so selection and admin likelihoods share the same policy.
 type selectionPlan struct {
-	pools         [3]selectionPool
-	shares        [3]float64
+	pools         [4]selectionPool
+	shares        [4]float64
 	relaxed       [2]*selectionCard
 	future        *selectionCard
 	recentSinceID int64
@@ -161,7 +164,8 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 	}
 	// A rigid three-card exclusion forces four-card pools into a cycle.
 	// Relax oldest exclusions only when fresh alternatives cannot break it.
-	availableCount := plan.pools[newSelectionPool].count + plan.pools[stepSelectionPool].count + plan.pools[reviewSelectionPool].count
+	availableCount := plan.pools[newSelectionPool].count + plan.pools[stepSelectionPool].count +
+		plan.pools[reviewSelectionPool].count + plan.pools[learnedSelectionPool].count
 	if availableCount == 0 {
 		plan.relaxed[0] = oldestRecent
 		if secondOldestRecent != nil && secondOldestRecent.lastPresentationID < latestPresentationID {
@@ -181,7 +185,20 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 	// Complete selectable learning steps before introducing more material.
 	if plan.pools[stepSelectionPool].count > 0 {
 		plan.shares[stepSelectionPool] = 1
-	} else if plan.pools[newSelectionPool].count == 0 {
+		return plan
+	}
+
+	activeWeight := plan.pools[newSelectionPool].weight + plan.pools[reviewSelectionPool].weight
+	learnedWeight := plan.pools[learnedSelectionPool].weight
+	if activeWeight == 0 {
+		plan.shares[learnedSelectionPool] = 1
+		return plan
+	}
+	if learnedWeight > 0 {
+		// Workload allocation, independent of FSRS's target retention.
+		plan.shares[learnedSelectionPool] = max(0.10, min(learnedWeight/(9*activeWeight+learnedWeight), 0.40))
+	}
+	if plan.pools[newSelectionPool].count == 0 {
 		plan.shares[reviewSelectionPool] = 1
 	} else if plan.pools[reviewSelectionPool].count == 0 {
 		plan.shares[newSelectionPool] = 1
@@ -191,6 +208,9 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 		plan.shares[newSelectionPool] = max(0.2, min(newExposure/(newExposure+reviewExposure), 0.8))
 		plan.shares[reviewSelectionPool] = 1 - plan.shares[newSelectionPool]
 	}
+	activeShare := 1 - plan.shares[learnedSelectionPool]
+	plan.shares[newSelectionPool] *= activeShare
+	plan.shares[reviewSelectionPool] *= activeShare
 	return plan
 }
 
@@ -212,10 +232,22 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 		return *plan.future, true
 	}
 	selectedPool := reviewSelectionPool
-	if plan.shares[stepSelectionPool] > 0 {
-		selectedPool = stepSelectionPool
-	} else if share := plan.shares[newSelectionPool]; share > 0 && (share == 1 || random() < share) {
-		selectedPool = newSelectionPool
+	nonemptyShares := 0
+	for pool, share := range plan.shares {
+		if share > 0 {
+			selectedPool = pool
+			nonemptyShares++
+		}
+	}
+	if nonemptyShares > 1 {
+		draw := random()
+		for pool, share := range plan.shares {
+			if draw < share {
+				selectedPool = pool
+				break
+			}
+			draw -= share
+		}
 	}
 	remaining := random() * plan.pools[selectedPool].weight
 	var last *selectionCard
@@ -236,6 +268,9 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 }
 
 func (card *selectionCard) poolIndex() int {
+	if card.learningStatus == domain.LearningStatusLearned {
+		return learnedSelectionPool
+	}
 	switch card.fsrsState {
 	case 0:
 		return newSelectionPool
@@ -247,6 +282,10 @@ func (card *selectionCard) poolIndex() int {
 }
 
 func futureBefore(card, other *selectionCard) bool {
+	if learned, otherLearned := card.learningStatus == domain.LearningStatusLearned,
+		other.learningStatus == domain.LearningStatusLearned; learned != otherLearned {
+		return !learned
+	}
 	if card.lastPresentationID != other.lastPresentationID {
 		return card.lastPresentationID < other.lastPresentationID
 	}

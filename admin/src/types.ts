@@ -96,7 +96,7 @@ export type Suggestion = {
   usefulness: string;
   dueAt: string;
   lastShownAt?: string;
-  pool: "new" | "learning" | "review";
+  pool: "new" | "learning" | "review" | "learned";
   probability: number;
   reason:
     | "new"

@@ -13,6 +13,8 @@ import (
 
 const productionExerciseMode = domain.ExerciseModeProduction
 
+var ErrReviewReinforced = errors.New("review cannot be corrected after newer reinforcement feedback")
+
 // LearningCard stores the FSRS state for one vocabulary item and exercise mode.
 type LearningCard struct {
 	CardID              string
@@ -31,6 +33,8 @@ type LearningCard struct {
 	RemainingSteps      int
 	LastRating          domain.ReviewRating
 	ConsecutiveFailures uint64
+	MasteryStreak       uint64
+	LastMasteryAt       time.Time
 }
 
 // LearningCandidate combines separately persisted content and scheduling state.
@@ -61,6 +65,9 @@ type ReviewAttempt struct {
 	PreviousDueAt          time.Time
 	PreviousRetrievability float64
 	After                  LearningCard
+	StatusAfter            domain.LearningStatus
+	statusBefore           domain.LearningStatus
+	reinforcementCount     int
 }
 
 type RecordReviewInput struct {
@@ -219,6 +226,11 @@ func (db *DB) RecordReview(
 	if err != nil {
 		return ReviewAttempt{}, false, err
 	}
+	applyMasteryReview(&next, card, now, input.Rating)
+	reinforcementCount, err := reinforcementReviewCount(ctx, transaction, card.VocabularyItemID)
+	if err != nil {
+		return ReviewAttempt{}, false, err
+	}
 	next.CardID = card.CardID
 	next.VocabularyItemID = card.VocabularyItemID
 	next.ExerciseMode = card.ExerciseMode
@@ -243,11 +255,17 @@ func (db *DB) RecordReview(
 		PreviousDueAt:          card.DueAt,
 		PreviousRetrievability: previousRetrievability,
 		After:                  next,
+		StatusAfter:            reviewStatusAfter(status, next, input.Rating),
+		statusBefore:           status,
+		reinforcementCount:     reinforcementCount,
 	}
 	if err := insertReviewAttempt(ctx, transaction, input.OwnerKey, attempt, card); err != nil {
 		return ReviewAttempt{}, false, err
 	}
 	if err := updateLearningCard(ctx, transaction, next, now); err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	if err := updateReviewStatus(ctx, transaction, card.VocabularyItemID, attempt.StatusAfter, now); err != nil {
 		return ReviewAttempt{}, false, err
 	}
 	if err := transaction.Commit(); err != nil {
@@ -312,6 +330,13 @@ func (db *DB) UpdateLatestReview(
 	if attempt.Rating == input.Rating && attempt.Comment == comment {
 		return attempt, true, nil
 	}
+	reinforcementCount, err := reinforcementReviewCount(ctx, transaction, attempt.VocabularyItemID)
+	if err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	if reinforcementCount != attempt.reinforcementCount {
+		return ReviewAttempt{}, false, ErrReviewReinforced
+	}
 
 	before, err := reviewCardBefore(ctx, transaction, input.OwnerKey, attempt)
 	if err != nil {
@@ -320,6 +345,14 @@ func (db *DB) UpdateLatestReview(
 	next, _, err := schedule(before, attempt.ReviewedAt, input.Rating)
 	if err != nil {
 		return ReviewAttempt{}, false, err
+	}
+	applyMasteryReview(&next, before, attempt.ReviewedAt, input.Rating)
+	if attempt.statusBefore == "" {
+		// Legacy history has no trustworthy before-status or mastery evidence.
+		next.MasteryStreak, next.LastMasteryAt = 0, time.Time{}
+		attempt.StatusAfter = status
+	} else {
+		attempt.StatusAfter = reviewStatusAfter(attempt.statusBefore, next, input.Rating)
 	}
 	next.CardID = current.CardID
 	next.VocabularyItemID = current.VocabularyItemID
@@ -331,7 +364,11 @@ func (db *DB) UpdateLatestReview(
 	if err := updateReviewAttempt(ctx, transaction, attempt); err != nil {
 		return ReviewAttempt{}, false, err
 	}
-	if err := updateLearningCard(ctx, transaction, next, input.Now().UTC()); err != nil {
+	now := input.Now().UTC()
+	if err := updateLearningCard(ctx, transaction, next, now); err != nil {
+		return ReviewAttempt{}, false, err
+	}
+	if err := updateReviewStatus(ctx, transaction, attempt.VocabularyItemID, attempt.StatusAfter, now); err != nil {
 		return ReviewAttempt{}, false, err
 	}
 	if err := transaction.Commit(); err != nil {
@@ -342,6 +379,7 @@ func (db *DB) UpdateLatestReview(
 
 func reviewCardBefore(ctx context.Context, transaction *sql.Tx, ownerKey string, attempt ReviewAttempt) (LearningCard, error) {
 	var lastReviewAt sql.NullString
+	var lastMasteryAt sql.NullString
 	before := LearningCard{
 		CardID: attempt.LearningCardID, VocabularyItemID: attempt.VocabularyItemID,
 		ExerciseMode: attempt.ExerciseMode, ReviewToken: attempt.ReviewToken,
@@ -351,6 +389,7 @@ func reviewCardBefore(ctx context.Context, transaction *sql.Tx, ownerKey string,
 		SELECT stability_before, difficulty_before, scheduled_days_before,
 			repetitions_before, lapses_before, fsrs_state_before,
 			remaining_steps_before, consecutive_failures_before, last_review_at_before,
+			mastery_streak_before, last_mastery_at_before,
 			COALESCE((SELECT COALESCE(previous.effective_rating, previous.rating)
 				FROM review_attempts previous
 				WHERE previous.owner_key = review.owner_key
@@ -361,7 +400,8 @@ func reviewCardBefore(ctx context.Context, transaction *sql.Tx, ownerKey string,
 	`, ownerKey, attempt.ReviewID).Scan(
 		&before.Stability, &before.Difficulty, &before.ScheduledDays,
 		&before.Repetitions, &before.Lapses, &before.FSRSState,
-		&before.RemainingSteps, &before.ConsecutiveFailures, &lastReviewAt, &before.LastRating,
+		&before.RemainingSteps, &before.ConsecutiveFailures, &lastReviewAt,
+		&before.MasteryStreak, &lastMasteryAt, &before.LastRating,
 	); err != nil {
 		return LearningCard{}, fmt.Errorf("read pre-review snapshot: %w", err)
 	}
@@ -374,6 +414,13 @@ func reviewCardBefore(ctx context.Context, transaction *sql.Tx, ownerKey string,
 	} else if before.Repetitions > 0 {
 		return LearningCard{}, fmt.Errorf("%w: pre-review date is unavailable", ErrCorruptData)
 	}
+	if lastMasteryAt.Valid {
+		var err error
+		before.LastMasteryAt, err = parseStoredTime(lastMasteryAt.String, "pre-review mastery date")
+		if err != nil {
+			return LearningCard{}, err
+		}
+	}
 	return before, nil
 }
 
@@ -382,12 +429,14 @@ func updateReviewAttempt(ctx context.Context, transaction *sql.Tx, attempt Revie
 		UPDATE review_attempts SET rating = ?, effective_rating = ?, comment = ?,
 			due_after = ?, stability_after = ?, difficulty_after = ?, retrievability_after = ?,
 			scheduled_days_after = ?, repetitions_after = ?, lapses_after = ?, fsrs_state_after = ?,
-			remaining_steps_after = ?, consecutive_failures_after = ?
+			remaining_steps_after = ?, consecutive_failures_after = ?, status_after = ?,
+			mastery_streak_after = ?, last_mastery_at_after = ?
 		WHERE id = ?
 	`, attempt.Rating, attempt.After.LastRating, attempt.Comment,
 		TimeString(attempt.After.DueAt), attempt.After.Stability, attempt.After.Difficulty, attempt.After.Retrievability,
 		attempt.After.ScheduledDays, attempt.After.Repetitions, attempt.After.Lapses, attempt.After.FSRSState,
-		attempt.After.RemainingSteps, attempt.After.ConsecutiveFailures, attempt.ReviewID)
+		attempt.After.RemainingSteps, attempt.After.ConsecutiveFailures, attempt.StatusAfter,
+		attempt.After.MasteryStreak, nullableReviewTime(attempt.After.LastMasteryAt), attempt.ReviewID)
 	if err != nil {
 		return fmt.Errorf("update review attempt: %w", err)
 	}
@@ -410,7 +459,9 @@ const learningCardColumns = `
 	card.remaining_steps,
 	card.last_rating,
 	card.consecutive_failures,
-	card.review_token`
+	card.review_token,
+	card.mastery_streak,
+	card.last_mastery_at`
 
 func learningCardForReview(
 	ctx context.Context,
@@ -440,6 +491,7 @@ func scanLearningCardWithStatus(scanner rowScanner, status *domain.LearningStatu
 	var lastReviewAt sql.NullString
 	var lastRating sql.NullString
 	var reviewToken sql.NullString
+	var lastMasteryAt sql.NullString
 	arguments := []any{
 		&card.CardID,
 		&card.VocabularyItemID,
@@ -457,6 +509,8 @@ func scanLearningCardWithStatus(scanner rowScanner, status *domain.LearningStatu
 		&lastRating,
 		&card.ConsecutiveFailures,
 		&reviewToken,
+		&card.MasteryStreak,
+		&lastMasteryAt,
 	}
 	if status != nil {
 		arguments = append(arguments, status)
@@ -482,6 +536,12 @@ func scanLearningCardWithStatus(scanner rowScanner, status *domain.LearningStatu
 	}
 	if lastRating.Valid {
 		card.LastRating = domain.ReviewRating(lastRating.String)
+	}
+	if lastMasteryAt.Valid {
+		card.LastMasteryAt, err = parseStoredTime(lastMasteryAt.String, "last mastery date")
+		if err != nil {
+			return LearningCard{}, err
+		}
 	}
 	return card, nil
 }
@@ -514,7 +574,9 @@ func reviewAttemptByToken(
 			lapses_after,
 			fsrs_state_after,
 			remaining_steps_after,
-			consecutive_failures_after
+			consecutive_failures_after,
+			COALESCE(status_before, ''), status_after, reinforcement_count_before,
+			mastery_streak_after, last_mastery_at_after
 		FROM review_attempts
 		WHERE owner_key = ? AND submission_id = ?
 	`, ownerKey, reviewToken)
@@ -523,6 +585,7 @@ func reviewAttemptByToken(
 	var reviewedAt string
 	var previousDueAt string
 	var dueAfter string
+	var lastMasteryAt sql.NullString
 	if err := row.Scan(
 		&attempt.ReviewID,
 		&attempt.ReviewToken,
@@ -545,10 +608,19 @@ func reviewAttemptByToken(
 		&attempt.After.FSRSState,
 		&attempt.After.RemainingSteps,
 		&attempt.After.ConsecutiveFailures,
+		&attempt.statusBefore, &attempt.StatusAfter, &attempt.reinforcementCount,
+		&attempt.After.MasteryStreak, &lastMasteryAt,
 	); err != nil {
 		return ReviewAttempt{}, err
 	}
 
+	if lastMasteryAt.Valid {
+		var err error
+		attempt.After.LastMasteryAt, err = parseStoredTime(lastMasteryAt.String, "review mastery date")
+		if err != nil {
+			return ReviewAttempt{}, err
+		}
+	}
 	var err error
 	attempt.ReviewedAt, err = parseStoredTime(reviewedAt, "review date")
 	if err != nil {
@@ -590,8 +662,10 @@ func insertReviewAttempt(
 			remaining_steps_before, consecutive_failures_before, last_review_at_before,
 			due_after, stability_after, difficulty_after, retrievability_after,
 			scheduled_days_after, repetitions_after, lapses_after, fsrs_state_after,
-			remaining_steps_after, consecutive_failures_after
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			remaining_steps_after, consecutive_failures_after,
+			status_before, status_after, reinforcement_count_before,
+			mastery_streak_before, last_mastery_at_before, mastery_streak_after, last_mastery_at_after
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		attempt.ReviewID,
 		ownerKey,
@@ -624,6 +698,9 @@ func insertReviewAttempt(
 		attempt.After.FSRSState,
 		attempt.After.RemainingSteps,
 		attempt.After.ConsecutiveFailures,
+		attempt.statusBefore, attempt.StatusAfter, attempt.reinforcementCount,
+		before.MasteryStreak, nullableReviewTime(before.LastMasteryAt),
+		attempt.After.MasteryStreak, nullableReviewTime(attempt.After.LastMasteryAt),
 	)
 	if err != nil {
 		return fmt.Errorf("insert review attempt: %w", err)
@@ -647,7 +724,9 @@ func updateLearningCard(ctx context.Context, transaction *sql.Tx, card LearningC
 			last_rating = ?,
 			consecutive_failures = ?,
 			review_token = ?,
-			updated_at = ?
+			updated_at = ?,
+			mastery_streak = ?,
+			last_mastery_at = ?
 		WHERE id = ?
 	`,
 		TimeString(card.DueAt),
@@ -664,6 +743,8 @@ func updateLearningCard(ctx context.Context, transaction *sql.Tx, card LearningC
 		card.ConsecutiveFailures,
 		card.ReviewToken,
 		TimeString(now),
+		card.MasteryStreak,
+		nullableReviewTime(card.LastMasteryAt),
 		card.CardID,
 	)
 	if err != nil {
@@ -685,4 +766,65 @@ func parseStoredTime(value string, label string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("%w: invalid %s", ErrCorruptData, label)
 	}
 	return parsed.UTC(), nil
+}
+
+// Each UTC calendar day supplies at most one mastery success. A failure resets
+// the streak without restoring credit already consumed that day.
+func applyMasteryReview(next *LearningCard, before LearningCard, now time.Time, rating domain.ReviewRating) {
+	next.MasteryStreak, next.LastMasteryAt = before.MasteryStreak, before.LastMasteryAt
+	switch rating {
+	case domain.ReviewRatingAgain, domain.ReviewRatingHard:
+		next.MasteryStreak = 0
+	case domain.ReviewRatingGood, domain.ReviewRatingEasy:
+		if before.LastMasteryAt.IsZero() || now.UTC().Truncate(24*time.Hour).After(before.LastMasteryAt.UTC().Truncate(24*time.Hour)) {
+			next.MasteryStreak++
+			next.LastMasteryAt = now
+		}
+	}
+}
+
+func reviewStatusAfter(before domain.LearningStatus, next LearningCard, rating domain.ReviewRating) domain.LearningStatus {
+	if before == domain.LearningStatusArchived {
+		return before
+	}
+	if rating == domain.ReviewRatingAgain {
+		return domain.LearningStatusLearning
+	}
+	if before == domain.LearningStatusLearned {
+		return before
+	}
+	if (rating == domain.ReviewRatingGood || rating == domain.ReviewRatingEasy) &&
+		next.MasteryStreak >= 5 && next.FSRSState == 2 && next.ScheduledDays >= 21 {
+		return domain.LearningStatusLearned
+	}
+	return domain.LearningStatusLearning
+}
+
+func reinforcementReviewCount(ctx context.Context, transaction *sql.Tx, itemID string) (int, error) {
+	var count int
+	err := transaction.QueryRowContext(ctx, `
+		SELECT COALESCE((SELECT review_count FROM reinforcement_practice WHERE vocabulary_item_id = ?), 0)
+	`, itemID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("read reinforcement correction guard: %w", err)
+	}
+	return count, nil
+}
+
+func updateReviewStatus(ctx context.Context, transaction *sql.Tx, itemID string, status domain.LearningStatus, now time.Time) error {
+	_, err := transaction.ExecContext(ctx, `
+		UPDATE vocabulary_items SET learning_status = ?, updated_at = ?
+		WHERE id = ? AND learning_status <> ?
+	`, status, TimeString(now), itemID, status)
+	if err != nil {
+		return fmt.Errorf("update reviewed vocabulary status: %w", err)
+	}
+	return nil
+}
+
+func nullableReviewTime(at time.Time) any {
+	if at.IsZero() {
+		return nil
+	}
+	return TimeString(at)
 }

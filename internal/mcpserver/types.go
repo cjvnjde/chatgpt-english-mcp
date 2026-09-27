@@ -38,7 +38,7 @@ type VocabularySaveInput struct {
 }
 
 type VocabularyUpdateChanges struct {
-	Status            *domain.LearningStatus    `json:"status,omitempty" jsonschema:"replacement learning status"`
+	Status            *domain.LearningStatus    `json:"status,omitempty" jsonschema:"manual status override; subsequent review feedback manages active statuses automatically; archived stays excluded"`
 	Usefulness        *domain.Usefulness        `json:"usefulness,omitempty" jsonschema:"replacement general-usefulness hint; combined with offline word and expression evidence, not a forced override; omission preserves the existing hint"`
 	PersonalInterest  *domain.PersonalInterest  `json:"personalInterest,omitempty" jsonschema:"replacement personal priority: low reduces selection chance but never excludes; normal resets; high favors learning sooner"`
 	Context           *string                   `json:"context,omitempty" jsonschema:"replacement context or meaning cue; an empty string clears it"`
@@ -123,13 +123,13 @@ type LearningNextInput struct {
 
 type LearningReviewInput struct {
 	ReviewToken string              `json:"reviewToken" jsonschema:"opaque token returned by learning_next"`
-	Rating      domain.ReviewRating `json:"rating" jsonschema:"again means failed; hard, good, and easy indicate increasing recall quality"`
+	Rating      domain.ReviewRating `json:"rating" jsonschema:"first attempt: again failed or materially assisted, hard correct but effortful unaided recall, good flawless independent recall, easy effortless and precise"`
 	Comment     string              `json:"comment,omitempty" jsonschema:"optional note about what was difficult or confused"`
 }
 
 type LearningReviewUpdateInput struct {
 	ReviewToken string              `json:"reviewToken" jsonschema:"original token of the owner's latest accepted learning_review; never the pending next-card or reinforcement token"`
-	Rating      domain.ReviewRating `json:"rating" jsonschema:"corrected grade: again failed, hard effortful or materially hinted, good correct, easy effortless"`
+	Rating      domain.ReviewRating `json:"rating" jsonschema:"corrected first-attempt grade: again failed or materially assisted, hard correct but effortful unaided recall, good flawless independent recall, easy effortless and precise"`
 	Comment     *string             `json:"comment,omitempty" jsonschema:"omit to preserve the saved comment; provide an empty string to clear it"`
 }
 
@@ -137,6 +137,6 @@ type ReinforcementNextInput struct{}
 
 type ReinforcementReviewInput struct {
 	ReviewToken string              `json:"reviewToken" jsonschema:"opaque token returned by reinforcement_next; never a learning_next token"`
-	Rating      domain.ReviewRating `json:"rating" jsonschema:"quality of the first unaided production attempt: again failed, hard effortful or materially hinted, good correct, easy effortless and precise"`
+	Rating      domain.ReviewRating `json:"rating" jsonschema:"first production attempt: again failed, incorrect, or materially assisted; hard correct but effortful unaided use; good flawless independent use; easy effortless and precise"`
 	Comment     string              `json:"comment,omitempty" jsonschema:"factual usage mistake, confusion, hints, or independent recovery to guide future reinforcement"`
 }

@@ -404,12 +404,12 @@ func TestNextLearningItemKeepsEligibleCardsAheadOfFutureAndIsolatesOwners(t *tes
 			}
 			delete(eligible, term)
 		case selection == 3:
-			if term != "near-future" {
-				t.Fatalf("future fallback = %q, want near-future before failed-future", term)
+			if term != "failed-future" {
+				t.Fatalf("future fallback = %q, want nonlearned failed-future before learned near-future", term)
 			}
 		case selection == 4:
-			if term != "failed-future" {
-				t.Fatalf("remaining active card = %q, want failed-future", term)
+			if term != "near-future" {
+				t.Fatalf("remaining active card = %q, want learned near-future", term)
 			}
 		}
 		if selected.Card.ReviewToken == "" {

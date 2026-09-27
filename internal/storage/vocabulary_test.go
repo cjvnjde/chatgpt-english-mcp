@@ -392,10 +392,6 @@ func TestVocabularyMetadataMigrationsPreserveVocabularyAndLearningState(t *testi
 	`, TimeString(now.Add(48*time.Hour)), TimeString(now), TimeString(now)); err != nil {
 		t.Fatal(err)
 	}
-	var reviewColumns string
-	if err := legacy.QueryRowContext(ctx, "SELECT group_concat(name, ', ') FROM pragma_table_info('review_attempts')").Scan(&reviewColumns); err != nil {
-		t.Fatal(err)
-	}
 	projections := map[string]string{
 		"vocabulary_items": `id, owner_key, term, normalized_term, created_at, updated_at, lookup_id,
 			custom_description, learning_status, description_source_json, notes_json, examples_json,
@@ -403,9 +399,17 @@ func TestVocabularyMetadataMigrationsPreserveVocabularyAndLearningState(t *testi
 		"dictionary_snapshots":   "*",
 		"learning_cards":         "*",
 		"learning_presentations": "*",
-		"review_attempts":        reviewColumns,
+		"review_attempts":        "*",
 	}
-	for table := range projections {
+	for table, columns := range projections {
+		if columns == "*" {
+			// Compare every pre-upgrade field without requiring later schema
+			// versions to have exactly the same column count.
+			if err := legacy.QueryRowContext(ctx, "SELECT group_concat(name, ', ') FROM pragma_table_info(?)", table).Scan(&columns); err != nil {
+				t.Fatal(err)
+			}
+			projections[table] = columns
+		}
 		if _, err := legacy.ExecContext(ctx, "CREATE TEMP TABLE before_"+table+" AS SELECT "+projections[table]+" FROM "+table); err != nil {
 			t.Fatal(err)
 		}

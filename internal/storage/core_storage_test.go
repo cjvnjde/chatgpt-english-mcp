@@ -92,7 +92,7 @@ func TestContextSenseMigrationPreservesIdentityAndLearningHistory(t *testing.T) 
 	}
 	beforeID := insertContextMigrationVocabulary(t, legacy, input)
 	initialCard, err := scanLearningCard(legacy.QueryRowContext(ctx,
-		"SELECT "+learningCardColumns+" FROM learning_cards card WHERE vocabulary_item_id = ?", beforeID))
+		"SELECT "+legacyLearningCardColumns+" FROM learning_cards card WHERE vocabulary_item_id = ?", beforeID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,14 @@ func insertLegacyReview(t *testing.T, database *sql.DB, input RecordReviewInput,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := updateLearningCard(context.Background(), transaction, after, now); err != nil {
+	if _, err := transaction.Exec(`
+		UPDATE learning_cards SET due_at = ?, stability = ?, difficulty = ?, retrievability = ?,
+			scheduled_days = ?, repetitions = ?, lapses = ?, fsrs_state = ?, last_review_at = ?,
+			remaining_steps = ?, last_rating = ?, consecutive_failures = ?, review_token = ?, updated_at = ?
+		WHERE id = ?
+	`, TimeString(after.DueAt), after.Stability, after.Difficulty, after.Retrievability,
+		after.ScheduledDays, after.Repetitions, after.Lapses, after.FSRSState, TimeString(after.LastReviewAt),
+		after.RemainingSteps, after.LastRating, after.ConsecutiveFailures, after.ReviewToken, TimeString(now), after.CardID); err != nil {
 		t.Fatal(err)
 	}
 	if err := transaction.Commit(); err != nil {
@@ -280,6 +287,13 @@ func insertLegacyReview(t *testing.T, database *sql.DB, input RecordReviewInput,
 	}
 	return attempt
 }
+
+const legacyLearningCardColumns = `
+	card.id, card.vocabulary_item_id, card.exercise_mode, card.due_at,
+	card.stability, card.difficulty, card.retrievability, card.scheduled_days,
+	card.repetitions, card.lapses, card.fsrs_state, card.last_review_at,
+	card.remaining_steps, card.last_rating, card.consecutive_failures, card.review_token,
+	0, NULL`
 
 // Historical fixtures use their original SQL schema, never current hydration.
 func insertContextMigrationVocabulary(t *testing.T, database *sql.DB, input VocabularyCreate) string {

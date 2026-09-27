@@ -24,6 +24,7 @@ const pools: Record<Suggestion["pool"], string> = {
   new: "New",
   learning: "Learning / relearning",
   review: "Review",
+  learned: "Learned · maintenance",
 };
 export default function Suggestions(props: {
   api: API;
@@ -79,19 +80,19 @@ export default function Suggestions(props: {
             passes. Refresh to see the latest state.
           </p>
           <p class="muted">
-            Due learning and relearning steps take priority. Otherwise, new and
-            due-review shares adapt to how many words need exposure and how
-            long they have gone unshown, with each group kept between 20% and
-            80%. Within each group, weights also account for new-word
-            usefulness, personal interest, review urgency, failures, and
-            exposure age.
+            Due learning and relearning steps take priority. Otherwise, learned
+            words receive a 10%–40% maintenance share based on weighted backlog
+            when active learning words also remain. A sole group receives all
+            selections. The active remainder splits new and nonlearned reviews
+            by exposure need, bounded to 20%–80%. Weights account for interest,
+            new-word usefulness, review urgency, failures, and exposure age.
           </p>
           <p class="muted">
             Recently shown words cool down when alternatives exist. If nothing
-            is new or due, an early review is selected. A 0% chance means the
-            word cannot be selected in this snapshot, not that it will never be
-            suggested. Ties are displayed by due date, then card ID; ranks are
-            not future turn numbers.
+            is new or due, early practice prefers nonlearned words within the
+            same cooldown group. A 0% chance means the word cannot be selected
+            in this snapshot, not that it will never be suggested. Ties are
+            displayed by due date, then card ID; ranks are not future turns.
           </p>
         </details>
       </section>

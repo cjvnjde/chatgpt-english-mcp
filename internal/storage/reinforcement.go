@@ -25,6 +25,7 @@ type ReinforcementPractice struct {
 	Difficulty     float64
 	LastRating     domain.ReviewRating
 	LastReviewedAt time.Time
+	StatusAfter    domain.LearningStatus
 }
 
 type ReinforcementCandidate struct {
@@ -250,6 +251,7 @@ func loadReinforcementSenses(ctx context.Context, transaction *sql.Tx, ownerKey 
 			&sense.practice.LastRating, &reviewedAt, &shownAt, &wordShownAt); err != nil {
 			return nil, fmt.Errorf("scan reinforcement candidate: %w", err)
 		}
+		sense.practice.StatusAfter = domain.LearningStatusLearned
 		if reviewedAt != "" {
 			sense.practice.LastReviewedAt, err = parseStoredTime(reviewedAt, "reinforcement review date")
 			if err != nil {
@@ -320,9 +322,9 @@ func (db *DB) RecordReinforcementReview(ctx context.Context, input RecordReviewI
 	var rating domain.ReviewRating
 	var comment, reviewedAt string
 	err = transaction.QueryRowContext(ctx, `
-		SELECT rating, comment, reviewed_at, review_count_after, difficulty_after
+		SELECT rating, comment, reviewed_at, review_count_after, difficulty_after, status_after
 		FROM reinforcement_attempts WHERE owner_key = ? AND review_token = ?
-	`, input.OwnerKey, input.ReviewToken).Scan(&rating, &comment, &reviewedAt, &practice.ReviewCount, &practice.Difficulty)
+	`, input.OwnerKey, input.ReviewToken).Scan(&rating, &comment, &reviewedAt, &practice.ReviewCount, &practice.Difficulty, &practice.StatusAfter)
 	if err == nil {
 		if rating != input.Rating || comment != input.Comment {
 			return ReinforcementPractice{}, false, ErrIdempotencyConflict
@@ -355,9 +357,11 @@ func (db *DB) RecordReinforcementReview(ctx context.Context, input RecordReviewI
 	practice.ReviewCount++
 	practice.LastRating = input.Rating
 	practice.LastReviewedAt = input.Now().UTC()
+	practice.StatusAfter = domain.LearningStatusLearned
 	switch input.Rating {
 	case domain.ReviewRatingAgain:
 		practice.Difficulty += 1
+		practice.StatusAfter = domain.LearningStatusLearning
 	case domain.ReviewRatingHard:
 		practice.Difficulty += 0.5
 	case domain.ReviewRatingGood:
@@ -372,10 +376,10 @@ func (db *DB) RecordReinforcementReview(ctx context.Context, input RecordReviewI
 	}
 	if _, err := transaction.ExecContext(ctx, `
 		INSERT INTO reinforcement_attempts(id, review_token, owner_key, vocabulary_item_id,
-			rating, comment, reviewed_at, review_count_after, difficulty_after)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			rating, comment, reviewed_at, review_count_after, difficulty_after, status_after)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, input.ReviewToken, input.OwnerKey, itemID, input.Rating, input.Comment,
-		TimeString(practice.LastReviewedAt), practice.ReviewCount, practice.Difficulty); err != nil {
+		TimeString(practice.LastReviewedAt), practice.ReviewCount, practice.Difficulty, practice.StatusAfter); err != nil {
 		return ReinforcementPractice{}, false, fmt.Errorf("insert reinforcement review: %w", err)
 	}
 	if _, err := transaction.ExecContext(ctx, `
@@ -383,6 +387,23 @@ func (db *DB) RecordReinforcementReview(ctx context.Context, input RecordReviewI
 		WHERE vocabulary_item_id = ?
 	`, practice.ReviewCount, practice.Difficulty, practice.LastRating, TimeString(practice.LastReviewedAt), itemID); err != nil {
 		return ReinforcementPractice{}, false, fmt.Errorf("update reinforcement practice: %w", err)
+	}
+	if input.Rating == domain.ReviewRatingAgain || input.Rating == domain.ReviewRatingHard {
+		// Reinforcement does not fabricate FSRS repetitions or change memory
+		// parameters. Failure only brings the next production review forward.
+		_, err := transaction.ExecContext(ctx, `
+			UPDATE learning_cards SET mastery_streak = 0,
+				due_at = CASE WHEN ? = 'again' AND rtrim(due_at, 'Z') > rtrim(?, 'Z') THEN ? ELSE due_at END,
+				updated_at = ?
+			WHERE vocabulary_item_id = ? AND exercise_mode = ?
+		`, input.Rating, TimeString(practice.LastReviewedAt), TimeString(practice.LastReviewedAt),
+			TimeString(practice.LastReviewedAt), itemID, productionExerciseMode)
+		if err != nil {
+			return ReinforcementPractice{}, false, fmt.Errorf("reset reinforcement mastery evidence: %w", err)
+		}
+	}
+	if err := updateReviewStatus(ctx, transaction, itemID, practice.StatusAfter, practice.LastReviewedAt); err != nil {
+		return ReinforcementPractice{}, false, err
 	}
 	if err := transaction.Commit(); err != nil {
 		return ReinforcementPractice{}, false, fmt.Errorf("commit reinforcement review: %w", err)

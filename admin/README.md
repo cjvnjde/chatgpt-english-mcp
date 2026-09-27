@@ -82,13 +82,15 @@ Click a stored-column heading to sort; compact rows and sticky headers help scan
 
 ## Next suggestions
 
-The scheduler uses weighted random selection, not a fixed future queue. **Next suggestions** ranks active production cards by their probability of being chosen on the next `learning_next` call. It shares the actual scheduler's eligibility and weighting logic: cooldown and small-pool relaxation, due learning/relearning precedence, adaptive 20%–80% new/mature-review shares based on unseen and neglected exposure mass, and deterministic early-review fallback.
+The scheduler uses weighted random selection, not a fixed future queue. **Next suggestions** ranks active production cards by actual next-draw probability from the shared scheduler plan: cooldown and small-pool relaxation, nonlearned due learning/relearning precedence, learned maintenance at 10%–40% against active work, and a 20%–80% exposure-based new/nonlearned-review split within the active remainder. A sole group receives 100%. Learned words appear as **Learned · maintenance**. Early fallback prefers nonlearned cards within the same cooldown eligibility group.
 
 Ranks are likelihood ranks, not future turn numbers. The percentage is the actual next-draw probability; probability bars are scaled relative to the highest chance on the current page, with a visible scale legend. Selection reasons and learning groups appear together, and 0%-chance rows are visually separated without changing their server order. Equal probabilities are displayed by due date and then card ID. Cards with no chance in the current snapshot appear after selectable cards with a reason such as cooling down, not due yet, or waiting for due learning steps. Archived items and other owners' cards are excluded.
 
 Opening, refreshing, or paging through the preview does not record a presentation or review, rotate review tokens, or change scheduling state. The view refreshes after an editor save; use **Refresh** after external MCP activity or as time passes. Every request takes a fresh snapshot, so independently loaded pages can shift as learning state changes.
 
 The authenticated `GET /admin/api/suggestions` endpoint accepts `limit` (1–200, default 50) and `offset` (nonnegative, default 0). Its response contains `owner`, `generatedAt`, `total` active cards, `selectable` cards with a positive next-draw chance, `limit`, `offset`, and `rows`. Each row includes `vocabularyItemId`, `cardId`, `term`, optional `context`, `status`, `usefulness`, `dueAt`, optional `lastShownAt`, `pool`, `probability` (0–1), and `reason`. An empty or past-end page returns `rows: []`.
+
+Status changes automatically after review feedback. Five flawless recalls on separate UTC calendar days plus an FSRS Review interval ≥21 days qualify a meaning as learned; repeated same-day successes count once and every hard/again resets mastery. Again also demotes learned meanings, including failures in reinforcement practice. Manual status edits remain explicit overrides; archived vocabulary does not auto-reactivate. Automatic status changes advance the edit revision, so an open stale draft must be refreshed rather than overwrite newer learning progress.
 
 ## SQLite export
 

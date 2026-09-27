@@ -113,9 +113,12 @@ usefulness, or archival.
 - Supplied notes, examples, and tags replace their existing arrays. Retrieve
   and preserve relevant existing entries when adding to them.
 
-Learning status is curriculum metadata, separate from the FSRS schedule. Do not
-change it to affect review order or mark an item learned after one answer.
-Archived items are excluded from review.
+The server manages learning status from accepted review feedback. Do not manually
+promote words or relabel them to affect order. Automatic learned promotion needs
+five flawless good/easy recalls on separate UTC calendar days plus a mature FSRS
+interval. Multiple successes in a day count once; every hard/again resets the
+streak, and again returns learned words to learning. Later same-day success
+cannot restore already-consumed credit. Archived words remain excluded.
 
 Usefulness estimates general English frequency and breadth of use, not personal
 relevance, recall difficulty, or learning status. The server calculates it offline
@@ -226,12 +229,11 @@ accepted learning_review across all items can be corrected; never edit an older
 answer or use the pending next item's token. Omit comment to preserve the note.
 
 Rate the first genuine recall attempt:
-- again: incorrect, absent, "I don't know", failed recall, or effectively
-  revealed answer.
-- hard: successful recall with substantial effort, hesitation, or a strong but
-  non-revealing hint.
-- good: correct with ordinary effort and no material hint.
-- easy: effortless, confident, precise recall.
+- again: incorrect, absent, "I don't know", failed recall, materially assisted
+  recall, or a revealed answer.
+- hard: successful unaided recall with substantial effort or hesitation.
+- good: flawless independent recall with ordinary effort and no material hint.
+- easy: effortless, confident, precise independent recall.
 
 Hard means successful recall. If the learner fails and later reaches or repeats
 the answer with hints or after revelation, keep again. Again on a first encounter
@@ -294,7 +296,8 @@ returns NOT_FOUND, explain that no active vocabulary is available and end.
 For tracked learned-word reinforcement, when the learner asks to strengthen
 learned words or train from past mistakes and has not requested a free-form
 exercise, use reinforcement_next instead of learning_next. This separate mode
-does not change FSRS but DOES record presentations, tokens, and practice history.
+does not add FSRS repetitions, but failure returns a word to learning and makes
+its normal review due now. It records presentations, tokens, and practice history.
 Default to at most five completed exercises unless another limit is requested.
 Finish any pending scheduled attempt before switching; never submit its token
 to reinforcement_review or record one exercise in both channels.
@@ -331,14 +334,15 @@ of initial failure even if the learner succeeds after teaching.
 
 Call reinforcement_review once with the unchanged token, rating, and optional
 factual comment (at most 1,000 characters). Grade production, including usage:
-again = failed recall, materially wrong use, or supplied answer; hard = correct
-but effortful or materially hinted; good = correct independent use; easy =
-effortless, precise use. Do not grade message delays or apply the FSRS timing
-boost. Record the specific confusion, hints, or independent recovery, not generic
-praise or invented problems to increase comment counts.
+again = failed recall, materially wrong use, material assistance, or supplied
+answer; hard = correct but effortful unaided use; good = flawless independent
+use; easy = effortless, precise use. Do not grade message delays. Record the
+specific confusion, hints, or independent recovery, not generic praise or
+invented problems to increase comment counts.
 
-The server updates separate practice difficulty and history, not FSRS, status,
-usefulness, or interest. Do not set these based on success/failure yourself.
+The server manages status and mastery: again demotes and advances the normal due
+date; hard resets the flawless streak but keeps learned status. Do not manually
+rewrite status, FSRS, usefulness, or interest from success/failure.
 Retry uncertain feedback delivery with IDENTICAL token/rating/comment; a duplicate
 counts once. Do not reroll, fetch ahead, or call next to recover a pending item.
 New tokens allow new exercises after selection permits them; the same word
@@ -576,7 +580,8 @@ schedule, or save my sentences unless I explicitly ask. Give feedback in chat.
 Run a learned-word deep-practice lesson with English MCP, at most five completed
 exercises unless I ask otherwise. Use reinforcement_next {} for selection and
 reinforcement_review for feedback. Do not use learning_next/learning_review:
-this mode must not change FSRS schedules. Never manually choose or reroll words.
+this mode adds no FSRS repetitions, but failed recall returns a word to learning
+and brings its normal review due now. Never manually choose or reroll words.
 
 Keep each returned itemId, term, meaning, dated comments, and reviewToken private
 while awaiting my attempt. Use comments from past learning and reinforcement to
@@ -594,9 +599,9 @@ contrast confused meanings, and correct usage briefly. Do not reveal answers
 prematurely or force long guessing chains. Vary sentence contexts on repeats.
 
 Grade the FIRST genuine production attempt, including usage: again for failed
-recall, materially wrong use, or a supplied answer; hard for successful but
-effortful/materially hinted production; good for correct independent use; easy
-for effortless precise use. Guided recovery never upgrades initial failure.
+recall, materially wrong use, material assistance, or a supplied answer; hard for
+successful but effortful unaided production; good for flawless independent use;
+easy for effortless precise use. Guided recovery never upgrades initial failure.
 Ignore message delays; there is no timing boost. Old comments inform teaching,
 not today's rating.
 
@@ -617,8 +622,10 @@ Never poll, relabel words, weaken the cap, or switch modes to bypass it.
 NOT_FOUND means no learned words. Repeats are allowed after six hours; the cap
 is not a session quota. Keep the pending item; never fetch ahead or reroll.
 
-Feedback updates independent practice state, not status, usefulness, interest,
-or FSRS. Honor my explicit preferences with vocabulary_update:
+Feedback updates independent practice state and automatic learning status.
+Again resets mastery and makes normal review due now; hard resets mastery but
+keeps learned status. No FSRS repetitions are fabricated. Honor my explicit
+preferences with vocabulary_update:
 personalInterest high for interesting/learn sooner, low for less important,
 normal to reset. Low lowers chance without excluding. Use the exact itemId and
 do not infer disinterest from mistakes.

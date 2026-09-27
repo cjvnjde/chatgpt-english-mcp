@@ -105,11 +105,28 @@ Saving is idempotent for the same normalized term and selected definition. A dif
 
 Example images are added or removed through the bearer-authenticated admin editor after the vocabulary item exists. They belong to that exact owner/item identity, advance its edit revision, and are deleted with the item. The binary data lives in the same SQLite database as the vocabulary record.
 
-Learning status is learner-managed metadata. FSRS reviews do not automatically change `new` to `learning` or `learned`; all three active statuses remain eligible for selection. Only `archived` removes an item from the review queue.
+Learning status is automatically maintained from accepted feedback, while explicit manual overrides remain available. New vocabulary becomes `learning` after its first graded attempt. Learned vocabulary remains reviewable at lower priority, and a failed recall returns it to learning. `archived` stays manual and excluded; merely presenting or skipping a word never advances mastery.
 
 Usefulness estimates general English value, independently of personal interests, recall difficulty, and learning status. It combines bundled word-frequency and expression evidence with an optional API hint. Changing usefulness changes new-card selection weight, not due-review weight or FSRS review dates. Different saved senses share term-level evidence but can have different hints.
 
 Personal interest records explicit learner priority: high for interesting/learn sooner, low for less important, normal to reset. It multiplies all weighted new/due selection pools and learned-word reinforcement, but never excludes low-interest items or changes FSRS. Existing items default to normal.
+
+### Automatic status and daily mastery
+
+Each saved meaning has `masteryStreak` and the UTC date/time of its last credited flawless recall. A session is a **UTC calendar day**, not a chat conversation or rolling 24-hour window:
+
+- `good` or `easy`: credit at most one recall on a day later than the last credited UTC day.
+- `hard` or `again`: reset the streak on **every** accepted attempt. Keep the last credited day, so good → again → good in one day ends at zero, not one.
+- Same-day successes and identical retries never add credits. Every genuine accepted attempt still updates FSRS; the daily limit applies to mastery credit, not review logging or failure processing.
+- Promote to `learned` only after **at least five qualifying recalls on separate days**, a `good`/`easy` answer, FSRS Review state, and a scheduled interval of **at least 21 days**.
+- A learned word stays learned after successful but effortful `hard` recall; `again` demotes immediately. Reinforcement `again` also resets the streak and brings the normal review due now. Reinforcement success does not manufacture scheduled-recall credits.
+- Correcting the latest review replays its original status and daily evidence; it cannot count the same answer twice. Newer reinforcement feedback for that meaning blocks changed corrections.
+
+Days without practice do not reset the streak; FSRS governs when another review is due. UTC midnight begins a new session even if less than 24 hours has elapsed. A backward clock change cannot add credit for an older day. Daily credit and status are persisted, so restarting the server does not reset them.
+
+Five days is the learner's conservative promotion policy, not a scientifically universal mastery threshold. The [Anki manual](https://docs.ankiweb.net/stats.html#true-retention-table) uses ≥21 days as a mature-card convention and counts the first review per day in its retention statistic. Its [FSRS guidance](https://docs.ankiweb.net/deck-options.html#fsrs) recommends a 90% recall-retention starting point and warns that repeated same-day practice contributes less to long-term retention. This app retains FSRS's 90% target; that probability is **not** the fraction of learned words in a session. The 10%–40% maintenance mix below is an application workload heuristic, not a research-established optimum or a trained reinforcement-learning policy.
+
+Upgrades preserve existing manual statuses and initialize unproven mastery at zero rather than invent historical successes. Manual learned status remains an explicit override, not evidence of five qualifying recalls. A real status change updates vocabulary timestamps and invalidates stale admin drafts via the existing edit-revision trigger.
 
 ### Offline usefulness inference
 
@@ -325,18 +342,18 @@ flowchart TD
     Any -->|"Yes"| Eligible{"Any FSRS-new or due cards?"}
     Eligible -->|"Yes"| Filter["Apply global cooldown across all eligible cards"]
     Filter --> Adapt["Relax oldest exclusions when needed for variety"]
-    Adapt --> Steps{"Any selectable due Learning/Relearning cards?"}
+    Adapt --> Steps{"Any selectable nonlearned due Learning/Relearning cards?"}
     Steps -->|"Yes"| Learning["Choose the learning/relearning pool"]
-    Steps -->|"No"| Both{"Both new and mature-review pools remain?"}
-    Both -->|"Yes"| Mix["Adaptive exposure share, bounded 20%–80% per pool"]
-    Both -->|"No"| Only["Choose the nonempty pool"]
+    Steps -->|"No"| Both{"Learned and active groups both remain?"}
+    Both -->|"Yes"| Mix["Learned 10%–40% by weighted backlog; split active remainder by exposure"]
+    Both -->|"No"| Only["Use the nonempty group; split active new/review by exposure if needed"]
     Learning --> Lottery["Weighted random draw within that pool"]
     Mix --> Lottery
     Only --> Lottery
     Eligible -->|"No"| Future{"Any nonrecent future cards?"}
     Future -->|"Yes"| Restrict["Use only nonrecent future cards"]
     Future -->|"No"| All["Use all future cards"]
-    Restrict --> Oldest["Least recent event ID, then due time, then card ID"]
+    Restrict --> Oldest["Nonlearned first, then least recent event ID, due time, card ID"]
     All --> Oldest
     Commit["Read chosen content and commit a presentation event"]
     Lottery --> Commit
@@ -354,12 +371,13 @@ For current server time $t$:
 
 | Pool | Exact condition |
 |---|---|
-| New | `fsrs_state == 0`, regardless of the stored due date |
-| Due learning/relearning | `fsrs_state` is Learning (1) or Relearning (3), and `due_at <= t` |
-| Due mature review | `fsrs_state` is Review (2), and `due_at <= t` |
+| New | Status is not `learned`, `fsrs_state == 0`, regardless of the stored due date |
+| Due learning/relearning | Status is not `learned`, FSRS Learning (1) or Relearning (3), and `due_at <= t` |
+| Due nonlearned review | Status is not `learned`, FSRS Review (2), and `due_at <= t` |
+| Learned maintenance | Status is `learned`, and the card is FSRS-new or due |
 | Future | `fsrs_state != 0` and `due_at > t` |
 
-“New” here is an **FSRS state**, not the vocabulary `status`. A saved item marked `learned` can still have an unreviewed FSRS-new card; a repeatedly reviewed item can still have learner-managed status `new`. The three active vocabulary statuses receive no different selection weights.
+Vocabulary status chooses learned versus active priority; FSRS state determines timing and the remaining active pools. Manually learned FSRS-new cards belong to the learned pool, not the new-introduction pool. No learned future card is inserted while new/due work exists.
 
 The unit of selection is a **saved meaning/card**, not a spelling. Two meanings of the same term have separate histories and can both be selected. There is no word-level deduplication across their cards.
 
@@ -372,7 +390,7 @@ A card is *recent* only when both conditions hold:
 
 This is not “all words shown in the last 30 minutes,” and the three events need not represent three distinct cards. Once an event falls outside the last three, its card can compete again immediately. New and mature-review cards still receive the softer recency penalty below; learning/relearning steps do not. At exactly 30 minutes the hard cooldown has expired.
 
-Start by removing recent cards globally from the new and both due pools, before testing learning-step priority. Relax this exclusion only when it would prevent useful variety:
+Start by removing recent cards globally from all eligible pools, before testing learning-step priority. Relax this exclusion only when it would prevent useful variety:
 
 - If two or more candidates remain, keep the exclusion unchanged.
 - If exactly one remains and it has never been presented or was last presented at least 30 minutes ago, keep that fresh alternative alone.
@@ -386,22 +404,21 @@ When multiple surviving candidates belong to the chosen pool, this permits a wei
 
 The implementation treats a negative elapsed interval after a backward clock change as recent when its ID is in the window. The recency weight clamps that interval to zero. Review grades are independent of presentation timing.
 
-### 3. Prioritize learning steps, otherwise choose new versus mature review
+### 3. Prioritize learning steps, then reserve learned maintenance
 
-After adaptive cooldown and any relaxation, let $L$, $N$, and $R$ be the remaining due Learning/Relearning, New, and due mature Review pools. Let $E_N=\sum_{i\in N}\rho_i$ and $E_R=\sum_{i\in R}\rho_i$, using the exposure multiplier defined below.
+After cooldown and relaxation, any selectable **nonlearned** due Learning/Relearning steps receive the entire draw. If all such steps remain excluded, other cards supply spacing; a future learning step never blocks eligible work.
 
-| Nonempty eligible pools | Pool probability |
-|---|---|
-| Learning/relearning, with or without other pools | Learning/relearning: 1 |
-| No learning/relearning; new and mature review | New: $\operatorname{clamp}(E_N/(E_N+E_R),0.2,0.8)$; mature review: the remainder |
-| New only | New: 1 |
-| Mature review only | Mature review: 1 |
+Otherwise let $W_K$ be the total selectable learned-card weight and $W_A$ the total active new/nonlearned-review weight. When both groups exist:
 
-Selectable due learning steps pause both new introductions and mature reviews. This priority never bypasses cooldown: if all due learning/relearning cards remain excluded, other eligible cards supply spacing. A learning step that is not yet due does not pause either pool.
+$$
+S_K=\operatorname{clamp}\left(\frac{W_K}{9W_A+W_K},0.10,0.40\right)
+$$
 
-The adaptive share responds only to pool size and time since presentation. Usefulness, personal interest, due urgency, and failures still affect the lottery within their pool, not the pool split. The 20% floor keeps a small pool reachable; the 80% ceiling prevents either new material or due reviews from starving the other.
+The learned group receives $S_K$ and the active group $1-S_K$. Equal weighted workloads yield 10% learned; a 3:1 learned-to-active workload yields 25%; a large learned backlog caps at 40%, preserving a majority for acquisition. A sole learned or active group receives 100%. These weights include bounded urgency, failures, exposure, and interest, so neglected learned material can gain share without dominating active work.
 
-For example, 85 never-presented new cards and 15 never-presented mature reviews have an unclamped new share of $85/(85+15)=85\%$, so New receives the 80% ceiling instead of a fixed 20%. This is a random per-call probability, not a quota or per-word repetition limit. Presentations and reviews can change the next call's eligible pools, exposure mass, and weights.
+Within the active remainder, let $E_N=\sum_{i\in N}\rho_i$ for FSRS-new cards and $E_R=\sum_{i\in R}\rho_i$ for nonlearned Review-state cards. If both exist, new receives $\operatorname{clamp}(E_N/(E_N+E_R),0.2,0.8)$ of that remainder and review receives the rest; a sole active pool receives all of it. This inner exposure split is independent of usefulness, interest, and failures.
+
+For example, without learned candidates or selectable steps, 85 equally unpresented new cards and 15 nonlearned reviews allocate 80% to new. Adding an equal weighted learned workload reserves 10% for learned, leaving 72% new and 18% nonlearned review. These are conditional next-call probabilities, not guaranteed session quotas. Due learned words retain positive probability outside step precedence and cooldown, but no fixed number of random calls guarantees any particular word.
 
 ### 4. Calculate each card's weight
 
@@ -420,7 +437,7 @@ $$
 
 These categories are the **calculated, persisted results** of usefulness inference, not necessarily the tutor's submitted hints. They weight only FSRS-new cards, never due learning steps or mature reviews.
 
-**Personal-interest multiplier $I_i$:** low = 0.5, normal = 1, high = 2. Unlike general usefulness, it multiplies all three weighted pools; it cannot bypass cooldown or pool priority.
+**Personal-interest multiplier $I_i$:** low = 0.5, normal = 1, high = 2. Unlike general usefulness, it multiplies all four weighted pools; it cannot bypass cooldown or pool priority.
 
 **Presentation exposure multiplier $\rho_i$:**
 
@@ -455,8 +472,8 @@ The adaptive cooldown and this multiplier are separate mechanisms. A new or matu
 $$
 H_i =
 \begin{cases}
-1/6 & \text{Learning or Relearning}\\
-\max(24\,\text{scheduledDays}_i,24) & \text{Review}
+1/6 & \text{nonlearned Learning or Relearning}\\
+\max(24\,\text{scheduledDays}_i,24) & \text{Review or learned maintenance}
 \end{cases}
 \qquad
 A_i = 1 + \min\left(\frac{\max(\text{overdueHours}_i,0)}{H_i},4\right)
@@ -484,6 +501,8 @@ W_i^{\text{review}} = A_i F_i \rho_i I_i
 W_i^{\text{learning}} = A_i F_i I_i
 $$
 
+Learned FSRS-new cards use the new-card weight but enter the learned pool. Other learned cards use the review weight and day-scale urgency, even when their manual status differs from FSRS state.
+
 The possible ranges are 0.0625–16 for new-card weights, 0.125–110 for mature-review weights, and 0.5–27.5 for learning/relearning weights, before considering cooldown exclusion. Weights are relative lottery mass, not percentages, mastery scores, or FSRS recall probabilities. Worked examples below assume normal personal interest.
 
 ### 5. Draw within the chosen pool
@@ -494,22 +513,13 @@ $$
 \Pr(i\mid P)=\frac{W_i}{\sum_{j\in P}W_j}
 $$
 
-When no learning/relearning cards are selectable and both other pools survive cooldown, define:
-
-$$
-S_N=\operatorname{clamp}\left(
-\frac{\sum_{j\in N}\rho_j}{\sum_{j\in N}\rho_j+\sum_{j\in R}\rho_j},
-0.2,0.8\right),
-\qquad S_R=1-S_N
-$$
-
-Then $\Pr(i)=S_NW_i/\sum_{j\in N}W_j$ for $i\in N$, and $\Pr(i)=S_RW_i/\sum_{j\in R}W_j$ for $i\in R$. Here $N$ and $R$ contain candidates after adaptive cooldown. If $L$ is nonempty, its pool probability is 1 and all new/mature-review cards have probability zero for that call. An excluded card always has probability zero. A sole new or mature-review pool also has pool probability 1.
+The global probability is the selected pool's share times this conditional weight. With no selectable steps, let $S_K$ be the learned share above (zero without learned candidates, one for learned-only), and let $S_N$ be the inner active new share. Then new has global share $(1-S_K)S_N$, nonlearned review has $(1-S_K)(1-S_N)$, and learned has $S_K$. A sole active pool receives the full active remainder. Selectable nonlearned due steps instead have share one and pause every other pool. Cooldown-excluded or not-yet-due cards have zero probability for that call.
 
 The implementation draws a pseudorandom value in $[0,1)$, multiplies it by the pool's total weight, and walks cumulative card weights until that draw is covered. There is no persistent shuffled queue or per-word quota. Every card in the chosen pool has positive weight, but the lottery does not guarantee that a particular card appears within a fixed number of calls.
 
 #### Worked example: weights are not global priorities
 
-Assume these mature Review-state cards are due and outside the hard cooldown, with no selectable learning/relearning steps:
+Assume these **nonlearned** Review-state cards are due and outside the hard cooldown, with no selectable learning/relearning steps or learned maintenance candidates:
 
 | Card | Overdue / scheduled interval | Failures / lapses | Last presented | Usefulness | Weight |
 |---|---|---|---|---|---|
@@ -538,14 +548,14 @@ If both steps are instead excluded by the global cooldown and one never-presente
 When there are **no new or due cards at all**:
 
 1. Restrict to nonrecent future cards if any exist; otherwise use all future cards.
-2. Choose the least recently presented by latest event ID, treating never-presented cards as ID 0.
-3. Break equal exposure ties by earliest due time, then ascending card ID.
+2. Prefer nonlearned status over learned maintenance.
+3. Within that status-priority group, choose the least recent presentation event ID (never presented = 0), then earliest due time, then card ID.
 
 There is no weighted lottery here. Usefulness, personal interest, urgency, failure counts, and soft recency weights do not change this ordering. Due time is only a tie-breaker, not the primary priority.
 
-For example, suppose two nonrecent future cards are due in one minute and one day, with latest presentation IDs 100 and 20 respectively. The one-day card wins because it was presented less recently, regardless of usefulness or failures. If neither was ever presented, both have ID 0 and the one-minute card wins the due-time tie-breaker. If all future cards are recent, the same event-ID/due-time/card-ID ordering applies across all of them.
+For example, among two nonrecent future cards in the same status group, due in one minute and one day with latest presentation IDs 100 and 20, the one-day card wins because it was less recently presented. If neither was presented, the one-minute card wins the due-time tie. A nonlearned card outranks a learned card within the same cooldown eligibility group.
 
-Each issuance moves the selected card to the newest exposure position. A static future-only pool therefore rotates through every card rather than looping over a nearest-due subset. This guarantee assumes the pool stays future-only and unchanged as presentations accumulate; accepted reviews, new saves, or cards becoming due can change the path.
+Each issuance moves the selected card to the newest exposure position. Rotation applies within the preferred status group; a future learned word can wait while nonlearned future cards remain. This fallback is offered as optional early practice, not a substitute for due learned maintenance.
 
 The API therefore permits **early reviews** and still records an early presentation. It does not wait until a due date, enforce a daily/session quota, or end the lesson automatically. The normal tutor workflow ends on `reason: "early"` without asking or recording an answer unless the learner explicitly opts into early practice; there is no separate API mode.
 
@@ -588,7 +598,7 @@ At least four distinct learned words must remain outside cooldown. No learned vo
 
 Each successful next call records a presentation and a fresh independent `reviewToken`. It changes reinforcement recency, not status or FSRS. `reinforcement_review` accepts that token with `again`, `hard`, `good`, or `easy` and an optional factual comment. Difficulty changes by +1/+0.5/−0.5/−1 respectively, clamped to 0–4; review count, last rating, and timestamp persist separately. Independent success reduces both the difficulty multiplier and its share of the comment bonus without deleting history. Answer latency does not change the grade.
 
-Record the first genuine production attempt including usage; guided success cannot erase initial failure. An identical retry returns the original saved practice result, without another update; a conflicting payload fails. Normal and reinforcement tokens are not interchangeable. Status changes/deletion prevent new feedback, but already accepted review results remain idempotently retrievable. These operations never revise FSRS, usefulness, personal interest, or learner-managed status. Use `vocabulary_update` explicitly to express personal preferences.
+Record the first genuine production attempt including usage; guided success cannot erase initial failure. Identical retries return the original saved result without another update, even after demotion; conflicting payloads fail. Normal and reinforcement tokens are not interchangeable. New feedback requires a still-learned item. **Again** changes that meaning to learning, resets mastery without refunding consumed daily credit, and advances a future production due date to now. **Hard** resets mastery but retains learned status. Success does not add mastery credits. These atomic changes never fabricate an FSRS repetition or alter its memory parameters/pending token. Usefulness and personal interest remain explicit preferences, not failure signals.
 
 See [tool inputs and outputs](tools.md#reinforcement_next) and the [standalone reinforcement prompt](prompts.md#learned-word-reinforcement). Raw tool results include the answer: hidden-word practice depends on the tutor and host not exposing that private context.
 
@@ -616,10 +626,10 @@ sequenceDiagram
     else First submission with a valid active-card token
         DB->>Schedule: Card, transaction review time, submitted rating
         Schedule-->>DB: Effective rating and updated scheduling state
-        DB->>DB: Save attempt, update card, rotate token, commit
+        DB->>DB: Save attempt and daily mastery, update card/status, rotate token, commit
         DB-->>MCP: New saved result, duplicate = false
     end
-    MCP-->>Tutor: nextReviewAt, effectiveRating, troublesome
+    MCP-->>Tutor: nextReviewAt, effectiveRating, status, masteryStreak, troublesome
 ```
 
 The service trims the token and comment and validates the rating. After acquiring its write transaction, persistence checks for an existing attempt **before** resolving the current card or capturing the new review's UTC timestamp:
@@ -635,6 +645,8 @@ Consequently, a valid duplicate can still return its original result after later
 A due date is not an acceptance gate: a valid active-card token can be reviewed early. A presentation is also not a storage-level prerequisite, although the normal tutor workflow gets the token from `learning_next`. Neither missing nor repeated presentation history changes the grade.
 
 `learning_review_update` acquires the same writer lock, resolves the owner's original token, and checks that its attempt has the greatest insertion row ID for that owner **before** considering duplicate corrections. It requires an existing, non-archived card. Scheduling starts from the stored pre-review state at the original review time, not from the current card or correction time. The saved result and card update commit together, preserving the pending token and attempt count. Identical corrections replay without scheduling; older attempts are always rejected. Legacy pre-review clocks are restored only from recorded predecessor reviews with matching repetition counts; missing history causes a safe failure, never an invented timestamp.
+
+Corrections also restore and replay the original mastery streak, last credited UTC day, and status. Changed corrections are rejected after newer reinforcement feedback for the same meaning, detected by a persisted review-count snapshot rather than timestamps. Identical corrections return their saved result without undoing later reinforcement. Legacy reviews lacking status evidence preserve current manual status and do not fabricate mastery.
 
 ### Submitted rating versus effective rating
 
@@ -671,6 +683,7 @@ The selector is random; this scheduler is deterministic for the same card state,
 | Repetitions | Number of accepted reviews; duplicate retries do not increment it |
 | Lapses | Number of `again` reviews whose **previous** FSRS state was `Review` |
 | Consecutive failures | Number of consecutive **submitted** `again` ratings |
+| Mastery streak / last mastery time | Separate promotion evidence: flawless daily recall count and last credited UTC day; not FSRS memory-model inputs |
 
 New cards start with zero-valued memory/counters, FSRS `New` state, and a due date at creation. Every accepted review updates memory, increments repetitions, and sets the last review time to now—even in minute-scale learning.
 
@@ -963,8 +976,8 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 |---|---|---|---|
 | Owner namespace | Determines whose cards/history are eligible | Scopes valid review tokens/history | Scopes saved vocabulary, not corpus scores |
 | Archive/delete | Removes eligibility | Blocks new reviews / removes the card | History remains; reactivation preserves an existing card |
-| Active status: `new`, `learning`, `learned` | No preference among these values | No different formula; not changed by reviews | Learner-managed metadata |
-| FSRS state | Splits new, due learning/relearning, due mature review, and future pools; selectable due learning steps take priority | Chooses initialization/step/review behavior | No usefulness effect |
+| Active status: `new`, `learning`, `learned` | Learned maintenance gets lower adaptive share; active cards retain acquisition priority | Same FSRS formula; accepted feedback updates status and daily mastery | Manual overrides remain available |
+| FSRS state | Splits active new, due learning/relearning, review, and future pools; learned status chooses maintenance pool | Chooses initialization/step/review behavior | No usefulness effect |
 | Due date and scheduled interval | Eligibility and urgency; due time breaks future exposure ties | Outputs of scheduling; old values are not memory-equation multipliers | No usefulness effect |
 | Stored stability, difficulty, last-review time | No direct lottery input; previous schedules affect eligibility/urgency | Core memory inputs | No usefulness effect |
 | Effective usefulness | Multiplies only new-card weights by 0.5/1/2 | No direct effect | Derived from term evidence and hint |
@@ -974,7 +987,7 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 | Consecutive failures and lapses | Bounded extra due-card weight; troublesome label | Not direct equation multipliers; rating/state update counters | No usefulness effect |
 | Latest presentation and recent event IDs | Global adaptive cooldown; new/mature-review recency weight; future exposure ordering | No direct scheduling or grading effect | Issuance is not proof of human visibility |
 | Repeated `learning_next` calls | Change future selection history, even without an answer | Do not reschedule or change grades | New presentation event each time |
-| Rating | Indirectly through updated due/state/failures | Effective grade is a direct input | Server does not inspect answer text |
+| Rating | Through updated status, due/state/failures; Again can return learned to active acquisition | Effective grade is a direct input on every accepted attempt | Good/easy mastery credit at most once per UTC day; every hard/again resets it |
 | Answer latency | No separate speed-based selection score | Does not change the grade; FSRS still measures elapsed time since the previous review | Includes model/delivery time, not pure recall time |
 | Tags, notes, personal examples | Not filters or weights for `learning_next` | No direct effect | Can choose a fallback definition by word overlap |
 | Custom description and selected sense | Do not change lottery weight | No direct effect | Control returned definition/example; sense identity gives an independent card |
@@ -996,13 +1009,13 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 - **Skipping an answer is not a failed review.** Presentation affects selection history, but only a submitted review updates FSRS and failure counters.
 - **Waiting hours is not graded as hesitation.** Answer latency never changes the submitted grade; answer quality controls scheduling.
 - **Completing all due cards does not make `learning_next` empty.** It can return new items or early reviews until the tutor/learner stops.
-- **Learning-step priority and the adaptive new/review mix are not lesson quotas.** Selectable due learning steps pause new introductions and mature reviews; otherwise exposure mass sets both remaining pool shares within 20%–80% bounds. There is no backend daily quota, target session length, or guarantee that all due cards will be covered.
+- **Daily mastery and review quotas are different.** Success earns at most one mastery credit per UTC day, while every genuine graded attempt is recorded. Due steps take priority; otherwise learned maintenance receives 10%–40% against active work, whose remaining new/review split uses 20%–80% exposure bounds. There is no enforced lesson length or guarantee that every due card is covered.
 
 ### Which parameters can a caller change?
 
 Tool callers can save/archive items, update usefulness hints, personal interest and metadata, submit scheduled or reinforcement ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
 
-Learning-step priority, the adaptive exposure-based 20%–80% new/mature-review bounds, adaptive last-three/30-minute cooldown, 30-day presented-card exposure growth, never-presented boost, 10-minute learning urgency denominator, weight caps, and usefulness thresholds are source-level policies. FSRS settings are dependency defaults selected by the service. None is currently exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
+The five-day mastery requirement, 21-day interval gate, 10%–40% learned share, inner 20%–80% new/nonlearned-review bounds, adaptive last-three/30-minute cooldown, exposure growth, learning urgency denominator, and weight caps are source-level policies. FSRS settings remain dependency defaults. None is exposed as an environment setting; [configuration](configuration.md) controls deployment, ownership, connections, and integrations instead.
 
 ## Implementation map
 

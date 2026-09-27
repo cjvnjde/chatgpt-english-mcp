@@ -20,6 +20,7 @@ type ReinforcementNextResult struct {
 	ItemID               string                  `json:"itemId"`
 	ReviewToken          string                  `json:"reviewToken"`
 	Term                 string                  `json:"term"`
+	Status               domain.LearningStatus   `json:"status"`
 	Usefulness           domain.Usefulness       `json:"usefulness"`
 	PersonalInterest     domain.PersonalInterest `json:"personalInterest"`
 	Definition           string                  `json:"definition,omitempty"`
@@ -35,6 +36,7 @@ type ReinforcementNextResult struct {
 type ReinforcementReviewResult struct {
 	Recorded  bool                  `json:"recorded"`
 	Duplicate bool                  `json:"duplicate"`
+	Status    domain.LearningStatus `json:"status"`
 	Practice  ReinforcementPractice `json:"practice"`
 }
 
@@ -58,6 +60,7 @@ func (service *Service) ReinforcementNext(ctx context.Context) (ReinforcementNex
 		ItemID:               candidate.Vocabulary.ItemID,
 		ReviewToken:          candidate.ReviewToken,
 		Term:                 candidate.Vocabulary.Term,
+		Status:               candidate.Vocabulary.Status,
 		Usefulness:           candidate.Vocabulary.Usefulness,
 		PersonalInterest:     candidate.Vocabulary.PersonalInterest,
 		Definition:           definition,
@@ -95,7 +98,7 @@ func (service *Service) ReinforcementReview(ctx context.Context, options RecordO
 	if err != nil {
 		return ReinforcementReviewResult{}, apperr.Wrap(apperr.InternalError, "failed to record reinforcement review", err)
 	}
-	return ReinforcementReviewResult{Recorded: true, Duplicate: duplicate, Practice: reinforcementPractice(practice)}, nil
+	return ReinforcementReviewResult{Recorded: true, Duplicate: duplicate, Status: practice.StatusAfter, Practice: reinforcementPractice(practice)}, nil
 }
 
 func reinforcementPractice(practice storage.ReinforcementPractice) ReinforcementPractice {

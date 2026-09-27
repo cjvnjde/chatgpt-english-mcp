@@ -114,7 +114,7 @@ func (db *DB) AdminSuggestions(ctx context.Context, owner string, limit, offset 
 	positions := make(map[string]int, len(selected))
 	args := make([]any, 0, len(selected)+2)
 	args = append(args, owner, productionExerciseMode)
-	poolNames := [3]string{"new", "learning", "review"}
+	poolNames := [4]string{"new", "learning", "review", "learned"}
 	for index, ranked := range selected {
 		card := ranked.card
 		row := &page.Rows[index]
