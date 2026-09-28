@@ -1,0 +1,9 @@
+{
+  "name": "english-dictionary-chrome",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../scripts/build-chrome-extension.mjs",
+    "test": "node --test tests/*.test.js"
+  }
+}

@@ -83,6 +83,24 @@ The sidebar-only `SELECTION_CLEAR` command checks the conversation ID, invalidat
 Focused regressions cover per-mode privacy migration, prompt persistence, provider-default effort omission, unsupported-effort errors, context recapture/source identity, streaming before completion, stale chunks/captures, truncated-stream partial delivery, request setting snapshots, concise editable save drafts, explicit-save consent, and existing transport boundaries. Actual Firefox smoke verification uses a controlled local SSE provider to hold the final chunk, inspect each mode's request, interrupt/retry Quick, and exercise native-sidebar transitions with opposite context sizes. Verify prompt edits/resets survive reload and Quick remains MCP-free, including when it shares Deep's model. Real saving verification uses a **disposable** local MCP database; never use production learner data for a write-path smoke test.
 
 
+## Chrome extension
+
+`chrome-extension/` supplies the Manifest V3 compatibility layer, module service-worker entry point, installation instructions, and Chrome-specific regression tests. Runtime UI, selection capture, prompts, transports, settings, and vocabulary-save logic are copied from `firefox-extension/` at build time; change those shared files to update both browsers.
+
+```sh
+npm run build --prefix chrome-extension
+npm test --prefix chrome-extension
+npm test --prefix firefox-extension
+```
+
+The build needs Node and the `zip` command, with no npm dependencies. It emits `chrome-extension/dist/english-dictionary-chrome/` for **Load unpacked**, and `chrome-extension/dist/english-dictionary-chrome-VERSION.zip` for distribution. The version comes from `firefox-extension/manifest.json`; increment it for a new release. Only an explicit runtime file allowlist is packaged. The Chrome manifest requires Chrome 142+ for native panel open/close events and shortcut toggling.
+
+The adapter translates promise-returning message listeners into Chrome's callback response protocol, maps toolbar/context-menu APIs, and opens the panel synchronously within user gestures. Background listeners register before asynchronous settings/session reads. Completed conversations, pending selections, and focused-frame identities survive idle worker suspension in `storage.session` (not disk-backed local storage). While a panel or request is active, periodic extension API calls keep the worker available. Native open/close events control routing because Chrome may retain a hidden panel document and its port. Interrupted work is reported on recovery; saves are never automatically replayed. Chrome uses native system colors where Firefox-specific theme APIs are unavailable. For HTTP loopback endpoints, use `localhost` or `127.0.0.1`; Chromium rejects IPv6 literal sources in CSP.
+
+CI builds, tests, and uploads the Chrome ZIP for each push/PR. `.github/workflows/chrome-release.yml` separately publishes `chrome-vVERSION` releases on relevant `main` pushes or manual dispatch, using only `GITHUB_TOKEN` with `contents: write`. No store credentials are required. The release contains a ZIP, checksum, and manual-install instructions. Reruns update the assets for that version. The Firefox signing workflow remains independent.
+
+Smoke-test using a disposable browser profile and local AI/MCP endpoints: load the unpacked folder, set options, select text including an iframe, check Quick with the panel closed and Deep when open, open via context menu/toolbar/shortcut, follow up, prepare/edit/confirm a save, and close/reopen the panel. Stop the idle worker and reopen the panel to check session recovery. Use a disposable vocabulary database for write verification.
+
 ## Offline frequency datasets
 
 `internal/usefulness` embeds both complete English word-rank lists in a compressed binary table. The word-rank bundle covers 1,737,503 distinct normalized terms and adds approximately 15.8 MB to the executable, decoding to approximately 36.1 MB of immutable data. Separate expression assets provide Wiktionary, MAGPIE, and WordNet evidence and matching indexes. There is no runtime Python dependency or source download.

@@ -1,0 +1,24 @@
+English Dictionary for Chrome 142+
+
+1. Extract the downloaded english-dictionary-chrome-VERSION.zip into a permanent folder.
+2. Open chrome://extensions and enable Developer mode (top right).
+3. Click Load unpacked and select the extracted english-dictionary-chrome folder
+   containing manifest.json. Keep that folder: Chrome loads the extension from it.
+4. Pin English Dictionary using Chrome's Extensions menu, then click its icon.
+5. To keep the panel on the right, open Chrome Settings > Appearance, search for
+   "side panel", and choose the right side. Chrome controls the panel placement.
+6. Open the panel's gear to configure your AI URL, API key, models, MCP URL and token.
+   Use Test AI and Test MCP in Settings to check the connections.
+
+Select text on a web page and click the dictionary icon for a quick explanation.
+With the panel open, the same action sends the selection to the deep explanation.
+Right-click selected text > Explain in sidebar opens the panel directly.
+Alt+Shift+E toggles the panel. Change shortcuts at chrome://extensions/shortcuts.
+The Save icon prepares an editable vocabulary draft; confirm it to write to MCP.
+On protected pages (chrome://, Chrome Web Store, built-in PDF viewer), type in the panel.
+
+To update: extract the next release, replace the files in the same permanent folder,
+then click Reload on the extension's card at chrome://extensions. Settings are retained
+when updating the same installation. There is no Chrome Web Store or automatic updater.
+Do not install GitHub's automatically generated source-code archives or rename the ZIP
+to .crx. The release ZIP is a ready-to-load unpacked extension, not a signed installer.

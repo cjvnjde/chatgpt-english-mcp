@@ -100,3 +100,23 @@ jobs:
         run: npm run lint
       - name: Package unsigned extension
         run: npm run build
+
+  chrome-extension:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '26.8.2'
+      - name: Build unpacked Chrome extension and release ZIP
+        run: npm run build --prefix chrome-extension
+      - name: Test Chrome compatibility and package
+        run: npm test --prefix chrome-extension
+      - name: Upload Chrome installation artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: chrome-extension/dist/*.zip
+          archive: false
+          if-no-files-found: error

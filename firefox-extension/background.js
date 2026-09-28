@@ -3,7 +3,28 @@ import { completeChat } from './api.js';
 import { MCPClient } from './mcp.js';
 import { HOST_SYSTEM_GUARD, SAVE_DRAFT_SYSTEM_PROMPT } from './prompt.js';
 
-let settings = await loadSettings();
+let settings;
+// Register listeners synchronously so a cold Manifest V3 worker receives its wake-up event.
+const ready = loadSettings().then(async value => {
+  settings = value;
+  if (!browser.isChrome) return;
+  const stored = await browser.storage.session.get(['conversations', 'focusedFrames']);
+  for (const [tabId, frameId] of stored.focusedFrames || []) focusedFrames.set(tabId, frameId);
+  for (const [windowId, snapshot] of Object.entries(stored.conversations || {})) {
+    const record = recordFor(Number(windowId));
+    Object.assign(record, snapshot);
+    record.state.settings = configuration();
+    if (record.state.status === 'loading') {
+      record.state.status = 'error';
+      record.state.error = 'The browser interrupted this answer. Send your question again.';
+    }
+    if (record.state.lookupStatus === 'loading') record.state.lookupStatus = 'unavailable';
+    if (['preparing', 'saving'].includes(record.state.saveStatus)) {
+      record.state.saveStatus = 'error';
+      record.state.saveError = 'The browser interrupted this operation. Check your vocabulary before retrying a save.';
+    }
+  }
+});
 const windows = new Map();
 const focusedFrames = new Map();
 const privateSelectionMessage = 'Editable fields are excluded. Type a word in the sidebar instead.';
@@ -26,13 +47,34 @@ function blankState(revision = 0) {
 }
 
 function windowRecord(windowId) {
-  if (!Number.isInteger(windowId) || windowId < 0) throw new Error('No Firefox window is available.');
+  if (!Number.isInteger(windowId) || windowId < 0) throw new Error('No browser window is available.');
   if (!windows.has(windowId)) windows.set(windowId, { state: blankState(), controller: null, quickController: null, saveController: null, selectionRequest: 0, ports: new Set(), pendingDeep: false, needsDeepCapture: false, source: null, saveSense: null });
   return windows.get(windowId);
 }
 
+let persistTimer;
+function persistConversations() {
+  if (!browser.isChrome || persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = undefined;
+    const conversations = Object.fromEntries([...windows].map(([id, record]) => [id, {
+      state: record.state, source: record.source, pendingDeep: record.pendingDeep,
+      needsDeepCapture: record.needsDeepCapture, saveSense: record.saveSense,
+    }]));
+    void browser.storage.session.set({ conversations, focusedFrames: [...focusedFrames] }).catch(console.error);
+  }, 100);
+}
+
+// Only keep the worker awake while a panel or an operation needs it.
+if (browser.isChrome) setInterval(() => {
+  if ([...windows.values()].some(record => (browser.isChrome ? record.panelOpen : record.ports.size) || record.controller || record.quickController || record.saveController)) {
+    void browser.runtime.getPlatformInfo();
+  }
+}, 20000);
+
 function publish(record) {
   record.state.revision++;
+  persistConversations();
   browser.runtime.sendMessage({ type: 'STATE_UPDATED', windowId: record.windowId, state: record.state }).catch(() => {});
 }
 
@@ -276,6 +318,22 @@ async function dismissQuick(record) {
   }
 }
 
+async function sidebarIsOpen(record) {
+  // Chrome can keep a hidden panel document (and its port) alive after closing it.
+  if (!browser.isChrome && record.ports.size) return true;
+  return browser.sidebarAction.isOpen({ windowId: record.windowId });
+}
+
+function suspendDeep(record) {
+  if (!record.controller) return;
+  record.controller.abort(); record.controller = null;
+  record.pendingDeep = true;
+  if (record.state.messages.at(-1)?.role === 'assistant') record.state.messages.pop();
+  if (record.state.lookupStatus === 'loading') record.state.lookupStatus = 'idle';
+  record.state.status = 'idle';
+  publish(record);
+}
+
 function startDeep(record) {
   void dismissQuick(record);
   if (!record.pendingDeep || !record.state.selection) return;
@@ -306,7 +364,7 @@ REFERENCE DATA: ${JSON.stringify({ selection: state.selection })}` },
       onDelta(text) {
         updates = updates.then(async () => {
           if (!current()) return;
-          const open = record.ports.size || await browser.sidebarAction.isOpen({ windowId: record.windowId });
+          const open = await sidebarIsOpen(record);
           if (!current()) return;
           if (open) { startDeep(record); return; }
           await browser.tabs.sendMessage(source.tabId, { type: 'QUICK_UPDATED', requestId, text }, { frameId: source.frameId }).catch(() => {});
@@ -315,7 +373,7 @@ REFERENCE DATA: ${JSON.stringify({ selection: state.selection })}` },
     });
     await updates;
     if (!current()) return { ok: true, mode: 'canceled' };
-    const open = record.ports.size || await browser.sidebarAction.isOpen({ windowId: record.windowId });
+    const open = await sidebarIsOpen(record);
     if (!current()) return { ok: true, mode: 'canceled' };
     if (open) {
       startDeep(record);
@@ -345,22 +403,22 @@ async function explainFromTab(tab, frameId, useCachedSelection = false, fallback
     publish(record);
   }
   record.pendingDeep = false;
-  const initiallyOpen = record.ports.size || await browser.sidebarAction.isOpen({ windowId: tab.windowId });
+  const initiallyOpen = await sidebarIsOpen(record);
   if (request !== record.selectionRequest) return { ok: true, mode: 'canceled' };
   const mode = initiallyOpen ? settings.contextMode : settings.quickContextMode;
   let captured;
   try {
     captured = await browser.tabs.sendMessage(tab.id, { type: 'CAPTURE_SELECTION', useCachedSelection, contextMode: mode }, { frameId });
-  } catch { /* Firefox-protected pages do not permit content scripts. */ }
+  } catch { /* Browser-protected pages do not permit content scripts. */ }
   if (request !== record.selectionRequest) return { ok: true, mode: 'canceled' };
   if (captured?.privacyDenied) throw new Error(privateSelectionMessage);
   if (captured && fallbackTerm && normalizeTerm(captured.term) !== normalizeTerm(fallbackTerm)) captured = null;
   if (!captured && fallbackTerm) captured = { term: fallbackTerm, context: '', title: '', url: '' };
-  if (!captured) throw new Error('Select text on a regular web page, or type a word in the sidebar. Firefox blocks extensions on some pages, including its PDF viewer.');
+  if (!captured) throw new Error('Select text on a regular web page, or type a word in the sidebar. The browser blocks extensions on some pages, including its PDF viewer.');
   const source = { tabId: tab.id, frameId, sourceId: captured.sourceId };
   beginSelection(record, captured, mode, source, !initiallyOpen);
   const state = record.state;
-  const open = record.ports.size || await browser.sidebarAction.isOpen({ windowId: tab.windowId });
+  const open = await sidebarIsOpen(record);
   if (request !== record.selectionRequest || record.state !== state) return { ok: true, mode: 'canceled' };
   if (open) {
     startDeep(record);
@@ -525,11 +583,13 @@ function isPage(sender, name) {
 }
 
 async function handleMessage(message, sender) {
+  await ready;
   if (!message || typeof message.type !== 'string') return undefined;
   if (message.type === 'STATE_UPDATED') return undefined;
   if (message.type === 'SELECTION_FRAME_FOCUSED') {
     if (sender.id !== browser.runtime.id || !sender.tab || !/^https?:/u.test(sender.url || '') || !Number.isInteger(sender.frameId)) return;
     focusedFrames.set(sender.tab.id, sender.frameId);
+    persistConversations();
     return;
   }
   if (message.type === 'EXPLAIN_SELECTION') {
@@ -606,39 +666,66 @@ browser.runtime.onMessage.addListener((message, sender) => {
   return handleMessage(message, sender).catch(error => ({ ok: false, error: error.message }));
 });
 
+function openSidebar(windowId, toggle = false) {
+  const action = toggle ? browser.sidebarAction.toggle : browser.sidebarAction.open;
+  return browser.isChrome ? action({ windowId }) : action();
+}
+
 browser.menus.create({ id: 'english-dictionary-explain', title: 'Explain “%s” in sidebar', contexts: ['selection'] });
 browser.menus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== 'english-dictionary-explain') return;
   if (info.editable) { reportActionError(tab?.windowId, new Error(privateSelectionMessage)); return; }
-  browser.sidebarAction.open().then(() => explainFromTab(tab, info.frameId, false, info.selectionText))
+  openSidebar(tab?.windowId).then(async () => {
+    await ready;
+    return explainFromTab(tab, info.frameId, false, info.selectionText);
+  })
     .catch(error => reportActionError(tab?.windowId, error));
 });
 
 browser.runtime.onConnect.addListener(port => {
-  if (!isPage(port.sender, 'sidebar.html') || !/^sidebar:\d+$/u.test(port.name)) return;
-  const record = recordFor(Number(port.name.slice('sidebar:'.length)));
-  record.ports.add(port);
-  startDeep(record);
-  port.onDisconnect.addListener(() => {
-    record.ports.delete(port);
-    if (record.ports.size || !record.controller) return;
-    record.controller.abort(); record.controller = null;
-    record.pendingDeep = true;
-    if (record.state.messages.at(-1)?.role === 'assistant') record.state.messages.pop();
-    if (record.state.lookupStatus === 'loading') record.state.lookupStatus = 'idle';
-    record.state.status = 'idle';
-    publish(record);
-  });
+  let disconnected = false;
+  port.onDisconnect.addListener(() => { disconnected = true; });
+  void ready.then(() => {
+    if (disconnected) return;
+    if (!isPage(port.sender, 'sidebar.html') || !/^sidebar:\d+$/u.test(port.name)) return;
+    const record = recordFor(Number(port.name.slice('sidebar:'.length)));
+    record.ports.add(port);
+    startDeep(record);
+    port.onDisconnect.addListener(() => {
+      record.ports.delete(port);
+      if (!record.ports.size) suspendDeep(record);
+    });
+  }).catch(console.error);
 });
-function reportActionError(windowId, error) {
+if (browser.isChrome) {
+  const panelEvents = browser.chromePanelEvents;
+  panelEvents.onOpened.addListener(({ windowId }) => {
+    void ready.then(() => {
+      const record = recordFor(windowId);
+      record.panelOpen = true;
+      startDeep(record);
+    }).catch(console.error);
+  });
+  panelEvents.onClosed.addListener(({ windowId }) => {
+    void ready.then(() => {
+      const record = recordFor(windowId);
+      record.panelOpen = false;
+      suspendDeep(record);
+    }).catch(console.error);
+  });
+}
+
+async function reportActionError(windowId, error) {
+  await ready;
   if (!Number.isInteger(windowId)) return;
   const record = recordFor(windowId);
   record.state.error = error.message; publish(record);
 }
 
-function openFromToolbar(explain = false) {
-  const opening = explain ? browser.sidebarAction.toggle() : browser.sidebarAction.open();
+function openFromToolbar(explain = false, tab) {
+  const opening = openSidebar(tab?.windowId, explain);
   opening.then(async () => {
+    await ready;
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
     if (explain && !await browser.sidebarAction.isOpen({ windowId: tab.windowId })) return;
@@ -652,19 +739,29 @@ function openFromToolbar(explain = false) {
     reportActionError(tab?.windowId, error);
   });
 }
-browser.browserAction.onClicked.addListener(() => openFromToolbar());
-browser.commands.onCommand.addListener(command => { if (command === 'explain-selection') openFromToolbar(true); });
-browser.tabs.onRemoved?.addListener(tabId => focusedFrames.delete(tabId));
-browser.tabs.onUpdated?.addListener((tabId, change) => {
-  if (change.status === 'loading') focusedFrames.delete(tabId);
+browser.browserAction.onClicked.addListener(tab => openFromToolbar(false, tab));
+browser.commands.onCommand.addListener((command, tab) => { if (command === 'explain-selection') openFromToolbar(true, tab); });
+browser.tabs.onRemoved?.addListener(async tabId => {
+  await ready;
+  focusedFrames.delete(tabId);
+  persistConversations();
 });
-browser.windows.onRemoved.addListener(windowId => {
+browser.tabs.onUpdated?.addListener(async (tabId, change) => {
+  if (change.status !== 'loading') return;
+  await ready;
+  focusedFrames.delete(tabId);
+  persistConversations();
+});
+browser.windows.onRemoved.addListener(async windowId => {
+  await ready;
   const record = windows.get(windowId);
   if (record) { record.selectionRequest++; invalidateSave(record); }
   record?.controller?.abort(); record?.quickController?.abort(); windows.delete(windowId);
+  persistConversations();
 });
 browser.storage.onChanged.addListener(async (changes, area) => {
   if (area !== 'local' || !changes.settings) return;
+  await ready;
   settings = await loadSettings();
   for (const record of windows.values()) { record.state.settings = configuration(); publish(record); }
 });

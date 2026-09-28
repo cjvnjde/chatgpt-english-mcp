@@ -59,6 +59,23 @@ For Dokploy, select `docker-compose.yml`, copy the variables from `.env.example`
 
 The same Compose file includes the static admin UI. Set `ADMIN_BEARER_TOKEN` and route `/admin` on your MCP domain to `english-admin:80`, preserving the path. Keep `/mcp` routed to `english-learning-mcp:8081`. See the [admin setup guide](admin/README.md) for the exact Dokploy domain settings.
 
+## English Dictionary for Chrome
+
+The Chrome 142+ version uses Chrome's native side panel and shares the Firefox extension's selection popup, deep explanations, follow-up chat, editable vocabulary saving, and AI/MCP settings.
+
+1. Download **english-dictionary-chrome-VERSION.zip** from a **English Dictionary for Chrome** GitHub Release (or the Chrome artifact in a successful Actions run). Extract it into a permanent folder.
+2. Open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and select the extracted `english-dictionary-chrome` folder containing `manifest.json`.
+3. Pin English Dictionary and click its toolbar icon. To keep it on the right, open **Chrome Settings → Appearance**, search for **side panel**, and select the right side. [Chrome controls panel placement](https://developer.chrome.com/docs/extensions/reference/api/sidePanel).
+4. Open the panel gear and configure your AI URL/key, Deep and Quick models, MCP URL/token. Use **Test AI** and **Test MCP** to check them. Firefox settings are not transferred automatically.
+
+Select text and click the dictionary icon for a quick explanation; with the panel open, it starts a deep explanation. **Right-click → Explain in sidebar** opens the panel directly. **Alt+Shift+E** toggles it; customize this at `chrome://extensions/shortcuts`. Use the panel's Save icon to review a draft and confirm adding it to MCP. On protected pages, type a word in the panel.
+
+No Chrome Web Store account or signing key is needed. This uses Chrome's [unpacked extension installation](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked). Keep the extracted folder in place. To update, replace its contents with the next release and click **Reload** at `chrome://extensions`; the same installation retains its settings. Updates are manual. Download the extension ZIP, not GitHub's source-code ZIP/TAR.
+
+Credentials stay in local extension storage. Conversations and captured context are also kept in Chrome's memory-backed session storage to survive background-worker suspension; they clear on browser restart, extension reload, or disabling the extension. Active network operations interrupted by the browser are reported and are never automatically replayed as vocabulary writes. Clear removes this window's conversation. The Firefox privacy and explicit-save behavior below otherwise also apply to Chrome.
+
+The **Release Chrome extension** workflow publishes the ZIP and `SHA256SUMS` on changes to `main`, independently of Mozilla signing. See [Chrome development and release details](docs/development.md#chrome-extension).
+
 ## English Dictionary for Firefox
 
 [`firefox-extension/`](firefox-extension/) is a personal Firefox-desktop extension (Firefox 142+) with quick explanations on the page and deeper, dictionary-backed explanations in the native sidebar. Only the sidebar’s Save icon adds vocabulary.

@@ -1,0 +1,66 @@
+name: Release Chrome extension
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firefox-extension/**'
+      - 'chrome-extension/**'
+      - 'scripts/build-chrome-extension.mjs'
+      - '.github/workflows/chrome-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chrome-extension-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '26.8.2'
+      - name: Test shared extension behavior
+        run: npm test --prefix firefox-extension
+      - name: Build Chrome extension
+        run: npm run build --prefix chrome-extension
+      - name: Test Chrome compatibility and package
+        run: npm test --prefix chrome-extension
+      - name: Prepare release files
+        id: version
+        run: |
+          version=$(node -p "require('./firefox-extension/manifest.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          cd chrome-extension/dist
+          sha256sum "english-dictionary-chrome-${version}.zip" > SHA256SUMS
+      - name: Upload installable ZIP
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: chrome-extension/dist/english-dictionary-chrome-${{ steps.version.outputs.version }}.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="chrome-v${VERSION}"
+          asset="chrome-extension/dist/english-dictionary-chrome-${VERSION}.zip"
+          if ! gh release view "$tag" --json id > /dev/null 2>&1; then
+            gh release create "$tag" --draft --target "$GITHUB_SHA" \
+              --title "English Dictionary for Chrome ${VERSION}" \
+              --notes-file chrome-extension/INSTALL.txt
+          fi
+          gh release upload "$tag" "$asset" chrome-extension/dist/SHA256SUMS --clobber
+          gh release edit "$tag" --draft=false --notes-file chrome-extension/INSTALL.txt
+          gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

@@ -54,6 +54,9 @@ function connectionUrl(value, field, label) {
     invalid(field, `${label} must be a complete HTTPS URL (or HTTP on localhost).`);
   }
   const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (globalThis.browser?.isChrome && url.protocol === "http:" && url.hostname === "[::1]") {
+    invalid(field, `${label}: use localhost instead of [::1] in Chrome.`);
+  }
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     invalid(field, `${label} must use HTTPS. HTTP is allowed only on a loopback host.`);
   }
