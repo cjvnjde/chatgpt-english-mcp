@@ -29,7 +29,7 @@ async function chromeFixture() {
       sendMessage: async () => ({ term: 'bank', sourceId: 'source', context: 'By the river.' }),
     },
     action: { onClicked: event() }, commands: { onCommand: event() },
-    storage: { onChanged: event(), local: { get: async () => ({ settings: { model: 'tutor' } }) },
+    storage: { onChanged: event(), local: { get: async () => ({ settings: { aiUrl: 'https://ai.example', model: 'tutor' } }) },
       session: { get: async () => ({}), set: async () => {} },
     },
   };
@@ -97,7 +97,7 @@ test('cold worker registers listeners before storage resolves and restores inter
     }, resolve);
     assert.equal(claimed, true);
   });
-  release({ settings: { model: 'tutor' } });
+  release({ settings: { aiUrl: 'https://ai.example', model: 'tutor' } });
   const result = await response;
   assert.equal(result.ok, true);
   assert.equal(result.state.selection.term, 'bank');

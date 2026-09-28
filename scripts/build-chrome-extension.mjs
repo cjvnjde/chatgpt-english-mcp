@@ -32,7 +32,7 @@ await rm(output, { recursive: true, force: true });
 await mkdir(output);
 // Explicit runtime allowlist: no tests, tooling, credentials, or local build output.
 for (const file of ['api.js', 'background.js', 'content.js', 'mcp.js', 'prompt.js', 'render.js',
-  'settings.js', 'sidebar.js', 'sidebar.css', 'options.js', 'options.css', 'icons']) {
+  'controls.css', 'settings.js', 'sidebar.js', 'sidebar.css', 'options.js', 'options.css', 'icons']) {
   await cp(resolve(source, file), resolve(output, file), { recursive: true });
 }
 for (const file of ['sidebar.html', 'options.html']) {

@@ -84,7 +84,7 @@
     style.textContent = `
       :host { color-scheme: light; --ink: #111111; --body: #374151; --muted: #6b7280; --surface: #f5f5f5; --hairline: #e5e7eb; }
       * { box-sizing: border-box; }
-      button, p { font: 13px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+      button, p { font: 15px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
       button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid var(--ink); border-radius: 9999px; color: #fff; background: var(--ink); cursor: pointer; box-shadow: 0 4px 12px rgb(0 0 0 / .16); }
       button:active { background: #242424; }
       button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -93,7 +93,7 @@
       .spinner { width: 12px; height: 12px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
-      .answer { display: flex; flex-direction: column; width: min(360px, calc(100vw - 16px)); max-height: min(360px, calc(100vh - 16px)); overflow: auto; color: var(--body); background: #fff; border: 1px solid var(--hairline); border-radius: 12px; font: 13px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; box-shadow: 0 4px 12px rgb(0 0 0 / .12); }
+      .answer { display: flex; flex-direction: column; width: min(360px, calc(100vw - 16px)); max-height: min(360px, calc(100vh - 16px)); overflow: auto; color: var(--body); background: #fff; border: 1px solid var(--hairline); border-radius: 12px; font: 15px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; box-shadow: 0 4px 12px rgb(0 0 0 / .12); }
       p { margin: 0; min-height: 0; padding: 16px; flex: 1 1 auto; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--body); background: #fff; font-weight: 400; border: 0; }
       .status { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 12px; overflow-wrap: anywhere; color: var(--muted); background: var(--surface); border-top: 1px solid var(--hairline); }
       .status button { display: inline-flex; width: auto; height: 32px; padding: 7px 12px; color: var(--ink); background: #fff; border: 1px solid var(--hairline); border-radius: 8px; box-shadow: none; font-weight: 600; }

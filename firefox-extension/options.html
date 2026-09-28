@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light">
   <title>English MCP · Settings</title>
   <link rel="stylesheet" href="options.css">
+  <link rel="stylesheet" href="controls.css">
   <script type="module" src="options.js"></script>
 </head>
 <body>
@@ -30,7 +31,7 @@
           <h2 id="connections-heading">Connections</h2>
         <div class="field">
           <label for="aiUrl">API base URL</label>
-          <input id="aiUrl" name="aiUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false">
+          <input id="aiUrl" name="aiUrl" placeholder="Enter your API base URL" type="url" inputmode="url" autocomplete="off" spellcheck="false">
         </div>
         <div class="field">
           <label for="aiKey">API key</label>
@@ -47,7 +48,7 @@
         <p id="aiStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
         <div class="field">
           <label for="mcpUrl">MCP endpoint URL</label>
-          <input id="mcpUrl" name="mcpUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false">
+          <input id="mcpUrl" name="mcpUrl" placeholder="Enter your MCP endpoint URL" type="url" inputmode="url" autocomplete="off" spellcheck="false">
         </div>
         <div class="field">
           <label for="mcpToken">Bearer token</label>
@@ -58,7 +59,7 @@
           <button id="cancelMcp" type="button" hidden aria-label="Cancel MCP test">Cancel</button>
         </div>
         <p id="mcpStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
-        <p class="hint">API keys and bearer tokens are stored unencrypted in this Firefox profile's extension local storage, not synced or exposed to web pages. Anyone with access to the profile can read them.</p>
+        <p class="hint">API keys and bearer tokens are stored unencrypted in this browser profile's extension local storage, not synced or exposed to web pages. Anyone with access to the profile can read them.</p>
         </section>
         <fieldset class="mode-settings">
           <legend>Deep · sidebar</legend>
@@ -69,12 +70,13 @@
             </div>
             <div class="field">
               <label for="thinkingLevel">Thinking effort</label>
-              <select id="thinkingLevel" name="thinkingLevel" aria-describedby="effortHelp"><option value="">Default (provider)</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select>
+              <select id="thinkingLevel" name="thinkingLevel" aria-describedby="effortHelp"><option value="">Provider default</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select>
             </div>
           </div>
           <div class="field">
             <label for="contextMode">Page context</label>
-            <select id="contextMode" name="contextMode"><option value="none">None</option><option value="surrounding">Surrounding paragraph (up to 2,400 characters)</option><option value="page">Larger page excerpt (up to 12,000 characters)</option></select>
+            <select id="contextMode" name="contextMode" aria-describedby="contextModeHelp"><option value="none">None</option><option value="surrounding">Surrounding paragraph</option><option value="page">Larger page excerpt</option></select>
+            <p id="contextModeHelp" class="hint context-hint">Paragraph: up to 2,400 characters. Page excerpt: up to 12,000.</p>
           </div>
           <div class="field">
             <div class="prompt-label"><label for="systemPrompt">System prompt</label><button type="button" data-reset="systemPrompt" aria-label="Reset Deep system prompt">Reset</button></div>
@@ -90,12 +92,13 @@
             </div>
             <div class="field">
               <label for="quickThinkingLevel">Thinking effort</label>
-              <select id="quickThinkingLevel" name="quickThinkingLevel" aria-describedby="effortHelp"><option value="">Default (provider)</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select>
+              <select id="quickThinkingLevel" name="quickThinkingLevel" aria-describedby="effortHelp"><option value="">Provider default</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select>
             </div>
           </div>
           <div class="field">
             <label for="quickContextMode">Page context</label>
-            <select id="quickContextMode" name="quickContextMode"><option value="none">None</option><option value="surrounding">Surrounding paragraph (up to 2,400 characters)</option><option value="page">Larger page excerpt (up to 12,000 characters)</option></select>
+            <select id="quickContextMode" name="quickContextMode" aria-describedby="quickContextModeHelp"><option value="none">None</option><option value="surrounding">Surrounding paragraph</option><option value="page">Larger page excerpt</option></select>
+            <p id="quickContextModeHelp" class="hint context-hint">Paragraph: up to 2,400 characters. Page excerpt: up to 12,000.</p>
           </div>
           <div class="field">
             <div class="prompt-label"><label for="quickSystemPrompt">System prompt</label><button type="button" data-reset="quickSystemPrompt" aria-label="Reset Quick system prompt">Reset</button></div>

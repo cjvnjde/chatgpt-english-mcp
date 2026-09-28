@@ -1,8 +1,8 @@
 :root {
   color-scheme: light dark;
-  font: menu;
-  font-size: 14px;
-  line-height: 1.55;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
   --canvas: var(--browser-sidebar-background, Canvas);
   --field: var(--browser-sidebar-field, Field);
   --field-text: var(--browser-sidebar-field-text, FieldText);
@@ -24,7 +24,7 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; background: var(--canvas); }
+body { margin: 0; font: inherit; background: var(--canvas); }
 button, textarea { font: inherit; color: inherit; }
 button, summary { cursor: pointer; touch-action: manipulation; }
 button:disabled { color: var(--muted-soft); cursor: default; }
@@ -44,10 +44,11 @@ svg { display: block; width: 20px; height: 20px; fill: none; stroke: currentColo
 #term { color: var(--ink); font-size: 20px; font-weight: 600; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.3; letter-spacing: -.025em; }
 #context-chevron { width: 16px; height: 16px; color: var(--muted); }
 .selection[open] #context-chevron { transform: rotate(180deg); }
-.context-details { margin-top: 10px; padding: 12px 14px; border-radius: 8px; color: var(--muted); background: var(--surface-card); font-size: 12px; overflow-wrap: anywhere; }
+.context-details { margin-top: 10px; padding: 12px 14px; border-radius: 8px; color: var(--muted); background: var(--surface-card); font-size: 13px; overflow-wrap: anywhere; }
 #context-text { white-space: pre-wrap; margin: 8px 0 0; }
 .header-actions { display: flex; flex-shrink: 0; gap: 4px; margin-left: auto; }
 .icon-button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; flex-shrink: 0; border: 1px solid transparent; border-radius: 9999px; color: var(--ink); background: transparent; }
+.icon-button:hover:not(:disabled) { background: var(--surface-soft); }
 .icon-button:active:not(:disabled) { background: var(--surface-card); }
 .icon-button:disabled { color: var(--muted-soft); }
 
@@ -61,8 +62,8 @@ svg { display: block; width: 20px; height: 20px; fill: none; stroke: currentColo
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown p { margin: 0 0 14px; }
-.markdown h3, .markdown h4, .markdown h5, .markdown h6 { color: var(--ink); font-weight: 600; line-height: 1.3; margin: 24px 0 10px; font-size: 16px; letter-spacing: -.015em; }
-.markdown h3 { font-size: 19px; letter-spacing: -.025em; }
+.markdown h3, .markdown h4, .markdown h5, .markdown h6 { color: var(--ink); font-weight: 600; line-height: 1.3; margin: 24px 0 10px; font-size: 17px; letter-spacing: -.015em; }
+.markdown h3 { font-size: 21px; letter-spacing: -.025em; }
 .markdown ul, .markdown ol { padding-left: 22px; margin: 10px 0 16px; }
 .markdown li { margin-bottom: 7px; }
 .markdown blockquote { margin: 16px 0; padding: 12px 14px; border: 0; border-radius: 8px; color: var(--body); background: var(--surface-card); }
@@ -73,8 +74,8 @@ svg { display: block; width: 20px; height: 20px; fill: none; stroke: currentColo
 .markdown hr { margin: 24px 0; border: 0; border-top: 1px solid var(--hairline); }
 .markdown-image { display: block; margin: 16px 0; }
 .markdown-image img { display: block; max-width: 100%; max-height: 300px; height: auto; object-fit: contain; border-radius: 8px; }
-.error { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--error); border-radius: 8px; color: var(--ink); background: color-mix(in srgb, var(--error) 10%, var(--canvas)); font-size: 12px; overflow-wrap: anywhere; }
-.save-notice { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--primary); border-radius: 8px; color: var(--ink); background: color-mix(in srgb, var(--primary) 10%, var(--canvas)); font-size: 12px; overflow-wrap: anywhere; }
+.error { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--error); border-radius: 8px; color: var(--ink); background: color-mix(in srgb, var(--error) 10%, var(--canvas)); font-size: 13px; overflow-wrap: anywhere; }
+.save-notice { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--primary); border-radius: 8px; color: var(--ink); background: color-mix(in srgb, var(--primary) 10%, var(--canvas)); font-size: 13px; overflow-wrap: anywhere; }
 
 .lower-panel { flex-shrink: 0; padding: 8px 12px 14px; border-top: 1px solid var(--hairline); background: var(--canvas); }
 .response-status { display: flex; align-items: center; gap: 8px; min-height: 26px; margin: 0 6px 6px; color: var(--muted); font-size: 12px; }
@@ -107,7 +108,7 @@ dialog::backdrop { background: rgb(17 17 17 / .52); }
 .save-dialog-heading h2 { margin: 0; color: var(--ink); font-size: 21px; font-weight: 600; line-height: 1.25; letter-spacing: -.025em; }
 .save-dialog-heading .icon-button { border-color: var(--hairline); font-size: 20px; }
 .save-fields { display: grid; gap: 8px; padding: 20px; overflow-y: auto; }
-.save-fields label { margin-top: 8px; color: var(--body); font-size: 12px; font-weight: 600; }
+.save-fields label { margin-top: 8px; color: var(--body); font-size: 13px; font-weight: 600; }
 .save-fields input,
 .save-fields select,
 .save-fields textarea {
@@ -128,12 +129,12 @@ dialog::backdrop { background: rgb(17 17 17 / .52); }
 .save-fields select:focus,
 .save-fields textarea:focus { border-color: var(--ink); }
 .save-fields > small,
-.save-details small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.save-details small { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .save-details { margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--hairline); }
-.save-details summary { color: var(--ink); font-size: 12px; font-weight: 600; }
+.save-details summary { color: var(--ink); font-size: 13px; font-weight: 600; }
 .save-details[open] { display: grid; gap: 8px; }
 .save-details[open] summary { margin-bottom: 4px; }
-.save-details a { width: fit-content; margin-top: 2px; font-size: 12px; font-weight: 600; }
+.save-details a { width: fit-content; margin-top: 2px; font-size: 13px; font-weight: 600; }
 #save-dialog-error { margin: 8px 0 0; }
 .save-dialog-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--hairline); background: var(--canvas); }
 .save-dialog-footer button { min-height: 40px; padding: 10px 16px; border: 1px solid var(--hairline); border-radius: 8px; color: var(--ink); background: var(--canvas); font-size: 13px; font-weight: 600; cursor: pointer; }

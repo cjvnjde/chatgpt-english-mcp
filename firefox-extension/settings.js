@@ -1,7 +1,7 @@
 import { DEEP_SYSTEM_PROMPT, QUICK_SYSTEM_PROMPT } from "./prompt.js";
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  aiUrl: "https://llm.cjvnjde.tech",
+  aiUrl: "",
   aiKey: "",
   model: "",
   quickModel: "",
