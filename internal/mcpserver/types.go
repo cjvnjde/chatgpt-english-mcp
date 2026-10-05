@@ -121,6 +121,11 @@ type LearningNextInput struct {
 	IncludeComments bool `json:"includeComments,omitempty" jsonschema:"include all saved review comments; latest comment is always returned"`
 }
 
+type LearningFocusInput struct {
+	Action  string   `json:"action,omitempty" jsonschema:"status (default) inspects without changes; start enables focused mode and resumes or creates a batch; stop returns to mixed mode and preserves the batch"`
+	ItemIDs []string `json:"itemIds,omitempty" jsonschema:"start only: explicitly replace the batch with these unique new/learning saved meaning IDs, up to the Admin focusBatchSize; omit to resume or automatically choose a batch"`
+}
+
 type LearningReviewInput struct {
 	ReviewToken string              `json:"reviewToken" jsonschema:"opaque token returned by learning_next"`
 	Rating      domain.ReviewRating `json:"rating" jsonschema:"first attempt: again failed or materially assisted, hard correct but effortful unaided recall, good flawless independent recall, easy effortless and precise"`

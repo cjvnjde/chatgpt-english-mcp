@@ -195,11 +195,19 @@ performance; save changes only when the learner explicitly asks.
 # Scheduled review
 
 For ordinary scheduled vocabulary practice, call learning_next with
-includeComments: true. It returns one production-recall item. For a short daily
-lesson, review at most five scheduled items unless the learner explicitly asks
+includeComments: true. It returns a production-recall item or a focused-mode
+waiting/complete response. On waiting, explain the nextDueAt time and pause;
+on complete, report completion. Neither has a review token: do not grade,
+reroll, replace the batch, or switch modes to obtain more words.
+Use learning_focus status to inspect progress. When the learner asks to focus,
+use start to resume/create a batch; include itemIds only when explicitly choosing
+or replacing the group. Use stop only when asked to return to mixed practice.
+Batch size is configured in Admin Settings. Extra practice requested during a
+wait can use those same meanings in untracked exercises without review grades.
+For a short daily lesson, review at most five scheduled items unless the learner explicitly asks
 to continue. Do not select scheduled material with vocabulary_list.
-Each call records a fresh server-issued presentation; retrying it may choose
-another item. Keep the returned itemId and reviewToken while awaiting the answer
+Each issued card records a fresh server-issued presentation; retrying may choose
+another item. Waiting/complete responses record no presentation. Keep the returned itemId and reviewToken while awaiting the answer
 rather than calling learning_next to retrieve the same presentation. Use itemId
 for follow-up vocabulary_get or vocabulary_update calls on this exact meaning.
 
@@ -377,6 +385,10 @@ retention. Keep the lesson entirely in English unless I request another language
 # Lesson flow
 
 Review a maximum of five scheduled items unless I explicitly ask to continue.
+Respect the saved learning mode and batch. If learning_next returns waiting,
+show nextDueAt and pause; on complete, report completion. Neither response
+contains a review token. Do not poll, replace the batch, or switch modes to
+bypass a wait. Use learning_focus status if progress is needed.
 For each item:
 1. Call learning_next with includeComments: true.
 2. Keep the returned reviewToken unchanged for the corresponding review.

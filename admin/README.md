@@ -83,6 +83,10 @@ Click a stored-column heading to sort; compact rows and sticky headers help scan
 
 ## Next suggestions
 
+**Settings → Learning focus** controls learning mode and the default batch size (10 meanings, configurable from 1–100). Focused mode keeps the same saved batch until its unfinished members are learned, archived, or deleted. Size changes affect the next batch. Returning to mixed mode preserves membership. The MCP `learning_focus` tool can inspect, resume, choose, or stop a batch; mode changes through it participate in the normal settings revision/conflict checks.
+
+In focused mode, the suggestions page shows learned/remaining/due counts, marks excluded cards, and reports the next due time when waiting. Before a batch is created or after it finishes, this is a preview of the next batch; viewing it never saves membership.
+
 The scheduler uses weighted random selection, not a fixed future queue. **Next suggestions** ranks active production cards by actual next-draw probability from the shared scheduler plan: cooldown and small-pool relaxation, nonlearned due learning/relearning precedence, learned maintenance against active work (default 10%–40%), and an exposure-based new/nonlearned-review split within the active remainder (default 20%–80%). These share bounds and selection weights are configurable in **Settings**. A sole group receives 100%. Learned words appear as **Learned · maintenance**. Early fallback prefers nonlearned cards within the same cooldown eligibility group.
 
 Ranks are likelihood ranks, not future turn numbers. The percentage is the actual next-draw probability; probability bars are scaled relative to the highest chance on the current page, with a visible scale legend. Selection reasons and learning groups appear together, and 0%-chance rows are visually separated without changing their server order. Equal probabilities are displayed by due date and then card ID. Cards with no chance in the current snapshot appear after selectable cards with a reason such as cooling down, not due yet, or waiting for due learning steps. Archived items and other owners' cards are excluded.

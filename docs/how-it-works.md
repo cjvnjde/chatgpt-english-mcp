@@ -19,6 +19,16 @@ Diagrams use Mermaid fenced blocks; formulas use LaTeX math. View this document 
 - [What affects what](#what-affects-what): direct influences, indirect influences, and things the algorithm ignores.
 - [Implementation map](#implementation-map): the source files behind the rules.
 
+## Focused learning
+
+The default `mixed` mode uses the full selection policy described below. Admin → Settings can enable `focused` mode and set `focusBatchSize` (default 10, range 1–100 saved meanings). `learning_focus` also inspects or starts/resumes/stops focus, and can explicitly choose the meaning IDs.
+
+Focused mode creates a persistent batch, preferring already-learning meanings, then personal interest, usefulness, oldest creation time, and item ID. It keeps those members until all are learned or explicitly archived/deleted; it never replaces one learned member while others remain unfinished. The next `learning_next` then starts another batch. Changing the configured size affects the next batch. Switching to mixed mode retains membership for later resumption.
+
+The shared selector applies its existing due-step priority, cooldown, and weights only to unfinished batch members. If all are scheduled in the future, it returns `waiting` and `nextDueAt` without issuing a card, token, or presentation. If no unfinished vocabulary exists, it returns `complete`. Learned maintenance remains a separate reinforcement activity while focused mode is enabled. Normal mastery thresholds and genuine-review scheduling still apply: staying in a batch does not earn mastery or force early repeats.
+
+Admin likelihood previews use the same batch restriction. Before initial creation or after completion they preview the deterministically chosen next batch without saving it. Outside members have zero probability. Status/progress reflects corrections and demotions within the current batch; after rollover, a former member that becomes learning again waits for a future batch. The SQLite membership tables are included in full backups.
+
 ## System overview
 
 There is no single “best word” score and no language model running inside the selector. The system combines a deterministic usefulness heuristic, a partly random selection policy, and an FSRS memory model.
@@ -1013,12 +1023,12 @@ This table describes **scheduled `learning_next` / `learning_review`**. The inde
 - **Repeated spelling does not always mean a failed cooldown.** Different saved meanings have different cards; cooldown is card-based.
 - **Skipping an answer is not a failed review.** Presentation affects selection history, but only a submitted review updates FSRS and failure counters.
 - **Waiting hours is not graded as hesitation.** The timing rule only promotes quick `good` responses; it never lowers a grade.
-- **Completing all due cards does not make `learning_next` empty.** It can return new items or early reviews until the tutor/learner stops.
+- **In mixed mode, completing all due cards does not make `learning_next` empty.** It can return new items or early reviews until the tutor/learner stops.
 - **Daily mastery and review quotas are different.** Success earns at most one mastery credit per UTC day, while every genuine graded attempt is recorded. Due steps take priority; otherwise learned maintenance receives 10%–40% against active work, whose remaining new/review split uses 20%–80% exposure bounds. There is no enforced lesson length or guarantee that every due card is covered.
 
 ### Which parameters can a caller change?
 
-Tool callers can save/archive items, update usefulness hints, personal interest and metadata, submit scheduled or reinforcement ratings/comments, and decide when to request another item. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
+Tool callers can save/archive items, update usefulness hints, personal interest and metadata, submit scheduled or reinforcement ratings/comments, and decide when to request another item. They can also manage a persistent batch through `learning_focus`. They cannot pass a topic filter, seed, retention target, new-card percentage, cooldown duration, or FSRS parameter vector to `learning_next`.
 
 The admin can change the fast-answer threshold, mastery requirements, active/learned pool-share bounds, cooldown window/count, exposure recovery/unseen bonus, usefulness/interest multipliers, troublesome thresholds, reinforcement cooldown/cap, and FSRS retention/maximum interval/step lists. Values persist per owner with optimistic revisions; next-item likelihood previews use the same snapshot policy as the selector. [Configuration](configuration.md#runtime-algorithm-settings) lists the defaults and explains application timing. FSRS fitted weights, fuzz-off policy, and low-level equation shapes remain fixed; deployment credentials and listeners remain environment configuration.
 

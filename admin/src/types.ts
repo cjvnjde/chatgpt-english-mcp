@@ -104,9 +104,11 @@ export type Suggestion = {
     | "cooldown"
     | "learning_first"
     | "not_due"
+    | "outside_focus"
     | "waiting";
 };
 export type SuggestionsPage = {
+  focus?: { batchId?: string; total: number; learned: number; remaining: number; due: number; nextDueAt?: string };
   owner: string;
   generatedAt: string;
   total: number;

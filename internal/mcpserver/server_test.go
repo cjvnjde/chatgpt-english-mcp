@@ -68,6 +68,7 @@ func TestMCPToolsExposeLookupAndLearningList(t *testing.T) {
 	sort.Strings(names)
 	wantNames := []string{
 		"dictionary_lookup",
+		"learning_focus",
 		"learning_next",
 		"learning_review",
 		"learning_review_update",

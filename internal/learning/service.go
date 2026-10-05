@@ -2,6 +2,7 @@ package learning
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,6 +22,7 @@ const (
 )
 
 type Store interface {
+	LearningFocus(ctx context.Context, owner, action string, itemIDs []string, clock func() time.Time) (storage.LearningFocus, error)
 	NextLearningItem(ctx context.Context, ownerKey string, clock func() time.Time) (storage.LearningCandidate, error)
 	NextReinforcementItem(ctx context.Context, ownerKey string, clock func() time.Time) (storage.ReinforcementCandidate, error)
 	RecordReinforcementReview(ctx context.Context, input storage.RecordReviewInput) (storage.ReinforcementPractice, bool, error)
@@ -50,6 +52,8 @@ type ReviewFeedback struct {
 }
 
 type NextResult struct {
+	Focus             *storage.FocusProgress    `json:"focus,omitempty"`
+	NextDueAt         string                    `json:"nextDueAt,omitempty"`
 	ItemID            string                    `json:"itemId"`
 	PresentationID    int64                     `json:"presentationId"`
 	ShownAt           string                    `json:"shownAt"`
@@ -72,6 +76,32 @@ type NextResult struct {
 	Troublesome       bool                      `json:"troublesome"`
 	LatestComment     *ReviewFeedback           `json:"latestComment,omitempty"`
 	Comments          []ReviewFeedback          `json:"comments,omitempty"`
+}
+
+// Idle responses have no card or review token and never represent a presentation.
+// Keep the existing card response intact for mixed mode and issued focus cards.
+func (result NextResult) MarshalJSON() ([]byte, error) {
+	if result.Reason == "waiting" || result.Reason == "complete" {
+		return json.Marshal(struct {
+			Reason    string                 `json:"reason"`
+			Focus     *storage.FocusProgress `json:"focus"`
+			NextDueAt string                 `json:"nextDueAt,omitempty"`
+		}{result.Reason, result.Focus, result.NextDueAt})
+	}
+	type cardResult NextResult
+	return json.Marshal(cardResult(result))
+}
+
+func (service *Service) Focus(ctx context.Context, action string, itemIDs []string) (storage.LearningFocus, error) {
+	result, err := service.store.LearningFocus(ctx, service.ownerKey, action, itemIDs, service.now)
+	if err != nil {
+		var applicationError *apperr.Error
+		if errors.As(err, &applicationError) {
+			return storage.LearningFocus{}, err
+		}
+		return storage.LearningFocus{}, apperr.Wrap(apperr.InternalError, "failed to manage learning focus", err)
+	}
+	return result, nil
 }
 
 type RecordOptions struct {
@@ -112,6 +142,9 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 	if err != nil {
 		return NextResult{}, apperr.Wrap(apperr.InternalError, "failed to select the next vocabulary item", err)
 	}
+	if candidate.IdleReason != "" {
+		return NextResult{Reason: candidate.IdleReason, Focus: &candidate.Focus.FocusProgress, NextDueAt: candidate.Focus.NextDueAt}, nil
+	}
 	comments, err := service.store.ReviewComments(
 		ctx,
 		service.ownerKey,
@@ -144,6 +177,9 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 		Sense:             candidate.Vocabulary.Sense,
 		Reason:            selectionReason(candidate.Card, candidate.ShownAt, candidate.Settings),
 		Troublesome:       isTroublesome(candidate.Card, candidate.Settings),
+	}
+	if candidate.Focus != nil {
+		result.Focus = &candidate.Focus.FocusProgress
 	}
 	if len(comments) > 0 {
 		latest := reviewFeedback(comments[0])

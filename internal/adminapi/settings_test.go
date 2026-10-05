@@ -36,6 +36,8 @@ func TestAlgorithmSettingsAuthorizationValidationAndConflicts(t *testing.T) {
 	}
 	values := initial.Values
 	values.FastAnswerSeconds = 12
+	values.LearningMode = "focused"
+	values.FocusBatchSize = 7
 	values.LearningStepsMinutes = []float64{}
 	body, err := json.Marshal(map[string]any{"values": values, "expectedRevision": 0})
 	if err != nil {

@@ -1,4 +1,8 @@
 export const settingGroups: { title: string; help: string; fields: SettingField[] }[] = [
+  { title: "Learning focus", help: "Finish a persistent group of saved meanings before starting another. Pausing focus retains the group for later.", fields: [
+    { key: "learningMode", label: "Learning mode", unit: "mode", options: [{ value: "mixed", label: "Mixed — all vocabulary" }, { value: "focused", label: "Focused — finish the current batch" }], help: "Focused mode only selects unfinished batch members. When none are due, the tutor waits. Learned-word reinforcement remains available separately." },
+    { key: "focusBatchSize", label: "Focus batch size", unit: "meanings", min: 1, max: 100, integer: true, help: "Default number of meanings in each new batch. Starts with words already learning, then new words. Changing this does not resize an unfinished batch. Use learning_focus to inspect or choose a batch." },
+  ] },
   { title: "Review scheduling", help: "Controls future reviews. Existing due dates and review history are not recalculated.", fields: [
     { key: "fastAnswerSeconds", label: "Fast-answer threshold", unit: "seconds", min: 0, max: 300, integer: true, help: "Promote Good to Easy only before this threshold, measured from the token’s first server presentation to review receipt. 0 disables promotion; slow answers and other ratings never change. Explicit corrections bypass promotion." },
     { key: "requestedRetention", label: "Target retention", unit: "%", min: 70, max: 99, percent: true, help: "Desired probability of remembering at the next scheduled review. Higher targets generally mean more reviews." },
@@ -35,15 +39,15 @@ export const settingGroups: { title: string; help: string; fields: SettingField[
   ] },
 ];
 
-export type SettingField = { key: string; label: string; unit: string; help: string; min?: number; max?: number; integer?: boolean; percent?: boolean; list?: boolean };
+export type SettingField = { key: string; label: string; unit: string; help: string; min?: number; max?: number; integer?: boolean; percent?: boolean; list?: boolean; options?: { value: string; label: string }[] };
 export const settingFields: SettingField[] = settingGroups.flatMap(group => group.fields);
-export type SettingsValues = Record<string, number | number[]>;
+export type SettingsValues = Record<string, string | number | number[]>;
 export type SettingsSnapshot = { values: SettingsValues; revision: number; defaults: SettingsValues };
 export type SettingsDraft = Record<string, string>;
 export function settingsDraft(values: SettingsValues): SettingsDraft {
   return Object.fromEntries(settingFields.map(field => {
     const value = values[field.key];
-    return [field.key, Array.isArray(value) ? value.join(", ") : String(field.percent ? Number((value * 100).toPrecision(15)) : value)];
+    return [field.key, Array.isArray(value) ? value.join(", ") : String(field.percent ? Number((Number(value) * 100).toPrecision(15)) : value)];
   }));
 }
 export function validateSettings(draft: SettingsDraft) {
@@ -51,7 +55,10 @@ export function validateSettings(draft: SettingsDraft) {
   const errors: Record<string, string> = {};
   for (const field of settingFields) {
     const text = (draft[field.key] ?? "").trim();
-    if (field.list) {
+    if (field.options) {
+      if (!field.options.some(option => option.value === text)) errors[field.key] = "Choose a learning mode.";
+      values[field.key] = text;
+    } else if (field.list) {
       const parts = text ? text.split(",").map(part => part.trim()) : [];
       const steps = parts.map(Number);
       if (parts.some(part => !part) || steps.length > 10 || steps.some((step, index) => !Number.isFinite(step) || step <= 0 || step >= 1440 || (index > 0 && step <= steps[index - 1]))) errors[field.key] = "Enter up to 10 increasing minute values greater than 0 and below 1440, or leave empty.";

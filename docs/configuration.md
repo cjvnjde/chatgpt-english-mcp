@@ -29,6 +29,8 @@ The page includes units, explanations, bounds, validation, **Discard changes**, 
 
 | Setting / API key | Default | Allowed values and effect |
 |---|---|---|
+| `learningMode` | `"mixed"` | `mixed` uses the full vocabulary pool; `focused` restricts learning to unfinished members of a persistent batch and waits when none is due. Switching to mixed retains the batch for resumption. |
+| `focusBatchSize` | `10` | Integer 1–100 saved meanings. Used for the next automatic batch and as the maximum size of an explicit `learning_focus` selection. An unfinished batch is never resized by a settings change. |
 | `fastAnswerSeconds` | `30` seconds | Integer 0–300; `0` disables. Only `good` is promoted to `easy` when elapsed time from the token's first presentation is nonnegative and strictly below the threshold. Exactly at the threshold and slower answers keep their grade. Explicit corrections bypass promotion. |
 | `requestedRetention` | `0.9` (90%) | 0.7–0.99; FSRS target recall probability. Higher values generally increase review frequency. |
 | `maximumIntervalDays` | `36500` | Integer 1–36500; cap on newly scheduled long-term intervals. |
@@ -49,6 +51,8 @@ The page includes units, explanations, bounds, validation, **Discard changes**, 
 | `reinforcementMaxWordShare` | `0.25` (25%) | 0.05–1; capped lottery requires at least `max(4, ceil(1 / cap))` distinct eligible learned words. |
 | `troublesomeConsecutiveFailures` | `2` | Integer 1–100; threshold for the troublesome flag/reason. |
 | `troublesomeLapses` | `3` | Integer 1–100; alternate threshold for the troublesome flag/reason. |
+
+`learning_focus` start/stop changes the same persisted learning mode and advances the settings revision, so a stale Admin draft receives the normal conflict response. Migration adds mixed mode and batch size 10 to existing settings while preserving other values and revisions. Batch membership is included in SQLite backups.
 
 Percentages are displayed as percentages in the UI and stored as fractions in the API. The admin API provides:
 

@@ -27,6 +27,7 @@ type AdminSuggestion struct {
 }
 
 type AdminSuggestionsPage struct {
+	Focus       *LearningFocus    `json:"focus,omitempty"`
 	Owner       string            `json:"owner"`
 	GeneratedAt string            `json:"generatedAt"`
 	Total       int               `json:"total"`
@@ -38,6 +39,9 @@ type AdminSuggestionsPage struct {
 
 // likelihood projects the shared selection plan without consuming a random draw.
 func (plan *selectionPlan) likelihood(card *selectionCard) (float64, string) {
+	if card.outsideFocus {
+		return 0, "outside_focus"
+	}
 	if plan.future != nil {
 		if card == plan.future {
 			return 1, "early"
@@ -83,6 +87,14 @@ func (db *DB) AdminSuggestions(ctx context.Context, owner string, limit, offset 
 	cards, recentSinceID, err := loadSelectionCards(ctx, tx, owner, snapshot.Values)
 	if err != nil {
 		return page, err
+	}
+	if snapshot.Values.LearningMode == "focused" {
+		focus, err := prepareLearningFocus(ctx, tx, owner, snapshot.Values, now, false)
+		if err != nil {
+			return page, err
+		}
+		page.Focus = &focus
+		restrictToFocus(cards, focus)
 	}
 	plan := planLearningSelection(cards, recentSinceID, now, snapshot.Values)
 	type rank struct {

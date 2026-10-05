@@ -41,6 +41,8 @@ type LearningCard struct {
 
 // LearningCandidate combines separately persisted content and scheduling state.
 type LearningCandidate struct {
+	Focus          *LearningFocus
+	IdleReason     string
 	Vocabulary     domain.VocabularyItem
 	Card           LearningCard
 	PresentationID int64
@@ -110,8 +112,24 @@ func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, clock func(
 	if err != nil {
 		return LearningCandidate{}, err
 	}
+	var focus *LearningFocus
+	if configuration.Values.LearningMode == "focused" {
+		batch, err := prepareLearningFocus(ctx, transaction, ownerKey, configuration.Values, shownAt, true)
+		if err != nil {
+			return LearningCandidate{}, err
+		}
+		focus = &batch
+		restrictToFocus(cards, batch)
+	}
 	selected, ok := selectLearningCard(cards, recentSinceID, shownAt, rand.Float64, configuration.Values)
 	if !ok {
+		if focus != nil {
+			reason := "waiting"
+			if focus.Remaining == 0 {
+				reason = "complete"
+			}
+			return LearningCandidate{Focus: focus, IdleReason: reason, Settings: configuration.Values}, transaction.Commit()
+		}
 		return LearningCandidate{}, ErrNotFound
 	}
 	card, err := scanLearningCard(transaction.QueryRowContext(ctx, `
@@ -154,6 +172,7 @@ func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, clock func(
 	}
 
 	return LearningCandidate{
+		Focus:      focus,
 		Vocabulary: item, Card: card, PresentationID: presentationID, ShownAt: shownAt,
 		Settings: configuration.Values,
 	}, nil

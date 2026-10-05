@@ -100,12 +100,21 @@ export default function Settings(props: { api: API; registerGuard: (guard: Leave
           <p>{group.help}</p>
           <div class="settings-grid"><For each={group.fields}>{field => <div class="settings-field">
             <label for={`setting-${field.key}`}>{field.label} <span class="muted">({field.unit})</span></label>
+            <Show when={field.options} fallback={
             <input id={`setting-${field.key}`} type={field.list ? "text" : "number"}
               min={field.min} max={field.max} step={field.integer ? 1 : "any"}
               inputmode={field.list ? "text" : "decimal"} value={draft()[field.key] ?? ""}
               aria-describedby={`setting-${field.key}-help${validated().errors[field.key] ? ` setting-${field.key}-error` : ""}`}
               aria-invalid={!!validated().errors[field.key]}
               onInput={event => { setDraft({ ...draft(), [field.key]: event.currentTarget.value }); setNotice(""); }} />
+            }>
+              <select id={`setting-${field.key}`} value={draft()[field.key] ?? ""}
+                aria-describedby={`setting-${field.key}-help${validated().errors[field.key] ? ` setting-${field.key}-error` : ""}`}
+                aria-invalid={!!validated().errors[field.key]}
+                onChange={event => { setDraft({ ...draft(), [field.key]: event.currentTarget.value }); setNotice(""); }}>
+                <For each={field.options}>{option => <option value={option.value}>{option.label}</option>}</For>
+              </select>
+            </Show>
             <small id={`setting-${field.key}-help`}>{field.help}</small>
             <Show when={validated().errors[field.key]}><small class="settings-error" id={`setting-${field.key}-error`}>{validated().errors[field.key]}</small></Show>
           </div>}</For></div>

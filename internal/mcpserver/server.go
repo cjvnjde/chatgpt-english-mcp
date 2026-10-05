@@ -8,6 +8,7 @@ import (
 	"english-learning-mcp/internal/dictionary"
 	"english-learning-mcp/internal/domain"
 	"english-learning-mcp/internal/learning"
+	"english-learning-mcp/internal/storage"
 	"english-learning-mcp/internal/vocabulary"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -63,6 +64,9 @@ func New(services Services, logger *slog.Logger) (*mcp.Server, error) {
 		return nil, err
 	}
 	if err := registerLearningNext(server, services.Learning, logger); err != nil {
+		return nil, err
+	}
+	if err := registerLearningFocus(server, services.Learning, logger); err != nil {
 		return nil, err
 	}
 	if err := registerLearningReview(server, services.Learning, logger); err != nil {
@@ -284,12 +288,13 @@ func registerLearningNext(server *mcp.Server, service *learning.Service, logger 
 	if err != nil {
 		return err
 	}
+	configureLearningNextOutput(outputSchema)
 	closedWorld := false
 	destructive := false
 	return registerTool(server, &mcp.Tool{
 		Name:        "learning_next",
 		Title:       "Get the next vocabulary item",
-		Description: "Issue and record one active vocabulary presentation for production recall. Returns status and masteryStreak plus available tutoring context directly: customDescription, descriptionSource, notes, all personal examples, tags, and the selected dictionary sense (definition, examples, part of speech, pronunciations), alongside the compact definition and example. No vocabulary_get is needed for these fields. The latest review comment is always included when available; includeComments adds all saved review comments. After an adaptive last-three-events/30-minute cooldown, selectable due Learning/Relearning steps take priority. Otherwise learned words receive a 10%-40% backlog-weighted share when competing with active new/learning words; a sole group receives all selections. The remaining new/nonlearned-review mix follows exposure need, bounded to 20%-80% when both exist. Personal interest weights all pools; usefulness weights FSRS-new cards. Learned words remain eligible, but future learned cards do not displace new/due work. With no new or due cards, prefer nonrecent future cards, then nonlearned status, then least recent presentation and earliest due time. On reason early, stop without an answer or review unless the learner explicitly wants early practice. NOT_FOUND means no active cards; there is no daily/session quota. Every call records a fresh presentation and retries may select a different item. Reissuing a pending token is not another scheduled review and presentation alone never advances mastery. If the returned context does not identify a meaning, ask for clarification instead of guessing. Pass the unchanged reviewToken to learning_review after an answer; status changes automatically from that feedback. For explicit learned-word deep practice, use reinforcement_next instead.",
+		Description: "Follow the persisted learningMode. In focused mode, only unfinished members of the saved batch are eligible; focus reports batch progress. Batch membership survives chats and restarts, and the next batch starts only when every member is learned or explicitly removed. If none is due, return reason waiting with nextDueAt and focus but NO card or reviewToken; pause without recording a review or changing focus. Reason complete means no unfinished vocabulary remains. Use learning_focus to inspect or explicitly start/stop/choose a batch. In mixed mode, or for an eligible focused card, issue and record one active vocabulary presentation for production recall. Returns status and masteryStreak plus available tutoring context directly: customDescription, descriptionSource, notes, all personal examples, tags, and the selected dictionary sense (definition, examples, part of speech, pronunciations), alongside the compact definition and example. No vocabulary_get is needed for these fields. The latest review comment is always included when available; includeComments adds all saved review comments. After an adaptive last-three-events/30-minute cooldown, selectable due Learning/Relearning steps take priority. In mixed mode, otherwise learned words receive a 10%-40% backlog-weighted share when competing with active new/learning words; a sole group receives all selections. The remaining new/nonlearned-review mix follows exposure need, bounded to 20%-80% when both exist. Personal interest weights all pools; usefulness weights FSRS-new cards. In mixed mode learned words remain eligible, but future learned cards do not displace new/due work. In mixed mode with no new or due cards, prefer nonrecent future cards, then nonlearned status, then least recent presentation and earliest due time. On reason early, stop without an answer or review unless the learner explicitly wants early practice. NOT_FOUND means no active cards; there is no daily/session quota. Every issued card records a fresh presentation and retries may select a different item; waiting/complete responses record no presentation. Reissuing a pending token is not another scheduled review and presentation alone never advances mastery. If the returned context does not identify a meaning, ask for clarification instead of guessing. Pass the unchanged reviewToken to learning_review after an answer; status changes automatically from that feedback. For explicit learned-word deep practice, use reinforcement_next instead.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: &destructive,
@@ -298,6 +303,33 @@ func registerLearningNext(server *mcp.Server, service *learning.Service, logger 
 		},
 	}, inputSchema, outputSchema, logger, func(ctx context.Context, input LearningNextInput) (learning.NextResult, error) {
 		return service.Next(ctx, input.IncludeComments)
+	})
+}
+
+func registerLearningFocus(server *mcp.Server, service *learning.Service, logger *slog.Logger) error {
+	inputSchema, err := inferredSchema[LearningFocusInput]()
+	if err != nil {
+		return err
+	}
+	inputSchema.Properties["action"] = enumSchema("status", "start", "stop")
+	setDefault(inputSchema, "action", `"status"`)
+	minimum, maximum, maxLength := 1, 100, 200
+	inputSchema.Properties["itemIds"].MinItems = &minimum
+	inputSchema.Properties["itemIds"].MaxItems = &maximum
+	inputSchema.Properties["itemIds"].UniqueItems = true
+	inputSchema.Properties["itemIds"].Items.MinLength = &minimum
+	inputSchema.Properties["itemIds"].Items.MaxLength = &maxLength
+	outputSchema, err := inferredSchema[storage.LearningFocus]()
+	if err != nil {
+		return err
+	}
+	destructive, openWorld := true, false
+	return registerTool(server, &mcp.Tool{
+		Name: "learning_focus", Title: "Manage a focused learning batch",
+		Description: "Inspect or manage the persistent learning batch. action status (default) is read-only and returns the mode, configured batch size, exact saved meanings, mastery and due progress. action start enables focused mode: without itemIds it resumes the unfinished batch or chooses up to focusBatchSize meanings, prioritizing learning status, personal interest, usefulness, then oldest saved. With itemIds it explicitly replaces the batch with those new/learning meanings; use vocabulary_list to find exact meaning IDs first. Batch size (default 10, range 1-100) is configured in Admin Settings; size changes apply to the next batch. action stop returns to mixed selection while retaining the batch for later resumption. Start/stop also update Admin settings and their revision. Never replace a batch unless the learner requests it. Focus applies to learning_next only; ordinary review tokens and mastery rules still apply. No vocabulary statuses, schedules, grades, or presentations are changed by this tool. A finished batch advances automatically on the next learning_next. Learned-word reinforcement remains separate.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: &destructive, IdempotentHint: false, OpenWorldHint: &openWorld},
+	}, inputSchema, outputSchema, logger, func(ctx context.Context, input LearningFocusInput) (storage.LearningFocus, error) {
+		return service.Focus(ctx, input.Action, input.ItemIDs)
 	})
 }
 

@@ -14,6 +14,8 @@ import (
 // hydrated after choosing a card, on the same transaction snapshot.
 type selectionCard struct {
 	cardID              string
+	vocabularyItemID    string
+	outsideFocus        bool
 	dueAt               time.Time
 	fsrsState           int
 	learningStatus      domain.LearningStatus
@@ -52,7 +54,7 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 	}
 
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT card.id, card.due_at, card.fsrs_state, card.scheduled_days,
+		SELECT card.id, card.vocabulary_item_id, card.due_at, card.fsrs_state, card.scheduled_days,
 			card.consecutive_failures, card.lapses,
 			COALESCE(presentation.id, 0), presentation.shown_at, vocabulary.usefulness, vocabulary.personal_interest,
 			vocabulary.learning_status
@@ -77,7 +79,7 @@ func loadSelectionCards(ctx context.Context, transaction *sql.Tx, ownerKey strin
 		var card selectionCard
 		var dueAt string
 		var shownAt sql.NullString
-		if err := rows.Scan(&card.cardID, &dueAt, &card.fsrsState, &card.scheduledDays,
+		if err := rows.Scan(&card.cardID, &card.vocabularyItemID, &dueAt, &card.fsrsState, &card.scheduledDays,
 			&card.consecutiveFailures, &card.lapses, &card.lastPresentationID, &shownAt, &card.usefulness,
 			&card.personalInterest, &card.learningStatus); err != nil {
 			return nil, 0, fmt.Errorf("scan learning selection card: %w", err)
@@ -132,6 +134,9 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 		card := &cards[index]
 		// Future cards still identify which presentation would be an immediate repeat.
 		latestPresentationID = max(latestPresentationID, card.lastPresentationID)
+		if card.outsideFocus {
+			continue
+		}
 		recent := plan.inCooldown(card)
 		if card.fsrsState == 0 || !card.dueAt.After(now) {
 			hasEligible = true
@@ -157,6 +162,9 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 	}
 
 	if !hasEligible {
+		if values.LearningMode == "focused" {
+			return plan // Focused mode waits instead of issuing an early review.
+		}
 		if availableFuture != nil {
 			plan.future = availableFuture
 		} else {
@@ -221,7 +229,7 @@ func (plan *selectionPlan) inCooldown(card *selectionCard) bool {
 }
 
 func (plan *selectionPlan) eligible(card *selectionCard) bool {
-	return (card.fsrsState == 0 || !card.dueAt.After(plan.now)) &&
+	return !card.outsideFocus && (card.fsrsState == 0 || !card.dueAt.After(plan.now)) &&
 		(card == plan.relaxed[0] || card == plan.relaxed[1] || !plan.inCooldown(card))
 }
 
@@ -250,6 +258,9 @@ func selectLearningCard(cards []selectionCard, recentSinceID int64, now time.Tim
 			}
 			draw -= share
 		}
+	}
+	if nonemptyShares == 0 {
+		return selectionCard{}, false
 	}
 	remaining := random() * plan.pools[selectedPool].weight
 	var last *selectionCard

@@ -148,6 +148,16 @@ func configureListSchema(schema *jsonschema.Schema) {
 	}
 }
 
+func configureLearningNextOutput(schema *jsonschema.Schema) {
+	cardRequired := schema.Required
+	schema.Required = []string{"reason"}
+	schema.OneOf = []*jsonschema.Schema{
+		{Required: cardRequired, Properties: map[string]*jsonschema.Schema{"reason": enumSchema("new", "early", "troublesome", "failed", "overdue", "due")}},
+		{Required: []string{"reason", "focus", "nextDueAt"}, Properties: map[string]*jsonschema.Schema{"reason": enumSchema("waiting")}, Not: &jsonschema.Schema{Required: []string{"reviewToken"}}},
+		{Required: []string{"reason", "focus"}, Properties: map[string]*jsonschema.Schema{"reason": enumSchema("complete")}, Not: &jsonschema.Schema{Required: []string{"reviewToken"}}},
+	}
+}
+
 func walkSchema(
 	schema *jsonschema.Schema,
 	visited map[*jsonschema.Schema]struct{},

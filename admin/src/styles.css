@@ -2469,7 +2469,8 @@
   .settings-field label {
     font-weight: 600;
   }
-  .settings-field input {
+  .settings-field input,
+  .settings-field select {
     width: 100%;
     min-width: 0;
   }

@@ -9,6 +9,8 @@ import (
 )
 
 type Values struct {
+	LearningMode                   string    `json:"learningMode"`
+	FocusBatchSize                 int       `json:"focusBatchSize"`
 	FastAnswerSeconds              int       `json:"fastAnswerSeconds"`
 	RequestedRetention             float64   `json:"requestedRetention"`
 	MaximumIntervalDays            int       `json:"maximumIntervalDays"`
@@ -62,6 +64,7 @@ func (values *Values) UnmarshalJSON(data []byte) error {
 // Defaults returns independent step slices so a draft cannot mutate other owners.
 func Defaults() Values {
 	return Values{
+		LearningMode: "mixed", FocusBatchSize: 10,
 		FastAnswerSeconds: 30, RequestedRetention: .9, MaximumIntervalDays: 36500,
 		LearningStepsMinutes: []float64{1, 10}, RelearningStepsMinutes: []float64{10},
 		MasteryDays: 5, MasteryIntervalDays: 21,
@@ -75,10 +78,14 @@ func Defaults() Values {
 }
 
 func (values Values) Validate() error {
+	if values.LearningMode != "mixed" && values.LearningMode != "focused" {
+		return fmt.Errorf("learningMode must be mixed or focused")
+	}
 	for _, field := range []struct {
 		name             string
 		value, low, high float64
 	}{
+		{"focusBatchSize", float64(values.FocusBatchSize), 1, 100},
 		{"fastAnswerSeconds", float64(values.FastAnswerSeconds), 0, 300},
 		{"requestedRetention", values.RequestedRetention, .7, .99},
 		{"maximumIntervalDays", float64(values.MaximumIntervalDays), 1, 36500},

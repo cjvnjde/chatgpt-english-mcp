@@ -8,6 +8,10 @@ import (
 
 func TestValidateRejectsInvalidSettings(t *testing.T) {
 	for name, change := range map[string]func(*Values){
+		"unknown learning mode":           func(v *Values) { v.LearningMode = "random" },
+		"empty learning mode":             func(v *Values) { v.LearningMode = "" },
+		"zero batch size":                 func(v *Values) { v.FocusBatchSize = 0 },
+		"large batch size":                func(v *Values) { v.FocusBatchSize = 101 },
 		"negative fast threshold":         func(v *Values) { v.FastAnswerSeconds = -1 },
 		"long fast threshold":             func(v *Values) { v.FastAnswerSeconds = 301 },
 		"retention below range":           func(v *Values) { v.RequestedRetention = .69 },
