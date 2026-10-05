@@ -54,6 +54,18 @@ svg { display: block; width: 20px; height: 20px; fill: none; stroke: currentColo
 
 .conversation { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--muted-soft) var(--canvas); padding: 24px 16px 28px; }
 .messages { display: flex; flex-direction: column; gap: 24px; }
+.audio-panel { margin-bottom: 24px; padding: 14px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface-soft); }
+.audio-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.audio-hint { margin: 8px 0; color: var(--muted); font-size: 12px; }
+.audio-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.audio-actions button { padding: 7px 12px; border: 1px solid var(--hairline); border-radius: 8px; color: var(--ink); background: var(--canvas); font-size: 13px; }
+.audio-actions button:disabled { color: var(--muted-soft); }
+.audio-panel audio { width: 100%; margin-top: 8px; }
+.audio-panel label { display: block; margin-top: 16px; font-size: 13px; font-weight: 600; }
+.audio-panel textarea, .audio-panel input { width: 100%; padding: 8px; border: 1px solid var(--hairline); border-radius: 8px; color: var(--field-text); background: var(--field); font: inherit; font-size: 14px; }
+.audio-panel textarea { margin-top: 8px; max-height: 240px; resize: vertical; }
+.audio-panel input { flex: 1; min-width: 120px; }
+#audio-status[data-recording="true"] { color: var(--error); font-weight: 600; }
 .message { min-width: 0; }
 .user-message { align-self: flex-end; max-width: 92%; margin-left: 24px; padding: 12px 14px; border: 0; border-radius: 12px 12px 4px 12px; color: var(--ink); background: var(--surface-card); }
 .user-message .markdown { white-space: pre-wrap; }

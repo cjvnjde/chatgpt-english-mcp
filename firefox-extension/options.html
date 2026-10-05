@@ -62,6 +62,14 @@
         <p class="hint">API keys and bearer tokens are stored unencrypted in this browser profile's extension local storage, not synced or exposed to web pages. Anyone with access to the profile can read them.</p>
         </section>
         <fieldset class="mode-settings">
+          <legend>Audio · recordings</legend>
+          <div class="field">
+            <label for="audioModel">Audio model</label>
+            <input id="audioModel" name="audioModel" type="text" list="modelList" autocomplete="off" spellcheck="false" placeholder="Use Deep model">
+            <p class="hint">Uses the same API URL and key. Choose a CLIProxyAPI model/provider that accepts audio attachments. An empty value uses Deep. Recordings are sent only when you click Send to AI.</p>
+          </div>
+        </fieldset>
+        <fieldset class="mode-settings">
           <legend>Deep · sidebar</legend>
           <div class="models">
             <div class="field">

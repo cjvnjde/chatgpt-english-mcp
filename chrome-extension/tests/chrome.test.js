@@ -134,7 +134,11 @@ test('package has MV3 worker, native panel, and adapters before shared scripts',
   assert.equal(manifest.side_panel.default_path, 'sidebar.html');
   assert.ok(manifest.permissions.includes('sidePanel'));
   assert.equal(manifest.browser_specific_settings, undefined);
-  assert.deepEqual(manifest.content_scripts[0].js, ['chrome-api.js', 'content.js']);
+  assert.deepEqual(manifest.content_scripts[0].js, ['chrome-api.js', 'content.js', 'audio-content.js']);
+  assert.match(manifest.content_security_policy.extension_pages, /media-src 'self' blob:/);
+  for (const file of ['audio.js', 'audio-sidebar.js', 'audio-content.js']) {
+    assert.ok((await readFile(new URL(file, output), 'utf8')).length > 0);
+  }
   for (const file of ['sidebar.html', 'options.html']) {
     const html = await readFile(new URL(file, output), 'utf8');
     assert.ok(html.indexOf('chrome-api.js') < html.indexOf('type="module"'));

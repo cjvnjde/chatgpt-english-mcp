@@ -5,6 +5,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   aiKey: "",
   model: "",
   quickModel: "",
+  audioModel: "",
   thinkingLevel: "",
   quickThinkingLevel: "",
   systemPrompt: DEEP_SYSTEM_PROMPT,

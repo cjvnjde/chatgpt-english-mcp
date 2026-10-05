@@ -313,7 +313,7 @@ function checkConversation(record, message) {
 async function dismissQuick(record) {
   record.quickController?.abort();
   record.quickController = null;
-  if (record.source) {
+  if (record.source && record.source.kind !== 'audio') {
     await browser.tabs.sendMessage(record.source.tabId, { type: 'DISMISS_QUICK' }, { frameId: record.source.frameId }).catch(() => {});
   }
 }
@@ -602,6 +602,31 @@ async function handleMessage(message, sender) {
     case 'SIDEBAR_GET':
       startDeep(record);
       return { ok: true, state: record.state };
+    case 'AUDIO_SOURCE': {
+      const [tab] = await browser.tabs.query({ active: true, windowId: message.windowId });
+      if (!tab?.id) throw new Error('Open a page with a playing video or audio player first.');
+      const frames = await browser.webNavigation.getAllFrames({ tabId: tab.id });
+      const candidates = await Promise.all((frames || []).map(async frame => {
+        try {
+          const result = await browser.tabs.sendMessage(tab.id, { type: 'AUDIO_PROBE' }, { frameId: frame.frameId });
+          return result?.available ? { frameId: frame.frameId, score: Number(result.score) || 0 } : null;
+        } catch { return null; }
+      }));
+      const source = candidates.filter(Boolean).sort((a, b) => b.score - a.score)[0];
+      if (!source) throw new Error('No recordable player is playing. Replay the sentence first. Protected media and some cross-origin players cannot be recorded in Firefox.');
+      return { ok: true, tabId: tab.id, frameId: source.frameId };
+    }
+    case 'AUDIO_EXPLAIN': {
+      checkConversation(record, message);
+      if (record.state.status === 'loading') throw new Error('Wait for the reply or press Stop.');
+      if (record.state.saveStatus === 'saving') throw new Error('Wait for the vocabulary save to finish.');
+      const transcript = message.transcript;
+      if (typeof transcript !== 'string' || !transcript.trim() || transcript.length > 12000 || transcript.includes('\0')) throw new Error('The transcript is missing or invalid.');
+      record.selectionRequest++;
+      beginSelection(record, { term: message.term, context: transcript }, settings.contextMode, { kind: 'audio' });
+      startDeep(record);
+      break;
+    }
     case 'SELECTION_CLEAR':
       checkConversation(record, message);
       record.selectionRequest++;

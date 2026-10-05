@@ -79,6 +79,16 @@ Credentials stay in local extension storage. Conversations and captured context 
 
 The **Release Chrome extension** workflow publishes the ZIP and `SHA256SUMS` on changes to `main`, independently of Mozilla signing. See [Chrome development and release details](docs/development.md#chrome-extension).
 
+## Record speech without subtitles
+
+Open the extension panel and click **Record audio**. In Chrome, choose the video’s browser tab in the sharing picker and enable **Share tab audio**. In Firefox, start playing the page’s video/audio first; the extension captures its player, including embedded players. Firefox cannot capture some protected or cross-origin media, and neither browser guarantees capture of DRM-protected content. Recording begins when you click the button, so replay a sentence you missed.
+
+Click **Stop recording**, preview the clip, then **Send to AI**. Recordings stop automatically after 30 seconds. Select a word or phrase in the transcript (or type it in the field below) and click **Explain**. The existing dictionary explanation and reviewed Save flow apply. Deep’s Page context setting controls whether the transcript is included as context in that explanation.
+
+Audio uses **only the configured CLIProxyAPI URL/key**, sending a WAV attachment as `input_audio` to `/chat/completions` under your API base URL. Set **Audio model** in settings to a model/provider that accepts audio; leaving it blank uses Deep. CLIProxyAPI and its upstream must support audio on that route—ordinary text compatibility is insufficient. There is no separate OpenAI transcription endpoint or fallback provider. An unsupported route/model reports an error; the clip remains available to retry. **Test AI** checks text chat, so use a short recording to verify audio support.
+
+Audio stays in panel/page memory until you click **Send to AI**; video is not uploaded. The configured proxy forwards audio to its selected upstream. Closing the audio panel discards the recording and transcript; closing the browser panel stops capture and cancels audio requests. Raw audio is never stored in extension storage or vocabulary. Chosen transcript context may be retained in the conversation and in the editable vocabulary draft, following the existing context and explicit-save behavior.
+
 ## English Dictionary for Firefox
 
 [`firefox-extension/`](firefox-extension/) is a personal Firefox-desktop extension (Firefox 142+) with quick explanations on the page and deeper, dictionary-backed explanations in the native sidebar. Only the sidebar’s Save icon adds vocabulary.

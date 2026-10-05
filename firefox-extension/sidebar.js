@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./render.js";
+import { setupAudio } from "./audio-sidebar.js";
 
 const ui = Object.fromEntries([...document.querySelectorAll("[id]")].map(node => [node.id, node]));
 let windowId;
@@ -15,6 +16,7 @@ let imageUrls = [];
 let lookupKey = "";
 let lastAnnouncement = "";
 const messageNodes = new Map();
+const audioUI = setupAudio({ ui, command, getState: () => state });
 
 function text(node, value) {
   const next = String(value || "");
@@ -243,6 +245,7 @@ function renderSave() {
 
 function renderControls() {
   if (!state) return;
+  audioUI.update();
   const loading = state.status === "loading";
   const lastMessage = state.messages.at(-1);
   const phase = lastMessage?.role === "assistant" && lastMessage.content.trim() ? "Answering…" : "Thinking…";
