@@ -53,7 +53,6 @@ type ReviewFeedback struct {
 
 type NextResult struct {
 	Focus             *storage.FocusProgress    `json:"focus,omitempty"`
-	NextDueAt         string                    `json:"nextDueAt,omitempty"`
 	ItemID            string                    `json:"itemId"`
 	PresentationID    int64                     `json:"presentationId"`
 	ShownAt           string                    `json:"shownAt"`
@@ -81,12 +80,11 @@ type NextResult struct {
 // Idle responses have no card or review token and never represent a presentation.
 // Keep the existing card response intact for mixed mode and issued focus cards.
 func (result NextResult) MarshalJSON() ([]byte, error) {
-	if result.Reason == "waiting" || result.Reason == "complete" {
+	if result.Reason == "complete" {
 		return json.Marshal(struct {
-			Reason    string                 `json:"reason"`
-			Focus     *storage.FocusProgress `json:"focus"`
-			NextDueAt string                 `json:"nextDueAt,omitempty"`
-		}{result.Reason, result.Focus, result.NextDueAt})
+			Reason string                 `json:"reason"`
+			Focus  *storage.FocusProgress `json:"focus"`
+		}{result.Reason, result.Focus})
 	}
 	type cardResult NextResult
 	return json.Marshal(cardResult(result))
@@ -143,7 +141,7 @@ func (service *Service) Next(ctx context.Context, includeComments bool) (NextRes
 		return NextResult{}, apperr.Wrap(apperr.InternalError, "failed to select the next vocabulary item", err)
 	}
 	if candidate.IdleReason != "" {
-		return NextResult{Reason: candidate.IdleReason, Focus: &candidate.Focus.FocusProgress, NextDueAt: candidate.Focus.NextDueAt}, nil
+		return NextResult{Reason: candidate.IdleReason, Focus: &candidate.Focus.FocusProgress}, nil
 	}
 	comments, err := service.store.ReviewComments(
 		ctx,

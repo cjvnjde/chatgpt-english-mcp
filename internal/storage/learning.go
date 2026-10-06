@@ -124,11 +124,7 @@ func (db *DB) NextLearningItem(ctx context.Context, ownerKey string, clock func(
 	selected, ok := selectLearningCard(cards, recentSinceID, shownAt, rand.Float64, configuration.Values)
 	if !ok {
 		if focus != nil {
-			reason := "waiting"
-			if focus.Remaining == 0 {
-				reason = "complete"
-			}
-			return LearningCandidate{Focus: focus, IdleReason: reason, Settings: configuration.Values}, transaction.Commit()
+			return LearningCandidate{Focus: focus, IdleReason: "complete", Settings: configuration.Values}, transaction.Commit()
 		}
 		return LearningCandidate{}, ErrNotFound
 	}

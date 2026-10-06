@@ -23,11 +23,11 @@ Diagrams use Mermaid fenced blocks; formulas use LaTeX math. View this document 
 
 The default `mixed` mode uses the full selection policy described below. Admin → Settings can enable `focused` mode and set `focusBatchSize` (default 10, range 1–100 saved meanings). `learning_focus` also inspects or starts/resumes/stops focus, and can explicitly choose the meaning IDs.
 
-Focused mode creates a persistent batch, preferring already-learning meanings, then personal interest, usefulness, oldest creation time, and item ID. It keeps those members until all are learned or explicitly archived/deleted; it never replaces one learned member while others remain unfinished. The next `learning_next` then starts another batch. Changing the configured size affects the next batch. Switching to mixed mode retains membership for later resumption.
+Focused mode creates a persistent small pool, preferring already-learning meanings, then personal interest, usefulness, oldest creation time, and item ID. Each `learning_next` or automatic `learning_focus start` keeps unfinished members, removes learned members, and fills vacancies individually from new/learning vocabulary. Archived/deleted members also leave vacancies. The pool identity and capacity persist across chats and restarts. Automatic pools use the configured size; explicitly chosen pools use the number of selected meanings. Settings size changes affect newly created pools. Switching to mixed mode retains the saved pool for later resumption.
 
-The shared selector applies its existing due-step priority, cooldown, and weights only to unfinished batch members. If all are scheduled in the future, it returns `waiting` and `nextDueAt` without issuing a card, token, or presentation. If no unfinished vocabulary exists, it returns `complete`. Learned maintenance remains a separate reinforcement activity while focused mode is enabled. Normal mastery thresholds and genuine-review scheduling still apply: staying in a batch does not earn mastery or force early repeats.
+The shared selector applies the usual due-step priority, cooldown, weights, and early fallback only to unfinished pool members. If all are scheduled in the future, it still issues a card and review token with `reason: "early"`, just like mixed selection. The tutor continues focused practice on early cards. If no unfinished vocabulary exists, it returns `complete` without issuing a presentation. Learned maintenance remains a separate reinforcement activity. Reviews, including early ones, still use normal scheduling and daily mastery rules; presentation alone never earns mastery.
 
-Admin likelihood previews use the same batch restriction. Before initial creation or after completion they preview the deterministically chosen next batch without saving it. Outside members have zero probability. Status/progress reflects corrections and demotions within the current batch; after rollover, a former member that becomes learning again waits for a future batch. The SQLite membership tables are included in full backups.
+Admin likelihood previews project the same pool and replacements without saving membership. Outside members have zero probability. Status is read-only and reports saved membership, so a newly learned member remains visible until the next start/selection refills its slot. Counts describe current membership, not cumulative learning totals. Corrections/demotions retain membership until it has been replaced; a demoted former member can be chosen for a later vacancy. The SQLite membership and capacity are included in full backups.
 
 ## System overview
 
@@ -299,7 +299,7 @@ Lookup and saving are independent. A term may be saved first, and a later succes
 ### Run one review
 
 1. Call `learning_next` with `{}`.
-2. If `reason` is `early`, end normal scheduled practice without asking a question or recording a review, unless the learner explicitly wants optional early practice. Otherwise use its definition, example, and latest problem comment to create one production-recall question without revealing `term`. If the returned context does not identify the meaning, clarify it rather than guessing a dictionary sense.
+2. In mixed mode, if `reason` is `early`, end normal scheduled practice without asking a question or recording a review, unless the learner explicitly wants optional early practice. Otherwise use its definition, example, and latest problem comment to create one production-recall question without revealing `term`. If the returned context does not identify the meaning, clarify it rather than guessing a dictionary sense.
 3. Let the learner answer.
 4. Rate the answer and call `learning_review` with the unchanged `reviewToken`.
 5. Explain the answer and use the returned schedule only as learner-facing context when helpful.
@@ -323,7 +323,7 @@ Slow answers are never penalized and other grades never change. `learning_review
 
 ### Continue a lesson
 
-After feedback, call `learning_next` again only when the learner wants another item. End normal practice on `reason: "early"` unless the learner explicitly opts into early practice, as described in the [reusable tutor prompts](prompts.md). The server deliberately has no session length or daily quota and still issues the early presentation; this stopping rule belongs to the tutor, not an API mode.
+After feedback, call `learning_next` again only when the learner wants another item. In focused mode, continue practice on early cards. In mixed mode, end normal practice on `reason: "early"` unless the learner explicitly opts into early practice, as described in the [reusable tutor prompts](prompts.md). The server deliberately has no session length or daily quota and still issues the early presentation; this stopping rule belongs to the tutor, not an API mode.
 
 ### Manage vocabulary
 
@@ -569,7 +569,7 @@ For example, among two nonrecent future cards in the same status group, due in o
 
 Each issuance moves the selected card to the newest exposure position. Rotation applies within the preferred status group; a future learned word can wait while nonlearned future cards remain. This fallback is offered as optional early practice, not a substitute for due learned maintenance.
 
-The API therefore permits **early reviews** and still records an early presentation. It does not wait until a due date, enforce a daily/session quota, or end the lesson automatically. The normal tutor workflow ends on `reason: "early"` without asking or recording an answer unless the learner explicitly opts into early practice; there is no separate API mode.
+The API therefore permits **early reviews** and still records an early presentation. It does not wait until a due date, enforce a daily/session quota, or end the lesson automatically. In focused mode the tutor continues practice on early cards. In mixed mode the normal tutor workflow ends on `reason: "early"` without asking or recording an answer unless the learner explicitly opts into early practice; there is no separate API mode.
 
 ### 7. Record the presentation and explain the result
 

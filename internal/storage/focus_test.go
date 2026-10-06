@@ -35,7 +35,7 @@ func focusStatus(t *testing.T, store *DB, now time.Time) LearningFocus {
 	return focus
 }
 
-func TestFocusPersistsWaitsAndDoesNotRefillUntilComplete(t *testing.T) {
+func TestFocusRollingPoolPersistsAndUsesEarlySelection(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "focus.sqlite")
 	store, err := Open(ctx, path)
@@ -58,31 +58,48 @@ func TestFocusPersistsWaitsAndDoesNotRefillUntilComplete(t *testing.T) {
 			t.Fatalf("escaped focus: %#v %v", selected, err)
 		}
 	}
-	// Mark one member learned and schedule the other in the future. A new word
-	// and an unrelated due learned word must not replace either batch member.
+	// A learned member is replaced immediately on the next selection, while
+	// the unfinished member keeps its schedule and membership.
 	if _, err := store.sql.Exec("UPDATE vocabulary_items SET learning_status = 'learned' WHERE id = ?", a.ItemID); err != nil {
 		t.Fatal(err)
 	}
-	review := lifecycleReview(t, store, b.ItemID, now, domain.ReviewRatingGood)
+	bReview := lifecycleReview(t, store, b.ItemID, now, domain.ReviewRatingGood)
 	saveReinforcementVocabulary(t, store, "maintenance", now)
-	focusSettings(t, store, 1) // applies to the next batch, not this one
+	focusSettings(t, store, 1) // the existing pool retains its capacity
+	page, err := store.AdminSuggestions(ctx, "owner", 100, 0)
+	if err != nil || page.Selectable != 1 || page.Rows[0].VocabularyItemID != c.ItemID || page.Focus.BatchID != focus.BatchID || page.Focus.Total != 2 {
+		t.Fatalf("refill preview: %#v %v", page, err)
+	}
+	if got := focusStatus(t, store, now); got.Learned != 1 || got.Items[0].ItemID != a.ItemID {
+		t.Fatalf("preview mutated membership: %#v", got)
+	}
+	next, err := store.NextLearningItem(ctx, "owner", clockAt(now))
+	if err != nil || next.Vocabulary.ItemID != c.ItemID || next.Focus.BatchID != focus.BatchID || next.Focus.Remaining != 2 || next.Focus.Learned != 0 {
+		t.Fatalf("refill: %#v %v", next, err)
+	}
+	cReview := lifecycleReview(t, store, c.ItemID, now, domain.ReviewRatingGood)
+	// No due members: ordinary early selection keeps practice available.
 	var before int
 	if err := store.sql.QueryRow("SELECT count(*) FROM learning_presentations").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	for range 3 {
-		waiting, err := store.NextLearningItem(ctx, "owner", clockAt(now))
-		if err != nil || waiting.IdleReason != "waiting" || waiting.Card.ReviewToken != "" || waiting.Focus.BatchID != focus.BatchID || waiting.Focus.Total != 2 || waiting.Focus.Learned != 1 || waiting.Focus.NextDueAt != TimeString(review.After.DueAt) {
-			t.Fatalf("waiting: %#v %v", waiting, err)
+		early, err := store.NextLearningItem(ctx, "owner", clockAt(now))
+		if err != nil || early.IdleReason != "" || early.Card.ReviewToken == "" || early.Focus.Due != 0 || early.Focus.BatchID != focus.BatchID ||
+			(early.Vocabulary.ItemID != b.ItemID && early.Vocabulary.ItemID != c.ItemID) {
+			t.Fatalf("early: %#v %v", early, err)
 		}
 	}
 	var after int
-	if err := store.sql.QueryRow("SELECT count(*) FROM learning_presentations").Scan(&after); err != nil || before != after {
-		t.Fatalf("idle presentation: %d %d %v", before, after, err)
+	if err := store.sql.QueryRow("SELECT count(*) FROM learning_presentations").Scan(&after); err != nil || after != before+3 {
+		t.Fatalf("early presentations: %d %d %v", before, after, err)
 	}
-	page, err := store.AdminSuggestions(ctx, "owner", 100, 0)
-	if err != nil || page.Selectable != 0 || page.Focus.BatchID != focus.BatchID {
-		t.Fatalf("preview: %#v %v", page, err)
+	if !reflect.DeepEqual(lifecycleCard(t, store, b.ItemID), bReview.After) || !reflect.DeepEqual(lifecycleCard(t, store, c.ItemID), cReview.After) {
+		t.Fatal("selection changed scheduling or mastery")
+	}
+	page, err = store.AdminSuggestions(ctx, "owner", 100, 0)
+	if err != nil || page.Selectable != 1 || page.Rows[0].Reason != "early" {
+		t.Fatalf("early preview: %#v %v", page, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -91,24 +108,15 @@ func TestFocusPersistsWaitsAndDoesNotRefillUntilComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := focusStatus(t, store, now); got.BatchID != focus.BatchID || got.Remaining != 1 {
+	if got := focusStatus(t, store, now); got.BatchID != focus.BatchID || got.Remaining != 2 || got.targetSize != 2 || got.Items[0].ItemID != b.ItemID || got.Items[1].ItemID != c.ItemID {
 		t.Fatalf("reopen: %#v", got)
 	}
-	due, err := store.NextLearningItem(ctx, "owner", clockAt(review.After.DueAt))
-	if err != nil || due.Vocabulary.ItemID != b.ItemID || due.IdleReason != "" {
-		t.Fatalf("due boundary: %#v %v", due, err)
+	for _, id := range []string{b.ItemID, c.ItemID} {
+		if _, err := store.sql.Exec("UPDATE vocabulary_items SET learning_status = 'learned' WHERE id = ?", id); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := store.sql.Exec("UPDATE vocabulary_items SET learning_status = 'learned' WHERE id = ?", b.ItemID); err != nil {
-		t.Fatal(err)
-	}
-	next, err := store.NextLearningItem(ctx, "owner", clockAt(review.After.DueAt))
-	if err != nil || next.Vocabulary.ItemID != c.ItemID || next.Focus.BatchID == focus.BatchID || next.Focus.Total != 1 {
-		t.Fatalf("next batch: %#v %v", next, err)
-	}
-	if _, err := store.sql.Exec("UPDATE vocabulary_items SET learning_status = 'learned' WHERE id = ?", c.ItemID); err != nil {
-		t.Fatal(err)
-	}
-	complete, err := store.NextLearningItem(ctx, "owner", clockAt(review.After.DueAt))
+	complete, err := store.NextLearningItem(ctx, "owner", clockAt(now))
 	if err != nil || complete.IdleReason != "complete" || complete.Focus.Remaining != 0 || complete.Card.ReviewToken != "" {
 		t.Fatalf("complete: %#v %v", complete, err)
 	}
@@ -272,8 +280,8 @@ func TestFocusMasteryCorrectionsAndRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	next, err := store.NextLearningItem(ctx, "owner", clockAt(now))
-	if err != nil || next.Vocabulary.ItemID != c.ItemID || next.Focus.BatchID == focus.BatchID {
-		t.Fatalf("deleted batch not advanced: %#v %v", next, err)
+	if err != nil || next.Vocabulary.ItemID != c.ItemID || next.Focus.BatchID != focus.BatchID {
+		t.Fatalf("deleted pool not refilled: %#v %v", next, err)
 	}
 }
 
@@ -310,5 +318,96 @@ func TestFocusMigrationPreservesExistingSettings(t *testing.T) {
 	snapshot, err := store.AlgorithmSettings(context.Background(), "owner")
 	if err != nil || snapshot.Revision != 7 || !reflect.DeepEqual(snapshot.Values, values) {
 		t.Fatalf("migrated settings: %#v %v", snapshot, err)
+	}
+}
+
+func TestRollingFocusMigrationPreservesMembershipCapacityAndSchedule(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "batch.sqlite")
+	legacy := openLegacyDatabase(t, path, 22)
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	values := settings.Defaults()
+	values.LearningMode, values.FocusBatchSize = "focused", 7
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range []string{"owner", "empty"} {
+		if _, err := legacy.Exec("INSERT INTO algorithm_settings VALUES (?, ?, 5)", owner, string(encoded)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, owner := range []string{"owner", "empty", "default"} {
+		if _, err := legacy.Exec("INSERT INTO learning_focus_batches VALUES (?, ?, ?)", owner, owner+"-pool", TimeString(now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, status := range []string{"learned", "learning"} {
+		id := status + "-item"
+		if _, err := legacy.Exec(`INSERT INTO vocabulary_items
+			(id, owner_key, term, normalized_term, sense_key, learning_status, created_at, updated_at)
+			VALUES (?, 'owner', ?, ?, 'custom', ?, ?, ?)`, id, status, status, status, TimeString(now), TimeString(now)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := legacy.Exec("INSERT INTO learning_focus_items VALUES ('owner', ?, ?)", id, index); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := lifecycleCard(t, &DB{sql: legacy}, "learning-item")
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for owner, capacity := range map[string]int{"owner": 2, "empty": 7, "default": 10} {
+		focus, err := store.LearningFocus(ctx, owner, "status", nil, clockAt(now))
+		if err != nil || focus.targetSize != capacity || focus.BatchID != owner+"-pool" || focus.CreatedAt != TimeString(now) {
+			t.Fatalf("migration for %s: %#v %v", owner, focus, err)
+		}
+	}
+	if focus := focusStatus(t, store, now); focus.Total != 2 || focus.Learned != 1 || focus.Remaining != 1 {
+		t.Fatalf("migration changed membership: %#v", focus)
+	}
+	if after := lifecycleCard(t, store, "learning-item"); !reflect.DeepEqual(before, after) {
+		t.Fatal("migration changed schedule")
+	}
+	if snapshot, err := store.AlgorithmSettings(ctx, "owner"); err != nil || snapshot.Revision != 5 || !reflect.DeepEqual(snapshot.Values, values) {
+		t.Fatalf("migration changed settings: %#v %v", snapshot, err)
+	}
+	added := savePresentationVocabulary(t, store, "owner", "replacement", now)
+	resumed, err := store.LearningFocus(ctx, "owner", "start", nil, clockAt(now))
+	if err != nil || resumed.BatchID != "owner-pool" || resumed.Total != 2 || resumed.Learned != 0 || resumed.Items[0].ItemID != "learning-item" || resumed.Items[1].ItemID != added.ItemID {
+		t.Fatalf("migrated pool did not refill individually: %#v %v", resumed, err)
+	}
+}
+
+func TestFocusSparsePoolCapacityAndExplicitSelection(t *testing.T) {
+	store, now := reinforcementTestStore(t)
+	ctx := context.Background()
+	a := savePresentationVocabulary(t, store, "owner", "alpha", now)
+	focusSettings(t, store, 3)
+	initial, err := store.LearningFocus(ctx, "owner", "start", nil, clockAt(now))
+	if err != nil || initial.Total != 1 || initial.targetSize != 3 {
+		t.Fatalf("sparse automatic pool: %#v %v", initial, err)
+	}
+	// Choosing the same IDs explicitly still changes the intended capacity.
+	explicit, err := store.LearningFocus(ctx, "owner", "start", []string{a.ItemID}, clockAt(now))
+	if err != nil || explicit.targetSize != 1 {
+		t.Fatalf("explicit capacity: %#v %v", explicit, err)
+	}
+	b := savePresentationVocabulary(t, store, "owner", "beta", now)
+	resumed, err := store.LearningFocus(ctx, "owner", "start", nil, clockAt(now))
+	if err != nil || resumed.Total != 1 || resumed.Items[0].ItemID != a.ItemID {
+		t.Fatalf("new vocabulary displaced unfinished member: %#v %v", resumed, err)
+	}
+	if err := store.DeleteVocabulary(ctx, "owner", a.ItemID); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.NextLearningItem(ctx, "owner", clockAt(now))
+	if err != nil || next.Vocabulary.ItemID != b.ItemID || next.Focus.Total != 1 || next.Focus.BatchID != explicit.BatchID {
+		t.Fatalf("deleted slot not refilled: %#v %v", next, err)
 	}
 }

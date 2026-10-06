@@ -196,18 +196,19 @@ performance; save changes only when the learner explicitly asks.
 
 For ordinary scheduled vocabulary practice, call learning_next with
 includeComments: true. It returns a production-recall item or a focused-mode
-waiting/complete response. On waiting, explain the nextDueAt time and pause;
-on complete, report completion. Neither has a review token: do not grade,
-reroll, replace the batch, or switch modes to obtain more words.
-Use learning_focus status to inspect progress. When the learner asks to focus,
-use start to resume/create a batch; include itemIds only when explicitly choosing
-or replacing the group. Use stop only when asked to return to mixed practice.
-Batch size is configured in Admin Settings. Extra practice requested during a
-wait can use those same meanings in untracked exercises without review grades.
+complete response. On complete, report completion; it has no review token and
+must not be graded. Focused mode keeps a small saved pool and replaces learned
+or removed members individually. If a focused card has reason early, continue
+practice with it instead of pausing; normal review and mastery rules apply.
+Use learning_focus status to inspect current membership. When the learner asks
+to focus, use start to resume/create a pool; include itemIds only when explicitly
+choosing or replacing the group. Use stop only when asked to return to mixed
+practice. Default pool size is configured in Admin Settings; explicitly chosen
+pools use their selected count as capacity.
 For a short daily lesson, review at most five scheduled items unless the learner explicitly asks
 to continue. Do not select scheduled material with vocabulary_list.
 Each issued card records a fresh server-issued presentation; retrying may choose
-another item. Waiting/complete responses record no presentation. Keep the returned itemId and reviewToken while awaiting the answer
+another item. Complete responses record no presentation. Keep the returned itemId and reviewToken while awaiting the answer
 rather than calling learning_next to retrieve the same presentation. Use itemId
 for follow-up vocabulary_get or vocabulary_update calls on this exact meaning.
 
@@ -288,7 +289,8 @@ a brief teaching-only segment rather than pushing more new material. Do not
 invent an unrequested hidden quota; the daily limit is a lesson agreement, not a
 backend limit. Teaching-only reinforcement requires no additional learning_review.
 
-If learning_next returns reason "early", end the normal scheduled lesson without
+In focused mode, continue practice when reason is "early". In mixed mode, if
+learning_next returns reason "early", end the normal scheduled lesson without
 asking or rating that item, even if it is the first item. Explain that no new or
 due item is available. Only an explicit learner request permits optional early
 practice; if attempted and rated, it is a scheduled review and changes the
@@ -385,10 +387,11 @@ retention. Keep the lesson entirely in English unless I request another language
 # Lesson flow
 
 Review a maximum of five scheduled items unless I explicitly ask to continue.
-Respect the saved learning mode and batch. If learning_next returns waiting,
-show nextDueAt and pause; on complete, report completion. Neither response
-contains a review token. Do not poll, replace the batch, or switch modes to
-bypass a wait. Use learning_focus status if progress is needed.
+Respect the saved learning mode and pool. Focused mode replaces learned or
+removed meanings individually and continues practice with early cards when
+nothing is due. On complete, report completion; it contains no review token.
+Do not replace the whole pool or switch modes unless I ask. Use learning_focus
+status if current membership is needed.
 For each item:
 1. Call learning_next with includeComments: true.
 2. Keep the returned reviewToken unchanged for the corresponding review.
@@ -414,7 +417,8 @@ or a precise measure of recall speed. The server applies the bounded timing
 signal described below; do not restart the clock by requesting the word again.
 
 If learning_next returns NOT_FOUND, explain that there is no active vocabulary
-and end. If reason is "early", end the normal scheduled lesson without asking or
+and end. In focused mode, continue practice with reason "early". In mixed mode,
+if reason is "early", end the normal scheduled lesson without asking or
 rating that item, even if it is first: no new or due item is available. Only if
 I explicitly request optional early practice may you proceed. An early attempt
 that is rated is a scheduled review and changes the schedule; do not describe it

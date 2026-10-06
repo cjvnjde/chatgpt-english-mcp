@@ -83,9 +83,9 @@ Click a stored-column heading to sort; compact rows and sticky headers help scan
 
 ## Next suggestions
 
-**Settings → Learning focus** controls learning mode and the default batch size (10 meanings, configurable from 1–100). Focused mode keeps the same saved batch until its unfinished members are learned, archived, or deleted. Size changes affect the next batch. Returning to mixed mode preserves membership. The MCP `learning_focus` tool can inspect, resume, choose, or stop a batch; mode changes through it participate in the normal settings revision/conflict checks.
+**Settings → Learning focus** controls learning mode and the default batch size (10 meanings, configurable from 1–100). Focused mode keeps a small saved pool, replacing learned, archived, or deleted members individually on the next learning request. Size changes affect newly created pools; existing pools retain their capacity. Returning to mixed mode preserves membership. The MCP `learning_focus` tool can inspect, resume, choose, or stop a batch; mode changes through it participate in the normal settings revision/conflict checks.
 
-In focused mode, the suggestions page shows learned/remaining/due counts, marks excluded cards, and reports the next due time when waiting. Before a batch is created or after it finishes, this is a preview of the next batch; viewing it never saves membership.
+In focused mode, the suggestions page shows active/due counts, marks excluded cards, and reports the next scheduled due time while early practice remains available. It previews initial membership and individual replacements without saving them.
 
 The scheduler uses weighted random selection, not a fixed future queue. **Next suggestions** ranks active production cards by actual next-draw probability from the shared scheduler plan: cooldown and small-pool relaxation, nonlearned due learning/relearning precedence, learned maintenance against active work (default 10%–40%), and an exposure-based new/nonlearned-review split within the active remainder (default 20%–80%). These share bounds and selection weights are configurable in **Settings**. A sole group receives 100%. Learned words appear as **Learned · maintenance**. Early fallback prefers nonlearned cards within the same cooldown eligibility group.
 

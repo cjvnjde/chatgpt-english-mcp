@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -301,7 +302,7 @@ func TestReinforcementSelectionObservesCooldownExpiryAfterWriterWait(t *testing.
 		selected, err = store.NextReinforcementItem(context.Background(), "owner", clock)
 		return err
 	})
-	if selected.EligibleWordCount != 4 || selected.SelectionProbability != 0.25 {
+	if selected.EligibleWordCount != 4 || math.Abs(selected.SelectionProbability-0.25) > 1e-12 {
 		t.Fatalf("queued selection did not observe cooldown expiry: %#v", selected)
 	}
 }

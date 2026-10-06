@@ -162,9 +162,6 @@ func planLearningSelection(cards []selectionCard, recentSinceID int64, now time.
 	}
 
 	if !hasEligible {
-		if values.LearningMode == "focused" {
-			return plan // Focused mode waits instead of issuing an early review.
-		}
 		if availableFuture != nil {
 			plan.future = availableFuture
 		} else {

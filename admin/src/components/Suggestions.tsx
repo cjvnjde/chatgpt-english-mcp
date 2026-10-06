@@ -18,7 +18,7 @@ const reasons: Record<Suggestion["reason"], string> = {
   cooldown: "Recently shown · cooling down",
   learning_first: "Due learning steps come first",
   not_due: "Not due yet",
-  outside_focus: "Outside unfinished focus group",
+  outside_focus: "Outside active focus pool",
   waiting: "Waiting for an earlier-priority card",
 };
 const pools: Record<Suggestion["pool"], string> = {
@@ -81,10 +81,10 @@ export default function Suggestions(props: {
             passes. Refresh to see the latest state.
           </p>
           <p class="muted">
-            In focused mode, only unfinished members of the saved batch are
-            eligible. The next batch starts after all members are learned or
-            removed. When no member is due, learning waits. The preview can
-            show the next batch before its first presentation saves it.
+            In focused mode, only unfinished members of the saved pool are
+            eligible. Learned or removed members are replaced individually.
+            When no member is due, an early review keeps practice available.
+            The preview shows these replacements without saving membership.
           </p>
           <p class="muted">
             Due learning and relearning steps take priority. Otherwise, learned
@@ -116,10 +116,10 @@ export default function Suggestions(props: {
       </Show>
       <Show when={safe() && !page.loading}>
         <Show when={safe()?.focus}>{focus => <div class="alert" role="status">
-          <strong>{focus().batchId ? "Focused learning" : "Next focus batch preview"}</strong>
-          <p>{focus().learned} of {focus().total} learned · {focus().remaining} remaining · {focus().due} due now.</p>
+          <strong>{focus().batchId ? "Focused learning" : "Focus pool preview"}</strong>
+          <p>{focus().remaining} active meanings · {focus().due} due now.</p>
           <Show when={focus().remaining > 0 && focus().due === 0 && focus().nextDueAt}>
-            <p>Nothing due in this batch. Next review: {date(focus().nextDueAt!)}.</p>
+            <p>Early practice is available. Next scheduled review: {date(focus().nextDueAt!)}.</p>
           </Show>
         </div>}</Show>
         <section class="panel" aria-label="Suggested word ranking">

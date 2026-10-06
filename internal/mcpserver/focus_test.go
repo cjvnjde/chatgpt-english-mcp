@@ -10,7 +10,7 @@ import (
 	"english-learning-mcp/internal/vocabulary"
 )
 
-func TestLearningFocusMCPWaitingCompletionAndResume(t *testing.T) {
+func TestLearningFocusMCPEarlyRefillCompletionAndResume(t *testing.T) {
 	ctx := context.Background()
 	session, _ := newTestSession(t, ctx)
 	status := callTool[storage.LearningFocus](t, ctx, session, "learning_focus", map[string]any{})
@@ -28,14 +28,9 @@ func TestLearningFocusMCPWaitingCompletionAndResume(t *testing.T) {
 		t.Fatalf("issued: %#v", next)
 	}
 	callTool[learning.RecordResult](t, ctx, session, "learning_review", LearningReviewInput{ReviewToken: next.ReviewToken, Rating: domain.ReviewRatingEasy})
-	waiting := callTool[map[string]any](t, ctx, session, "learning_next", LearningNextInput{IncludeComments: true})
-	if waiting["reason"] != "waiting" || waiting["nextDueAt"] == nil || waiting["focus"] == nil {
-		t.Fatalf("waiting: %#v", waiting)
-	}
-	for _, absent := range []string{"reviewToken", "itemId", "presentationId", "term", "status"} {
-		if _, exists := waiting[absent]; exists {
-			t.Fatalf("idle response contains %s: %#v", absent, waiting)
-		}
+	early := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{IncludeComments: true})
+	if early.Reason != "early" || early.ItemID != a.ItemID || early.ReviewToken == "" || early.Focus == nil || early.PresentationID == next.PresentationID {
+		t.Fatalf("early: %#v", early)
 	}
 	stopped := callTool[storage.LearningFocus](t, ctx, session, "learning_focus", LearningFocusInput{Action: "stop"})
 	if stopped.LearningMode != "mixed" || stopped.BatchID != started.BatchID {
@@ -46,9 +41,12 @@ func TestLearningFocusMCPWaitingCompletionAndResume(t *testing.T) {
 		t.Fatalf("resume: %#v", resumed)
 	}
 	learned := domain.LearningStatusLearned
-	for _, id := range []string{a.ItemID, b.ItemID} {
-		callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", VocabularyUpdateInput{ItemID: id, Changes: VocabularyUpdateChanges{Status: &learned}})
+	callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", VocabularyUpdateInput{ItemID: a.ItemID, Changes: VocabularyUpdateChanges{Status: &learned}})
+	refill := callTool[learning.NextResult](t, ctx, session, "learning_next", LearningNextInput{})
+	if refill.ItemID != b.ItemID || refill.Focus.BatchID != started.BatchID || refill.Focus.Total != 1 {
+		t.Fatalf("refill: %#v", refill)
 	}
+	callTool[domain.VocabularyItem](t, ctx, session, "vocabulary_update", VocabularyUpdateInput{ItemID: b.ItemID, Changes: VocabularyUpdateChanges{Status: &learned}})
 	complete := callTool[map[string]any](t, ctx, session, "learning_next", LearningNextInput{})
 	if complete["reason"] != "complete" || complete["reviewToken"] != nil || complete["nextDueAt"] != nil {
 		t.Fatalf("complete: %#v", complete)

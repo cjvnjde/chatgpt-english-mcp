@@ -14,8 +14,8 @@ Numeric learning-policy values below are defaults. The owner can change the usef
 | `vocabulary_get` | Retrieve one saved item. |
 | `vocabulary_list` | Browse saved items or select a filtered random batch for untracked exercises. |
 | `vocabulary_delete` | Delete one vocabulary item. |
-| `learning_next` | Select one item for production recall, or report focused waiting/completion. |
-| `learning_focus` | Inspect, start/resume, choose, or stop a persistent learning batch. |
+| `learning_next` | Select one item for production recall, or report focus completion. |
+| `learning_focus` | Inspect, start/resume, choose, or stop a persistent learning pool. |
 | `learning_review` | Record a rating and schedule the next review. |
 | `learning_review_update` | Correct only the latest accepted repetition and recalculate its schedule. |
 | `reinforcement_next` | Randomly select a learned word for deeper, schedule-independent practice. |
@@ -282,13 +282,13 @@ This removes the vocabulary item and its learning card. It does not remove cache
 ```
 
 - `status` reads the current batch without creating or advancing it. No batch means an empty `items` array.
-- `start` enables focused mode and resumes the unfinished batch. If none remains, it automatically selects up to the configured size (default 10). Selection is deterministic: learning status first, then high/normal/low personal interest, high/normal/low usefulness, oldest creation time, and item ID.
-- `start` with `itemIds` explicitly replaces the batch with those exact saved meanings and enables focused mode. Use `vocabulary_list` to find the IDs. All must belong to this owner, be new/learning, and be unique. An empty list, unavailable/archived/learned item, or more than the configured batch size is rejected atomically. Omit `itemIds` when resuming. Replace a batch only at the learner's request.
+- `start` enables focused mode, resumes the saved pool and refills learned/removed slots individually. With no existing pool, it selects up to the configured size (default 10). Selection is deterministic: learning status first, then high/normal/low personal interest, high/normal/low usefulness, oldest creation time, and item ID.
+- `start` with `itemIds` explicitly replaces the pool with those exact saved meanings, sets capacity to their count, and enables focused mode. Use `vocabulary_list` to find the IDs. All must belong to this owner, be new/learning, and be unique. An empty list, unavailable/archived/learned item, or more than the configured batch size is rejected atomically. Omit `itemIds` when resuming. Replace a batch only at the learner's request.
 - `stop` switches to mixed mode and retains the batch for a later `start`.
 
-Start/stop changes the same learning mode displayed in Admin Settings, advancing its revision only if the mode changes. Configure `focusBatchSize` (1–100) on that page. A size change applies to the next batch, never evicting or adding members to the unfinished batch. Membership is stored by saved meaning ID in SQLite, survives restarts, and is backed up with the database. Each meaning counts separately, including different senses of the same word.
+Start/stop changes the same learning mode displayed in Admin Settings, advancing its revision only if the mode changes. Configure `focusBatchSize` (1–100) on that page. A size change applies to newly created pools. An existing pool keeps its capacity; explicit selections use their own count as capacity. Membership is stored by saved meaning ID in SQLite, survives restarts, and is backed up with the database. Each meaning counts separately, including different senses of the same word.
 
-These actions never issue a presentation, change a vocabulary status, or alter schedules or review history. Due and mastery counts reflect current card state. Archival/deletion removes membership without filling the hole; an unarchived item waits for a future batch. Corrections and demotions restore unfinished membership while that batch is current. Once a batch has been replaced, a subsequently demoted former member waits for a later batch. A finished batch remains visible to `status` until `start` or `learning_next` advances it. Newly saved vocabulary does not enter an unfinished batch.
+These actions never issue a presentation, change a vocabulary status, or alter schedules or review history. `status` does not refill membership: learned members remain visible until the next automatic `start` or `learning_next`. Those calls keep unfinished members, remove learned ones, and fill available slots individually; archival/deletion also creates vacancies. Newly saved or demoted meanings can fill a vacancy, but never displace unfinished members. Counts reflect current membership, not cumulative completed words. Refilling preserves the pool ID and creation time.
 
 ## `learning_next`
 
@@ -326,14 +326,13 @@ These actions never issue a presentation, change a vocabulary status, or alter s
 }
 ```
 
-In focused mode, an issued card includes `focus` progress. Only unfinished batch members enter the selection policy below; learned words outside the batch are available separately through reinforcement. When the batch finishes, the next call creates the next batch automatically. If no eligible card is due, the response instead has one of these shapes:
+In focused mode, an issued card includes `focus` progress. Before selection, learned/removed slots are refilled individually. Only unfinished pool members enter the usual selection policy, including early fallback. When no member is due, the response is a normal card with `reason: "early"` and a review token; continue focused practice with it. Learned words remain available separately through reinforcement. If no new/learning vocabulary remains, the response is:
 
 ```ts
-{ reason: "waiting"; nextDueAt: string; focus: { batchId?: string; total: number; learned: number; remaining: number; due: number } }
 { reason: "complete"; focus: { batchId?: string; total: number; learned: number; remaining: number; due: number } }
 ```
 
-`waiting` means unfinished batch members have future due times. `complete` means there is no new/learning vocabulary left. Neither response contains an item or review token, records a presentation, or advances mastery. Pause without grading, polling, replacing the batch, or switching modes. The existing mastery rules apply, so a batch can take weeks. Untracked exercises can use the same saved meanings if the learner explicitly requests extra practice.
+`complete` contains no item or review token and records no presentation or review. Report completion without grading. Normal mastery thresholds still apply to focused and early reviews; selecting or repeatedly showing a card never advances mastery by itself.
 
 Otherwise the tool returns exactly one non-archived item. Use its `itemId` for follow-up vocabulary reads or edits; term and teaching content may be identical across separately saved meanings. Non-empty saved `context` is returned independently of dictionary coverage. `latestComment` is the latest non-empty comment, so it can predate a newer uncommented review; use its timestamp rather than assuming it describes the latest attempt. `comments` is included only when `includeComments` is true. Pass `reviewToken` unchanged to `learning_review` after the learner answers.
 
@@ -347,7 +346,7 @@ Personal interest multiplies weights in every selectable pool: `low` ×0.5, `nor
 
 In mixed mode, future reviews are used only when no new or due cards exist. Restrict to nonrecent future cards if possible, then prefer nonlearned over learned status, then the least recent presentation event ID (never presented first), earliest due time, and card ID. If all are recent, apply the same ordering to all future cards. Rotation is within each status-priority group, not a promise to finish the learned group while nonlearned future cards remain.
 
-In mixed mode, the API still issues an item with `reason: "early"` when only future cards exist; `NOT_FOUND` means there are no active cards, not that today's work is done. In the [normal tutor workflow](prompts.md), stop on `early` without asking or recording an answer unless the learner explicitly opts into early practice. There is no early-practice API mode or backend daily/session quota.
+In either mode, the API still issues an item with `reason: "early"` when only future cards exist; `NOT_FOUND` means there are no active cards, not that today's work is done. In focused mode, continue practice on `early`. In mixed mode, in the [normal tutor workflow](prompts.md), stop on `early` without asking or recording an answer unless the learner explicitly opts into early practice. There is no early-practice API mode or backend daily/session quota.
 
 This tool mutates storage but is non-destructive and non-idempotent. Each committed selection records a fresh immutable event; retries can return different words. `presentationId` identifies that issuance, while `shownAt` records when the server issued it, not proof that a learner saw or answered it. The event retains the card's due time and `reviewToken` at issuance; multiple presentations may share a pending token and link to one eventual review attempt. Neither metadata field is an input to `learning_review`, and presenting an item does not change its FSRS schedule.
 

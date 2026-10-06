@@ -7,7 +7,7 @@ It provides twelve tools for:
 - Cambridge Dictionary lookups with permanent SQLite caching and server-side audio/image copies
 - vocabulary metadata, attached example images, offline word/expression usefulness with optional AI hints, notes, examples, tags, and learning states
 - read-only filtered vocabulary batches for AI sentence-writing and conversation exercises, without review tokens or schedule changes
-- persistent focused batches: finish the same saved meanings before starting the next group, with Admin controls and `learning_focus` chat management
+- persistent focus pools: practice a small set of saved meanings and replace learned meanings individually, with Admin controls and `learning_focus` chat management
 - learning-step priority, adaptive active/learned review shares, unseen and neglected-card priority, and recent-card cooldowns
 - idempotent review recording, latest-answer correction, and spaced-repetition scheduling, with one-way promotion of fast `good` answers to `easy`
 - configurable automatic status progression (default five flawless daily recalls), with one success credit per UTC day and immediate recovery after mistakes
@@ -20,7 +20,7 @@ The MCP stores and schedules learning data; the connected AI tutor decides how t
 
 Use `learning_next` followed by `learning_review`; the tutor submits the first-attempt grade, and the server manages status. `good`/`easy` earns at most one mastery credit per saved meaning per UTC day. Every `hard`/`again` resets the streak; `again` returns a learned meaning to learning. Automatic promotion requires five qualifying days and an FSRS Review interval of at least 21 days. Due learned words normally receive a 10% maintenance share, rising up to 40% with relative backlog; due learning steps take priority. See [daily mastery and scheduling](docs/how-it-works.md#automatic-status-and-daily-mastery).
 
-To concentrate on a small group, set **Learning mode → Focused** and **Focus batch size** in Admin → **Settings**, or call `learning_focus` with `{"action":"start"}`. The default batch size is 10 saved meanings. Focus resumes the same batch across chats and restarts, waits when nothing in it is due, and starts another only after every member is learned or removed. `learning_focus` can also inspect the batch, choose exact item IDs, or stop focus while preserving the batch. Existing installations keep mixed selection until enabled.
+To concentrate on a small group, set **Learning mode → Focused** and **Focus batch size** in Admin → **Settings**, or call `learning_focus` with `{"action":"start"}`. The default pool size is 10 saved meanings. Focus resumes the same pool across chats and restarts, replaces each learned or removed meaning on the next learning request, and offers early practice when nothing is due. `learning_focus` can also inspect the pool, choose exact item IDs, or stop focus while preserving it. Existing installations keep mixed selection until enabled.
 
 The numbers above are defaults. In Admin → **Settings**, adjust the fast-answer window (default strictly less than 30 seconds; zero disables), FSRS parameters, and selection policies. Only the final review `rating` is stored and returned. Settings affect subsequent operations rather than rewriting history or existing due dates. See [runtime algorithm settings](docs/configuration.md#runtime-algorithm-settings).
 

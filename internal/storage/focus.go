@@ -42,9 +42,10 @@ type LearningFocus struct {
 	CreatedAt      string      `json:"createdAt,omitempty"`
 	NextDueAt      string      `json:"nextDueAt,omitempty"`
 	Items          []FocusItem `json:"items"`
+	targetSize     int
 }
 
-// LearningFocus manages a single persistent batch. Starting/resuming focus and
+// LearningFocus manages a single persistent pool. Starting/resuming focus and
 // changing its mode share the same transaction as membership changes.
 func (db *DB) LearningFocus(ctx context.Context, owner, action string, itemIDs []string, clock func() time.Time) (LearningFocus, error) {
 	if action == "" {
@@ -101,8 +102,8 @@ func (db *DB) LearningFocus(ctx context.Context, owner, action string, itemIDs [
 			for i, item := range focus.Items {
 				currentIDs[i] = item.ItemID
 			}
-			if !slices.Equal(currentIDs, itemIDs) {
-				if err := replaceLearningFocus(ctx, tx, owner, itemIDs, now); err != nil {
+			if !slices.Equal(currentIDs, itemIDs) || focus.targetSize != len(itemIDs) {
+				if err := replaceLearningFocus(ctx, tx, owner, itemIDs, len(itemIDs), now); err != nil {
 					return LearningFocus{}, err
 				}
 				focus, err = loadLearningFocus(ctx, tx, owner, snapshot.Values, now)
@@ -141,7 +142,7 @@ func (db *DB) LearningFocus(ctx context.Context, owner, action string, itemIDs [
 
 func loadLearningFocus(ctx context.Context, tx *sql.Tx, owner string, values settings.Values, now time.Time) (LearningFocus, error) {
 	focus := LearningFocus{LearningMode: values.LearningMode, FocusBatchSize: values.FocusBatchSize, Items: []FocusItem{}}
-	err := tx.QueryRowContext(ctx, "SELECT id, created_at FROM learning_focus_batches WHERE owner_key = ?", owner).Scan(&focus.BatchID, &focus.CreatedAt)
+	err := tx.QueryRowContext(ctx, "SELECT id, created_at, target_size FROM learning_focus_batches WHERE owner_key = ?", owner).Scan(&focus.BatchID, &focus.CreatedAt, &focus.targetSize)
 	if errors.Is(err, sql.ErrNoRows) {
 		return focus, nil
 	}
@@ -225,24 +226,45 @@ func (focus *LearningFocus) count(now time.Time) {
 	}
 }
 
-// With persist=false, admin previews use the same deterministic next batch
-// without creating it or changing presentation history.
+// Keep unfinished members and fill vacancies with deterministic introductions.
+// With persist=false, admin previews project the same pool without saving it.
 func prepareLearningFocus(ctx context.Context, tx *sql.Tx, owner string, values settings.Values, now time.Time, persist bool) (LearningFocus, error) {
 	focus, err := loadLearningFocus(ctx, tx, owner, values, now)
-	if err != nil || focus.Remaining > 0 {
+	if err != nil {
 		return focus, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT v.id FROM vocabulary_items v
+	target := focus.targetSize
+	if focus.BatchID == "" {
+		target = values.FocusBatchSize
+	}
+	ids := make([]string, 0, target)
+	for _, item := range focus.Items {
+		if item.Status != domain.LearningStatusLearned {
+			ids = append(ids, item.ItemID)
+		}
+	}
+	if len(ids) == target {
+		return focus, nil
+	}
+	query := `SELECT v.id FROM vocabulary_items v
 		JOIN learning_cards c ON c.vocabulary_item_id = v.id AND c.exercise_mode = ?
-		WHERE v.owner_key = ? AND v.learning_status IN ('new', 'learning')
-		ORDER BY CASE v.learning_status WHEN 'learning' THEN 0 ELSE 1 END,
+		WHERE v.owner_key = ? AND v.learning_status IN ('new', 'learning')`
+	args := []any{productionExerciseMode, owner}
+	if len(ids) > 0 {
+		query += ` AND v.id NOT IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	query += ` ORDER BY CASE v.learning_status WHEN 'learning' THEN 0 ELSE 1 END,
 			CASE v.personal_interest WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
 			CASE v.usefulness WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
-			v.created_at, v.id LIMIT ?`, productionExerciseMode, owner, values.FocusBatchSize)
+			v.created_at, v.id LIMIT ?`
+	args = append(args, target-len(ids))
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return LearningFocus{}, err
 	}
-	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -257,22 +279,29 @@ func prepareLearningFocus(ctx context.Context, tx *sql.Tx, owner string, values 
 	if err := rows.Err(); err != nil {
 		return LearningFocus{}, err
 	}
-	if len(ids) == 0 {
-		return focus, nil
-	}
 	if persist {
-		if err := replaceLearningFocus(ctx, tx, owner, ids, now); err != nil {
+		if focus.BatchID == "" {
+			if len(ids) == 0 {
+				return focus, nil
+			}
+			err = replaceLearningFocus(ctx, tx, owner, ids, target, now)
+		} else {
+			err = writeLearningFocusItems(ctx, tx, owner, ids)
+		}
+		if err != nil {
 			return LearningFocus{}, err
 		}
 		return loadLearningFocus(ctx, tx, owner, values, now)
 	}
-	items, err := readFocusItems(ctx, tx, owner, ids)
-	focus = LearningFocus{LearningMode: values.LearningMode, FocusBatchSize: values.FocusBatchSize, Items: items}
+	focus.Items = []FocusItem{}
+	if len(ids) > 0 {
+		focus.Items, err = readFocusItems(ctx, tx, owner, ids)
+	}
 	focus.count(now)
 	return focus, err
 }
 
-func replaceLearningFocus(ctx context.Context, tx *sql.Tx, owner string, ids []string, now time.Time) error {
+func replaceLearningFocus(ctx context.Context, tx *sql.Tx, owner string, ids []string, target int, now time.Time) error {
 	id, err := NewID()
 	if err != nil {
 		return err
@@ -280,7 +309,14 @@ func replaceLearningFocus(ctx context.Context, tx *sql.Tx, owner string, ids []s
 	if _, err := tx.ExecContext(ctx, "DELETE FROM learning_focus_batches WHERE owner_key = ?", owner); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO learning_focus_batches(owner_key, id, created_at) VALUES (?, ?, ?)", owner, id, TimeString(now)); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO learning_focus_batches(owner_key, id, created_at, target_size) VALUES (?, ?, ?, ?)", owner, id, TimeString(now), target); err != nil {
+		return err
+	}
+	return writeLearningFocusItems(ctx, tx, owner, ids)
+}
+
+func writeLearningFocusItems(ctx context.Context, tx *sql.Tx, owner string, ids []string) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM learning_focus_items WHERE owner_key = ?", owner); err != nil {
 		return err
 	}
 	for position, itemID := range ids {

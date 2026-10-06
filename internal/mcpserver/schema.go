@@ -153,7 +153,6 @@ func configureLearningNextOutput(schema *jsonschema.Schema) {
 	schema.Required = []string{"reason"}
 	schema.OneOf = []*jsonschema.Schema{
 		{Required: cardRequired, Properties: map[string]*jsonschema.Schema{"reason": enumSchema("new", "early", "troublesome", "failed", "overdue", "due")}},
-		{Required: []string{"reason", "focus", "nextDueAt"}, Properties: map[string]*jsonschema.Schema{"reason": enumSchema("waiting")}, Not: &jsonschema.Schema{Required: []string{"reviewToken"}}},
 		{Required: []string{"reason", "focus"}, Properties: map[string]*jsonschema.Schema{"reason": enumSchema("complete")}, Not: &jsonschema.Schema{Required: []string{"reviewToken"}}},
 	}
 }
